@@ -745,7 +745,7 @@ describe('normaliserDateAcquisition', () => {
     expect(normaliserDateAcquisition(aujourdhui)).toBe(aujourdhui)
   })
 
-  it('refuse une valeur qui n’est pas du texte plutôt que de la perdre', () => {
+  it("refuse une valeur qui n'est pas du texte plutôt que de la perdre", () => {
     expect(() => normaliserDateAcquisition(20250312)).toThrow(StatutInvalideError)
   })
 })
@@ -761,7 +761,7 @@ describe('normaliserNote', () => {
     expect(normaliserNote(null)).toBeNull()
   })
 
-  it('refuse une valeur qui n’est pas du texte', () => {
+  it("refuse une valeur qui n'est pas du texte", () => {
     expect(() => normaliserNote(42)).toThrow(StatutInvalideError)
   })
 
@@ -1441,7 +1441,7 @@ export default async function PageStatuts({ params }: { params: Promise<{ id: st
         {membre.etat !== 'actif' ? (
           <p className="mt-1 text-sm text-amber-700">
             {membre.etat === 'archive'
-              ? 'Fiche archivée — elle ne figure plus dans l’annuaire.'
+              ? "Fiche archivée — elle ne figure plus dans l'annuaire."
               : 'Fiche en attente de validation.'}
           </p>
         ) : null}
@@ -1620,7 +1620,7 @@ export async function creerGroupe(
 
   const { error } = await clientAdmin().from('groupes_statut').insert({ nom, exclusif })
   if (error) {
-    return { erreur: 'Ce groupe existe déjà, ou n’a pas pu être créé.' }
+    return { erreur: "Ce groupe existe déjà, ou n'a pas pu être créé." }
   }
 
   revalidatePath('/statuts')
@@ -1643,11 +1643,16 @@ export async function creerStatut(
     .from('statuts')
     .insert({ groupe_id: groupeId, libelle })
   if (error) {
-    return { erreur: 'Ce statut existe déjà dans ce groupe, ou n’a pas pu être créé.' }
+    return { erreur: "Ce statut existe déjà dans ce groupe, ou n'a pas pu être créé." }
   }
 
   revalidatePath('/statuts')
-  revalidatePath('/membres')
+  // Les écrans qui AFFICHENT un libellé de statut sont les fiches membres et leurs
+  // écrans de statuts, pas l'annuaire — celui-ci ne montre aucun statut. Le `type`
+  // est obligatoire sur un segment dynamique, et `/membres/[id]` n'invalide PAS
+  // `/membres/[id]/statuts` : chacun se déclare.
+  revalidatePath('/membres/[id]', 'page')
+  revalidatePath('/membres/[id]/statuts', 'page')
   return { erreur: null }
 }
 
@@ -1679,7 +1684,8 @@ async function basculerStatut(donnees: FormData, actif: boolean): Promise<void> 
   }
 
   revalidatePath('/statuts')
-  revalidatePath('/membres')
+  revalidatePath('/membres/[id]', 'page')
+  revalidatePath('/membres/[id]/statuts', 'page')
 }
 ```
 
@@ -1844,7 +1850,7 @@ export default async function PageCatalogueStatuts() {
           <h2 className="mb-1 text-lg font-medium">{groupe.nom}</h2>
           <p className="mb-3 text-sm text-neutral-500">
             {groupe.exclusif
-              ? 'Un membre ne peut porter qu’un seul statut de ce groupe.'
+              ? "Un membre ne peut porter qu'un seul statut de ce groupe."
               : 'Les statuts de ce groupe se cumulent.'}
           </p>
           {groupe.statuts.length === 0 ? (
@@ -2412,7 +2418,7 @@ test("attribuer un second statut du meme groupe evince le premier", async ({ pag
   expect(data).toHaveLength(3)
 })
 
-test('un statut d’un autre groupe se cumule sans rien retirer', async ({ page }) => {
+test("un statut d'un autre groupe se cumule sans rien retirer", async ({ page }) => {
   await seConnecter(page, IDENT_ADMIN, MDP_ADMIN)
   await page.goto(`/membres/${idMembre}/statuts`)
 
