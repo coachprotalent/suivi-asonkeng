@@ -330,6 +330,27 @@ export type Antenne = {
   actif: boolean
 }
 
+/**
+ * Toutes les antennes, actives et désactivées, triées par nom.
+ *
+ * Réservée à l'écran d'administration : sans elle, une antenne désactivée
+ * disparaîtrait de l'interface **sans retour possible**, et il faudrait la clé de
+ * service pour la réactiver. Une fiche membre archivée, elle, reste consultable.
+ */
+export async function listerToutesAntennes(): Promise<Antenne[]> {
+  const supabase = await clientServeur()
+  const { data, error } = await supabase
+    .from('antennes')
+    .select('id, nom, pays, actif')
+    .order('actif', { ascending: false })
+    .order('nom')
+
+  if (error) {
+    throw new Error(`Lecture des antennes impossible : ${error.message}`)
+  }
+  return (data ?? []) as Antenne[]
+}
+
 /** Antennes actives, triées par nom. */
 export async function listerAntennes(): Promise<Antenne[]> {
   const supabase = await clientServeur()
@@ -1723,7 +1744,43 @@ git commit -m "feat: consulter et modifier une fiche membre"
 **Files:**
 - Create: `src/app/antennes/actions.ts`
 - Create: `src/app/antennes/formulaire-antenne.tsx`
+- Create: `src/app/antennes/bouton-bascule-antenne.tsx`
 - Create: `src/app/antennes/page.tsx`
+
+**Bouton de bascule, à créer avant l'écran.** Désactiver une antenne la retire de tous les
+formulaires : cela mérite une confirmation, comme l'archivage d'un membre. Le message dit ce
+qui se passe réellement, sans dramatiser. Créer `src/app/antennes/bouton-bascule-antenne.tsx` :
+
+```tsx
+'use client'
+
+export function BoutonBasculeAntenne({ nom, desactiver }: { nom: string; desactiver: boolean }) {
+  return (
+    <button
+      type="submit"
+      onClick={(evenement) => {
+        const message = desactiver
+          ? `Désactiver l'antenne « ${nom} » ?
+
+` +
+            "Elle n'apparaîtra plus dans les formulaires, mais les membres qui y sont " +
+            'rattachés le restent, et vous pourrez la réactiver.'
+          : `Réactiver l'antenne « ${nom} » ?`
+        if (!window.confirm(message)) {
+          evenement.preventDefault()
+        }
+      }}
+      className={
+        desactiver
+          ? 'text-sm text-red-600 underline underline-offset-4'
+          : 'text-sm underline underline-offset-4'
+      }
+    >
+      {desactiver ? 'Désactiver' : 'Réactiver'}
+    </button>
+  )
+}
+```
 
 **Interfaces:**
 - Consumes: `exigerAdministrateur` (Task 1), `listerAntennes` (Task 2), `clientAdmin` (phase 0)
@@ -1774,9 +1831,37 @@ export async function desactiverAntenne(donnees: FormData): Promise<void> {
   if (typeof id !== 'string' || id.length === 0) return
 
   // Désactivation et non suppression : les membres déjà rattachés doivent conserver
-  // leur historique. La contrainte `on delete set null` protégerait les données, mais
-  // effacerait l'information.
-  await clientAdmin().from('antennes').update({ actif: false }).eq('id', id)
+  // leur historique. La contrainte `on delete restrict` refuserait d'ailleurs la
+  // suppression d'une antenne encore utilisée.
+  await basculerAntenne(id, false)
+}
+
+/** Remet une antenne en service. Sans elle, une désactivation serait sans retour. */
+export async function reactiverAntenne(donnees: FormData): Promise<void> {
+  await exigerAdministrateur()
+
+  const id = donnees.get('id')
+  if (typeof id !== 'string' || id.length === 0) return
+
+  await basculerAntenne(id, true)
+}
+
+async function basculerAntenne(id: string, actif: boolean): Promise<void> {
+  // `.select('id')` et la vérification qui suit ne sont pas décoratifs : une mise à
+  // jour qui ne touche aucune ligne ne renvoie **aucune erreur**. Sans ce contrôle,
+  // un identifiant invalide, une écriture refusée ou une antenne déjà dans cet état
+  // produiraient tous le même résultat visible — rien ne change, et le bouton a l'air
+  // d'avoir fonctionné. Même exigence que pour l'archivage d'un membre.
+  const { data, error } = await clientAdmin()
+    .from('antennes')
+    .update({ actif })
+    .eq('id', id)
+    .select('id')
+
+  if (error || !data || data.length === 0) {
+    throw new Error("L'antenne n'a pas pu être mise à jour : aucune antenne ne correspond.")
+  }
+
   revalidatePath('/antennes')
   revalidatePath('/membres')
 }
@@ -1843,14 +1928,17 @@ Créer `src/app/antennes/page.tsx` :
 
 ```tsx
 import Link from 'next/link'
-import { listerAntennes } from '@/lib/donnees/antennes'
+import { listerToutesAntennes } from '@/lib/donnees/antennes'
 import { exigerAdministrateur } from '@/lib/securite/garde'
-import { desactiverAntenne } from './actions'
+import { desactiverAntenne, reactiverAntenne } from './actions'
+import { BoutonBasculeAntenne } from './bouton-bascule-antenne'
 import { FormulaireAntenne } from './formulaire-antenne'
 
 export default async function PageAntennes() {
   await exigerAdministrateur()
-  const antennes = await listerAntennes()
+  const antennes = await listerToutesAntennes()
+  const actives = antennes.filter((a) => a.actif)
+  const inactives = antennes.filter((a) => !a.actif)
 
   return (
     <main className="mx-auto max-w-2xl px-6 py-10">
@@ -1860,20 +1948,47 @@ export default async function PageAntennes() {
       <h1 className="mt-4 mb-8 text-2xl font-semibold">Antennes</h1>
 
       <ul className="mb-10 divide-y divide-neutral-200">
-        {antennes.map((antenne) => (
+        {actives.map((antenne) => (
           <li key={antenne.id} className="flex items-center justify-between gap-4 py-3">
             <span>
               {antenne.nom} <span className="text-sm text-neutral-500">· {antenne.pays}</span>
             </span>
             <form action={desactiverAntenne}>
               <input type="hidden" name="id" value={antenne.id} />
-              <button type="submit" className="text-sm text-red-600 underline underline-offset-4">
-                Désactiver
-              </button>
+              <BoutonBasculeAntenne nom={antenne.nom} desactiver />
             </form>
           </li>
         ))}
       </ul>
+
+      {/*
+        Les antennes désactivées restent visibles ici, et réactivables. Sans cette
+        section, désactiver une antenne par erreur serait sans retour depuis
+        l'interface : elle disparaîtrait de partout et seule la clé de service
+        permettrait de la rétablir.
+      */}
+      {inactives.length > 0 ? (
+        <section className="mb-10">
+          <h2 className="mb-2 text-lg font-medium">Antennes désactivées</h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            Elles n&apos;apparaissent plus dans les formulaires, mais les membres qui y étaient
+            rattachés le restent.
+          </p>
+          <ul className="divide-y divide-neutral-200">
+            {inactives.map((antenne) => (
+              <li key={antenne.id} className="flex items-center justify-between gap-4 py-3">
+                <span className="text-neutral-500">
+                  {antenne.nom} <span className="text-sm">· {antenne.pays}</span>
+                </span>
+                <form action={reactiverAntenne}>
+                  <input type="hidden" name="id" value={antenne.id} />
+                  <BoutonBasculeAntenne nom={antenne.nom} desactiver={false} />
+                </form>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <h2 className="mb-4 text-lg font-medium">Ajouter une antenne</h2>
       <FormulaireAntenne />
