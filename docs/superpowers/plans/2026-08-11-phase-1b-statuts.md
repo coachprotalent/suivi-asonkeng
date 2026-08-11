@@ -438,7 +438,10 @@ c'est là que vivent `est_actif` et `est_admin`, et les rendre atteignables de l
 annulerait la raison d'être de ce schéma. On ajoute donc une passerelle mince dans `public`,
 dont l'exécution reste réservée à la clé de service.
 
-Compléter le même fichier de migration, à la fin :
+Créer une **nouvelle** migration `supabase/migrations/20260813120000_passerelles_statuts.sql` —
+et non compléter la précédente, qui est déjà appliquée. `supabase db push` suit les migrations
+par version et non par contenu : modifier un fichier appliqué ne rejoue rien, et laisse le
+dépôt en désaccord silencieux avec la base.
 
 ```sql
 -- Passerelles appelables par l'API. Le schéma `prive` n'est pas exposé par PostgREST,
