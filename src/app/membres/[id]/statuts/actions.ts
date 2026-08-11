@@ -110,13 +110,16 @@ export async function attribuerStatut(
 /**
  * Normalise le motif de retrait sans jamais lever.
  *
- * Aucun écran ne fournit encore ce champ (question en attente d'arbitrage), et
- * `retirerStatut` n'a pas de canal pour renvoyer un message de validation à l'écran :
- * ce chemin doit simplement être incapable de planter. `normaliserNote` nomme aussi
- * son champ « note » dans ses messages d'erreur — les laisser remonter tels quels
- * pour un motif désignerait le mauvais champ. On les intercepte donc ici, on
- * journalise avec la bonne étiquette, et on retombe sur `null` : un motif refusé ne
- * doit pas bloquer un retrait par ailleurs valide.
+ * L'écran de la Task 6 exposera ce champ avec une limite de longueur visible à la
+ * saisie (`maxLength`) : l'utilisateur verra la contrainte au moment où il écrit,
+ * plutôt que de découvrir après coup que son texte a disparu. Le repli silencieux
+ * ci-dessous n'est donc plus le chemin normal — c'est une défense contre une requête
+ * forgée qui contournerait cette limite côté client, et `retirerStatut` n'a de toute
+ * façon aucun canal pour renvoyer un message de validation à l'écran. `normaliserNote`
+ * nomme aussi son champ « note » dans ses messages d'erreur — les laisser remonter
+ * tels quels pour un motif désignerait le mauvais champ. On les intercepte donc ici,
+ * on journalise avec la bonne étiquette, et on retombe sur `null` : un motif refusé
+ * ne doit pas bloquer un retrait par ailleurs valide.
  */
 function normaliserMotifSansLever(brut: unknown, membreId: string, statutId: string): string | null {
   try {
@@ -158,6 +161,12 @@ export async function retirerStatut(donnees: FormData): Promise<void> {
     })
 
   if (error) {
+    // `membre_inconnu` n'est pas un succès idempotent : sans la vérification ajoutée
+    // par 20260813150000_retrait_membre_inconnu.sql, un `membreId` forgé ou périmé
+    // supprimait zéro ligne — exactement le même signal qu'un statut déjà retiré — et
+    // se retrouvait donc redirigé en silence vers la fiche d'un membre qui n'existe
+    // pas. Seul `statut_absent` (le membre existe, il ne porte simplement pas ce
+    // statut) reste un succès idempotent.
     if (error.details === DETAIL_STATUT_ABSENT) {
       // Succès idempotent : l'état voulu par l'administrateur — ce statut n'est pas
       // porté — est déjà atteint. Le cas survient sur une double soumission, deux
@@ -174,7 +183,8 @@ export async function retirerStatut(donnees: FormData): Promise<void> {
       redirect(`/membres/${membreId}/statuts`)
     }
 
-    // Trace serveur systématique pour tout ce qui reste réellement inattendu.
+    // Trace serveur systématique pour tout ce qui reste réellement inattendu, y
+    // compris `membre_inconnu`.
     console.error('retirerStatut : échec RPC retirer_statut', {
       membreId,
       statutId,
