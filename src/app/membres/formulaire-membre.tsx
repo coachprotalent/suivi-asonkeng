@@ -1,6 +1,6 @@
 'use client'
 
-import { useActionState } from 'react'
+import { useActionState, useState } from 'react'
 import type { Antenne } from '@/lib/donnees/antennes'
 import type { MembreDetail } from '@/lib/donnees/membres'
 import type { EtatFormulaireMembre } from './actions'
@@ -16,6 +16,7 @@ type Props = {
 
 export function FormulaireMembre({ action, antennes, membre, libelleBouton }: Props) {
   const [etat, envoyer, enCours] = useActionState(action, etatInitial)
+  const [situation, setSituation] = useState<string>(membre?.situation ?? '')
 
   // L'antenne actuelle du membre doit figurer dans la liste même si elle a été
   // désactivée depuis. Sans cela, sa valeur n'existerait pas parmi les options : le
@@ -39,7 +40,7 @@ export function FormulaireMembre({ action, antennes, membre, libelleBouton }: Pr
 
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">Prénom</span>
+          <span className="text-sm font-medium">Prénom (obligatoire)</span>
           <input
             name="prenom"
             defaultValue={membre?.prenom ?? ''}
@@ -48,7 +49,7 @@ export function FormulaireMembre({ action, antennes, membre, libelleBouton }: Pr
           />
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">Nom</span>
+          <span className="text-sm font-medium">Nom (obligatoire)</span>
           <input
             name="nom"
             defaultValue={membre?.nom ?? ''}
@@ -110,7 +111,8 @@ export function FormulaireMembre({ action, antennes, membre, libelleBouton }: Pr
           <span className="text-sm font-medium">Situation</span>
           <select
             name="situation"
-            defaultValue={membre?.situation ?? ''}
+            value={situation}
+            onChange={(evenement) => setSituation(evenement.target.value)}
             className="rounded-md border border-neutral-300 px-3 py-2"
           >
             <option value="">Non renseignée</option>
@@ -119,17 +121,22 @@ export function FormulaireMembre({ action, antennes, membre, libelleBouton }: Pr
             <option value="autre">Autre</option>
           </select>
         </label>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">Domaine d&apos;étude</span>
-          <input
-            name="domaineEtude"
-            defaultValue={membre?.domaineEtude ?? ''}
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          />
-          <span className="text-xs text-neutral-500">
-            Conservé uniquement si la situation est « Étudiant ».
-          </span>
-        </label>
+        {/*
+          Le champ n'existe que pour un étudiant, au lieu d'être saisissable puis
+          effacé en silence à l'enregistrement. Empêcher vaut mieux qu'avertir :
+          un texte d'aide sous un champ ne se lit pas au moment où l'on bascule
+          la situation, et la saisie disparaîtrait sans que personne ne le voie.
+        */}
+        {situation === 'etudiant' ? (
+          <label className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium">Domaine d&apos;étude</span>
+            <input
+              name="domaineEtude"
+              defaultValue={membre?.domaineEtude ?? ''}
+              className="rounded-md border border-neutral-300 px-3 py-2"
+            />
+          </label>
+        ) : null}
         <label className="flex flex-col gap-1.5">
           <span className="text-sm font-medium">AEL déjà suivis</span>
           <input
