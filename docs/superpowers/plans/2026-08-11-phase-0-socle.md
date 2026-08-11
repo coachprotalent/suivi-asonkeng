@@ -133,14 +133,22 @@ Ajouter dans `package.json`, section `scripts` :
 
 - [ ] **Step 4 : Écrire un test de santé du harnais**
 
+Ce test vérifie une vraie contrainte globale — la version de Node — et non une tautologie.
+Il disparaîtra à la Task 2, une fois le premier vrai test en place.
+
 Créer `src/lib/domaine/sante.test.ts` :
 
 ```typescript
 import { describe, expect, it } from 'vitest'
 
-describe('harnais de test', () => {
-  it('exécute les tests unitaires', () => {
-    expect(1 + 1).toBe(2)
+describe('environnement de test', () => {
+  it('tourne sur Node 24 ou plus récent', () => {
+    const majeure = Number(process.versions.node.split('.')[0])
+    expect(majeure).toBeGreaterThanOrEqual(24)
+  })
+
+  it('résout les fichiers de test sous src/', () => {
+    expect(import.meta.url).toContain('/src/lib/domaine/')
   })
 })
 ```
