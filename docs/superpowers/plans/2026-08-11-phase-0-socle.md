@@ -1230,7 +1230,17 @@ git commit -m "feat: protéger les routes et rafraîchir la session via le middl
 **Files:**
 - Create: `src/app/changer-mot-de-passe/page.tsx`
 - Create: `src/app/changer-mot-de-passe/actions.ts`
+- Create: `src/app/changer-mot-de-passe/constantes.ts`
 - Create: `src/app/tableau-de-bord/page.tsx`
+
+> **Contrainte Next.js 16 découverte à la Task 8 — lire avant d'écrire le code.**
+> Un fichier portant `'use server'` **ne peut exporter que des fonctions asynchrones**. La
+> construction échoue sinon, avec `Only async functions are allowed to be exported in a
+> "use server" file`. La constante `LONGUEUR_MDP_MINIMALE` ci-dessous ne peut donc **pas**
+> vivre dans `actions.ts` : elle va dans `constantes.ts`, importée par `actions.ts` et par
+> `page.tsx`. Les exports de **types** restent autorisés, étant effacés à la compilation.
+> La Task 8 a rencontré exactement ce problème avec son message d'échec et l'a résolu de la
+> même façon, dans `src/app/connexion/messages.ts`.
 
 **Interfaces:**
 - Consumes: `clientServeur`, `clientAdmin` (Task 5), `profilCourant` (Task 7), `seDeconnecter` (Task 8)
@@ -1239,7 +1249,17 @@ git commit -m "feat: protéger les routes et rafraîchir la session via le middl
   - `changerMotDePasse(etat: EtatChangement, donnees: FormData): Promise<EtatChangement>`
   - `LONGUEUR_MDP_MINIMALE: number` — vaut `12`
 
-- [ ] **Step 1 : Écrire l'action de changement**
+- [ ] **Step 1 : Écrire la constante partagée puis l'action de changement**
+
+Créer `src/app/changer-mot-de-passe/constantes.ts` :
+
+```typescript
+/**
+ * Vit hors de `actions.ts` : un fichier `'use server'` ne peut exporter que des
+ * fonctions asynchrones (contrainte Next.js 16, vérifiée à la Task 8).
+ */
+export const LONGUEUR_MDP_MINIMALE = 12
+```
 
 Créer `src/app/changer-mot-de-passe/actions.ts` :
 
@@ -1250,8 +1270,7 @@ import { redirect } from 'next/navigation'
 import { z } from 'zod'
 import { clientAdmin } from '@/lib/supabase/admin'
 import { clientServeur } from '@/lib/supabase/serveur'
-
-export const LONGUEUR_MDP_MINIMALE = 12
+import { LONGUEUR_MDP_MINIMALE } from './constantes'
 
 export type EtatChangement = { erreur: string | null }
 
@@ -1315,11 +1334,8 @@ Créer `src/app/changer-mot-de-passe/page.tsx` :
 'use client'
 
 import { useActionState } from 'react'
-import {
-  changerMotDePasse,
-  LONGUEUR_MDP_MINIMALE,
-  type EtatChangement,
-} from './actions'
+import { changerMotDePasse, type EtatChangement } from './actions'
+import { LONGUEUR_MDP_MINIMALE } from './constantes'
 
 const etatInitial: EtatChangement = { erreur: null }
 
