@@ -34,7 +34,7 @@ describe('normaliserDateAcquisition', () => {
     expect(normaliserDateAcquisition(aujourdhui)).toBe(aujourdhui)
   })
 
-  it(`refuse une valeur qui n'est pas du texte plutôt que de la perdre`, () => {
+  it("refuse une valeur qui n'est pas du texte plutôt que de la perdre", () => {
     expect(() => normaliserDateAcquisition(20250312)).toThrow(StatutInvalideError)
   })
 })
@@ -50,7 +50,7 @@ describe('normaliserNote', () => {
     expect(normaliserNote(null)).toBeNull()
   })
 
-  it(`refuse une valeur qui n'est pas du texte`, () => {
+  it("refuse une valeur qui n'est pas du texte", () => {
     expect(() => normaliserNote(42)).toThrow(StatutInvalideError)
   })
 
