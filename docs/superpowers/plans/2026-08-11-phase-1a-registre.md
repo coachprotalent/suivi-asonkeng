@@ -154,7 +154,18 @@ export type RoleApp = 'administrateur' | 'moderateur'
 /** Rôles explicitement attribués. Les droits « Utilisateur » sont le socle implicite. */
 export async function rolesDuProfil(profilId: string): Promise<RoleApp[]> {
   const supabase = await clientServeur()
-  const { data } = await supabase.from('roles_profil').select('role').eq('profil_id', profilId)
+  const { data, error } = await supabase
+    .from('roles_profil')
+    .select('role')
+    .eq('profil_id', profilId)
+
+  // Ne jamais retomber sur une liste vide : « aucun rôle » et « la requête a
+  // échoué » auraient alors le même effet, et un administrateur verrait ses
+  // fonctions disparaître de l'écran sans qu'aucun message ne le lui dise.
+  if (error) {
+    throw new Error(`Lecture des rôles impossible : ${error.message}`)
+  }
+
   return (data ?? []).map((ligne) => ligne.role as RoleApp)
 }
 ```
@@ -1074,7 +1085,38 @@ git commit -m "feat: creer, modifier et archiver une fiche membre"
 
 **Files:**
 - Create: `src/app/membres/page.tsx`
+- Create: `src/app/error.tsx`
 - Modify: `src/app/tableau-de-bord/page.tsx` (lien vers l'annuaire)
+
+**Écran d'erreur, à créer en premier.** Sans lui, la moindre exception affiche l'écran
+générique de Next.js, en anglais, dans une application entièrement française. Créer
+`src/app/error.tsx` :
+
+```tsx
+'use client'
+
+export default function Erreur({ reset }: { error: Error; reset: () => void }) {
+  return (
+    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-4 px-6">
+      <h1 className="text-xl font-semibold">Une erreur est survenue</h1>
+      <p className="text-sm text-neutral-600">
+        L&apos;opération n&apos;a pas pu aboutir. Réessayez ; si le problème persiste,
+        signalez-le à un administrateur.
+      </p>
+      <button
+        type="button"
+        onClick={reset}
+        className="self-start rounded-md bg-neutral-900 px-4 py-2 font-medium text-white"
+      >
+        Réessayer
+      </button>
+    </main>
+  )
+}
+```
+
+Le détail technique de l'erreur n'est volontairement pas affiché : il n'aide pas la
+personne devant l'écran et peut révéler la structure interne de l'application.
 
 **Interfaces:**
 - Consumes: `exigerProfilActif` (Task 1), `listerMembres` (Task 5), `listerAntennes` (Task 2)
@@ -1104,8 +1146,15 @@ export default async function PageAnnuaire({
 }) {
   const profil = await exigerProfilActif()
   const parametres = await searchParams
+  // Le filtre vient de l'adresse, donc du client. Une valeur qui n'est pas un
+  // identifiant ferait échouer la requête sur une colonne `uuid` — un signet périmé
+  // suffit. On l'ignore plutôt que de faire tomber l'écran.
+  const antenneFiltre = /^[0-9a-f-]{36}$/i.test(parametres.antenne ?? '')
+    ? parametres.antenne
+    : undefined
+
   const [membres, antennes, roles] = await Promise.all([
-    listerMembres({ recherche: parametres.recherche, antenneId: parametres.antenne }),
+    listerMembres({ recherche: parametres.recherche, antenneId: antenneFiltre }),
     listerAntennes(),
     rolesDuProfil(profil.id),
   ])
@@ -1141,7 +1190,7 @@ export default async function PageAnnuaire({
         />
         <select
           name="antenne"
-          defaultValue={parametres.antenne ?? ''}
+          defaultValue={antenneFiltre ?? ''}
           aria-label="Antenne"
           className="rounded-md border border-neutral-300 px-3 py-2"
         >
