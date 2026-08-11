@@ -905,6 +905,24 @@ export type EntreeJournal = {
 }
 
 /**
+ * PostgREST renvoie un OBJET pour une ressource imbriquée en plusieurs-vers-un,
+ * mais le client, faute de types `Database` générés, la déclare comme un tableau.
+ * Les deux formes se ramènent ici à une seule. Même contournement que `nomAntenne`
+ * dans `membres.ts`, généralisé parce que ce module en a besoin trois fois.
+ */
+type Imbrique<T> = T | T[] | null | undefined
+
+function premier<T>(valeur: Imbrique<T>): T | null {
+  if (!valeur) return null
+  return Array.isArray(valeur) ? (valeur[0] ?? null) : valeur
+}
+
+type StatutImbrique = {
+  libelle: string
+  groupes_statut: Imbrique<{ nom: string; ordre: number }>
+}
+
+/**
  * Catalogue groupé, trié. `inclureInactifs` sert l'écran d'administration : sans
  * lui, un statut désactivé disparaîtrait de l'interface sans retour possible —
  * l'impasse déjà rencontrée avec les antennes en phase 1a.
@@ -943,21 +961,28 @@ export async function statutsDuMembre(membreId: string): Promise<StatutDuMembre[
     throw new Error(`Lecture des statuts impossible : ${error.message}`)
   }
 
+  // L'ordre du groupe sert au tri mais ne sort pas d'ici : on le porte à côté de la
+  // ligne plutôt que dedans, pour n'avoir ensuite rien à en retirer.
   return (data ?? [])
     .map((l) => {
-      const statut = l.statuts as Record<string, unknown> | null
-      const groupe = (statut?.groupes_statut ?? null) as Record<string, unknown> | null
+      const statut = premier(l.statuts as Imbrique<StatutImbrique>)
+      const groupe = premier(statut?.groupes_statut)
       return {
-        statutId: l.statut_id as string,
-        libelle: (statut?.libelle as string) ?? '—',
-        groupeNom: (groupe?.nom as string) ?? '—',
         ordreGroupe: Number(groupe?.ordre ?? 0),
-        dateAcquisition: l.date_acquisition as string | null,
-        note: l.note as string | null,
+        ligne: {
+          statutId: l.statut_id as string,
+          libelle: statut?.libelle ?? '—',
+          groupeNom: groupe?.nom ?? '—',
+          dateAcquisition: l.date_acquisition as string | null,
+          note: l.note as string | null,
+        },
       }
     })
-    .sort((a, b) => a.ordreGroupe - b.ordreGroupe || a.libelle.localeCompare(b.libelle, 'fr'))
-    .map(({ ordreGroupe: _ordreGroupe, ...reste }) => reste)
+    .sort(
+      (a, b) =>
+        a.ordreGroupe - b.ordreGroupe || a.ligne.libelle.localeCompare(b.ligne.libelle, 'fr'),
+    )
+    .map(({ ligne }) => ligne)
 }
 
 /** Journal d'un membre, du plus récent au plus ancien. */
@@ -974,14 +999,14 @@ export async function journalDuMembre(membreId: string): Promise<EntreeJournal[]
   }
 
   return (data ?? []).map((l) => {
-    const statut = l.statuts as Record<string, unknown> | null
-    const profil = l.profils as Record<string, unknown> | null
+    const statut = premier(l.statuts as Imbrique<{ libelle: string }>)
+    const profil = premier(l.profils as Imbrique<{ nom_affichage: string }>)
     return {
       id: l.id as string,
-      libelle: (statut?.libelle as string) ?? '—',
+      libelle: statut?.libelle ?? '—',
       action: l.action as 'ajout' | 'retrait',
       le: l.le as string,
-      parNomAffichage: (profil?.nom_affichage as string) ?? null,
+      parNomAffichage: profil?.nom_affichage ?? null,
       motif: l.motif as string | null,
     }
   })
