@@ -344,3 +344,110 @@ describe('journal protégé contre la réécriture', () => {
     expect(apres!.motif).toBe(avant!.motif)
   })
 })
+
+describe('passerelles rpc réservées à service_role', () => {
+  // `public.attribuer_statut` et `public.retirer_statut` sont des passerelles
+  // `security definer` dans le schéma `public` (20260813120000_passerelles_statuts.sql) :
+  // elles sont donc joignables par PostgREST sur `/rest/v1/rpc/…`, hors du garde des
+  // Server Actions. Leur seule protection est un `revoke execute` réservant leur
+  // exécution à `service_role`. Si ce droit se perdait, n'importe quel compte
+  // authentifié écrirait directement depuis le navigateur. `clientSimple` est un
+  // compte authentifié ordinaire (pas administrateur) — voir `beforeAll` plus haut.
+  it('un compte authentifié ordinaire ne peut pas exécuter attribuer_statut', async () => {
+    const { data: statutCommission } = await admin
+      .from('statuts')
+      .select('id')
+      .eq('libelle', 'Sert dans une commission')
+      .single()
+
+    const { error } = await clientSimple.rpc('attribuer_statut', {
+      p_membre: idMembreActif,
+      p_statut: statutCommission!.id,
+      p_date: null,
+      p_note: null,
+      p_par: idProfil,
+    })
+    expect(error).not.toBeNull()
+    expect(error!.code).toBe('42501')
+
+    // Aucune écriture n'a eu lieu lors de la tentative refusée : ni sur
+    // membre_statuts, ni sur journal_statuts.
+    const { data: attribution } = await admin
+      .from('membre_statuts')
+      .select('statut_id')
+      .eq('membre_id', idMembreActif)
+      .eq('statut_id', statutCommission!.id)
+    expect(attribution).toEqual([])
+
+    const { data: journal } = await admin
+      .from('journal_statuts')
+      .select('id')
+      .eq('membre_id', idMembreActif)
+      .eq('statut_id', statutCommission!.id)
+    expect(journal).toEqual([])
+  })
+
+  it('un compte authentifié ordinaire ne peut pas exécuter retirer_statut', async () => {
+    const { error } = await clientSimple.rpc('retirer_statut', {
+      p_membre: idMembreActif,
+      p_statut: idStatutRepenti,
+      p_par: idProfil,
+      p_motif: null,
+    })
+    expect(error).not.toBeNull()
+    expect(error!.code).toBe('42501')
+
+    // Le statut attribué en `beforeAll` est toujours porté : la tentative refusée
+    // n'a rien supprimé.
+    const { data } = await admin
+      .from('membre_statuts')
+      .select('statut_id')
+      .eq('membre_id', idMembreActif)
+      .eq('statut_id', idStatutRepenti)
+    expect(data).toHaveLength(1)
+  })
+
+  // Contrôle positif, sans lequel les deux refus ci-dessus ne prouveraient rien : ils
+  // pourraient aussi bien signifier « l'appel est mal formé » (mauvais nom de
+  // fonction, mauvais type d'argument) que « l'exécution est réservée à
+  // service_role ». La clé de service, elle, doit réussir les deux appels — par le
+  // même chemin RPC, avec les mêmes arguments.
+  it('la clé de service, elle, peut exécuter les deux passerelles', async () => {
+    const { data: statutCommission } = await admin
+      .from('statuts')
+      .select('id')
+      .eq('libelle', 'Sert dans une commission')
+      .single()
+
+    const { error: erreurAttribution } = await admin.rpc('attribuer_statut', {
+      p_membre: idMembreActif,
+      p_statut: statutCommission!.id,
+      p_date: null,
+      p_note: null,
+      p_par: idProfil,
+    })
+    expect(erreurAttribution).toBeNull()
+
+    const { data: apresAttribution } = await admin
+      .from('membre_statuts')
+      .select('statut_id')
+      .eq('membre_id', idMembreActif)
+      .eq('statut_id', statutCommission!.id)
+    expect(apresAttribution).toHaveLength(1)
+
+    const { error: erreurRetrait } = await admin.rpc('retirer_statut', {
+      p_membre: idMembreActif,
+      p_statut: statutCommission!.id,
+      p_par: idProfil,
+      p_motif: null,
+    })
+    expect(erreurRetrait).toBeNull()
+
+    const { data: apresRetrait } = await admin
+      .from('membre_statuts')
+      .select('statut_id')
+      .eq('membre_id', idMembreActif)
+      .eq('statut_id', statutCommission!.id)
+    expect(apresRetrait).toEqual([])
+  })
+})
