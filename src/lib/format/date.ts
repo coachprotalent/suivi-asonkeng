@@ -7,6 +7,12 @@ const FORMAT_DATE_SEULE = new Intl.DateTimeFormat('fr-FR', {
   timeZone: 'UTC',
 })
 
+// Exposé uniquement pour verrouiller l'invariant ci-dessus en test (voir date.test.ts) :
+// le fuseau effectivement retenu par le formateur de dates seules, tel que résolu par
+// Intl. On n'expose pas le formateur lui-même — cette seule valeur suffit à prouver
+// l'épinglage, sans donner accès à autre chose.
+export const fuseauDateSeule = FORMAT_DATE_SEULE.resolvedOptions().timeZone
+
 const FORMAT_DATE_HEURE = new Intl.DateTimeFormat('fr-FR', {
   dateStyle: 'short',
   timeStyle: 'short',
