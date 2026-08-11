@@ -219,10 +219,22 @@ describe('écriture refusée par défaut', () => {
 })
 
 describe('compte désactivé', () => {
-  // Ces trois tests sont la seule preuve d'exécution de `prive.est_actif()` sur les
-  // tables de cette phase. Le troisième est un contrôle positif : sans lui, les deux
-  // premiers passeraient aussi si la lecture était cassée pour une raison sans
-  // rapport avec l'état du compte.
+  // Ces trois tests prouvent le résultat observable : un compte désactivé ne lit
+  // plus rien sur `membre_statuts` ni `journal_statuts`. Le troisième est un
+  // contrôle positif : sans lui, les deux premiers passeraient aussi si la lecture
+  // était cassée pour une raison sans rapport avec l'état du compte.
+  //
+  // Ils ne prouvent PAS que c'est la clause `prive.est_actif()` de
+  // `membre_statuts_lecture` qui arrête un compte désactivé. Preuve par mutation
+  // (retrait isolé de cette seule clause, hors de ce fichier) : la suite reste
+  // entièrement verte, parce que la sous-requête vers `public.membres` reste
+  // soumise à `membres_lecture`, qui exige déjà `prive.est_actif()`. La protection
+  // vient donc par héritage de la politique de `membres` (phase antérieure,
+  // couverte par `tests/rls/membres.test.ts`), pas d'une preuve isolée ici. La
+  // clause de `membre_statuts_lecture` reste une défense en profondeur légitime —
+  // si `membres_lecture` change un jour, celle-ci tient encore — mais cette suite
+  // ne peut pas l'isoler pour la démontrer seule. Seule une mutation qui retire la
+  // politique entière (`using (true)`) fait tomber ces tests.
   it('un compte désactivé ne lit plus les statuts', async () => {
     await admin.from('profils').update({ actif: false }).eq('id', idProfil)
     try {
@@ -255,5 +267,80 @@ describe('compte désactivé', () => {
       .select('statut_id')
       .eq('membre_id', idMembreActif)
     expect(data).toHaveLength(1)
+  })
+})
+
+describe('journal protégé contre la réécriture', () => {
+  // Contrôle positif de lecture, avec la clé de service : sans lui, le refus
+  // d'`update` ci-dessous pourrait aussi bien signifier « cette entrée n'existe pas »
+  // ou « la table est inaccessible », pas « la réécriture est spécifiquement bloquée ».
+  it('la clé de service lit une entrée du journal', async () => {
+    const { data, error } = await admin
+      .from('journal_statuts')
+      .select('id, action')
+      .eq('membre_id', idMembreActif)
+      .eq('statut_id', idStatutRepenti)
+      .eq('action', 'ajout')
+      .maybeSingle()
+    expect(error).toBeNull()
+    expect(data).not.toBeNull()
+  })
+
+  // Contrôle positif d'écriture : une attribution légitime, par le même chemin que
+  // l'application, doit continuer à écrire dans le journal. Sans ce test, un refus
+  // d'`update` pourrait aussi bien signifier « la table entière est verrouillée en
+  // écriture », ce qui n'est pas la garantie voulue — seule la réécriture l'est.
+  it('une attribution légitime écrit une nouvelle entrée dans le journal', async () => {
+    const { data: statutBapteme } = await admin
+      .from('statuts')
+      .select('id')
+      .eq('libelle', "Baptisé d'eau")
+      .single()
+
+    const { error: erreurRpc } = await admin.rpc('attribuer_statut', {
+      p_membre: idMembreActif,
+      p_statut: statutBapteme!.id,
+      p_date: null,
+      p_note: null,
+      p_par: idProfil,
+    })
+    expect(erreurRpc).toBeNull()
+
+    const { data } = await admin
+      .from('journal_statuts')
+      .select('action')
+      .eq('membre_id', idMembreActif)
+      .eq('statut_id', statutBapteme!.id)
+      .eq('action', 'ajout')
+    expect(data).toHaveLength(1)
+  })
+
+  // Le refus doit tenir même pour la clé de service : c'est précisément le chemin
+  // que le déclencheur doit arrêter, puisque c'est le seul par lequel l'application
+  // écrit jamais dans cette table (la RLS interdit déjà l'écriture aux utilisateurs,
+  // testé plus haut — ça ne prouverait rien de plus ici).
+  it('même la clé de service ne peut pas modifier une entrée existante', async () => {
+    const { data: avant } = await admin
+      .from('journal_statuts')
+      .select('id, motif')
+      .eq('membre_id', idMembreActif)
+      .eq('statut_id', idStatutRepenti)
+      .eq('action', 'ajout')
+      .single()
+
+    const { error } = await admin
+      .from('journal_statuts')
+      .update({ motif: 'Réécriture tentée' })
+      .eq('id', avant!.id)
+      .select()
+    expect(error).not.toBeNull()
+    expect(error!.message).toContain('ne se réécrit pas')
+
+    const { data: apres } = await admin
+      .from('journal_statuts')
+      .select('motif')
+      .eq('id', avant!.id)
+      .single()
+    expect(apres!.motif).toBe(avant!.motif)
   })
 })
