@@ -55,6 +55,19 @@ export default function PageChangementMotDePasse() {
           {enCours ? 'Enregistrement…' : 'Enregistrer'}
         </button>
       </form>
+
+      {/*
+        Seule issue depuis cet écran. Le middleware renvoie ici toute navigation
+        tant que le drapeau est actif : sans ce lien, quelqu'un de bloqué n'aurait
+        aucun moyen de sortir, et cette application n'offre aucune réinitialisation
+        autonome. Un lien simple, car la déconnexion est une route, pas une action.
+      */}
+      <a
+        href="/deconnexion"
+        className="mt-6 text-center text-sm text-neutral-500 underline underline-offset-4"
+      >
+        Se déconnecter
+      </a>
     </main>
   )
 }
