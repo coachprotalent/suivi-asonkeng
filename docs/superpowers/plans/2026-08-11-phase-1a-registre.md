@@ -814,15 +814,31 @@ export async function listerMembres(filtres?: {
 
   const recherche = filtres?.recherche?.trim()
   if (recherche) {
-    // Échapper les caractères que PostgREST interprète dans un motif `ilike`.
-    const motif = `%${recherche.replace(/[%_,()]/g, '')}%`
-    requete = requete.or(`nom.ilike.${motif},prenom.ilike.${motif},ville.ilike.${motif}`)
+    // PostgREST réserve `, . : * ( )` dans la valeur d'un filtre. Plutôt que de
+    // retenir une liste de caractères à retirer — qui sera incomplète le jour où
+    // elle changera — on entoure la valeur de guillemets, forme dans laquelle
+    // PostgREST accepte tout, en n'échappant que ce que les guillemets exigent.
+    // Sans cela, chercher « St. Etienne » casse la requête, et comme l'erreur
+    // était ignorée, l'écran annonçait « aucun membre » pour une recherche valide.
+    const terme = recherche
+      .replace(/[\\"]/g, '\$&') // échapper l'antislash et le guillemet
+      .replace(/[%_]/g, '') // neutraliser les jokers de `ilike`
+    if (terme.length > 0) {
+      const motif = `"%${terme}%"`
+      requete = requete.or(`nom.ilike.${motif},prenom.ilike.${motif},ville.ilike.${motif}`)
+    }
   }
   if (filtres?.antenneId) {
     requete = requete.eq('antenne_id', filtres.antenneId)
   }
 
-  const { data } = await requete
+  const { data, error } = await requete
+  if (error) {
+    // Un échec ne doit pas être indistinguable d'un résultat vide : annoncer
+    // « aucun membre » alors que la requête a échoué est un mensonge silencieux.
+    throw new Error(`Lecture des membres impossible : ${error.message}`)
+  }
+
   return (data ?? []).map((l) => ({
     id: l.id as string,
     nom: l.nom as string,
@@ -833,7 +849,14 @@ export async function listerMembres(filtres?: {
   }))
 }
 
-/** Fiche complète, ou `null` si elle n'existe pas ou n'est pas visible par l'appelant. */
+/**
+ * Fiche complète, ou `null` si elle n'existe pas ou n'est pas visible par l'appelant.
+ *
+ * Contrairement à `listerMembres`, cette fonction ne filtre **pas** sur l'état : un
+ * administrateur doit pouvoir ouvrir une fiche archivée depuis un lien direct. Ce
+ * n'est pas un oubli, et la sécurité au niveau des lignes reste seule juge de ce qui
+ * est visible.
+ */
 export async function membreParId(id: string): Promise<MembreDetail | null> {
   const supabase = await clientServeur()
   const { data } = await supabase.from('membres').select(COLONNES_DETAIL).eq('id', id).maybeSingle()
