@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "amorcer:racine": "tsx --env-file=.env.local scripts/creer-compte-racine.ts"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.4",
