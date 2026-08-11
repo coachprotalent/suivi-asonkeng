@@ -459,6 +459,48 @@ describe('normaliserFicheMembre', () => {
     })
     expect(fiche.domaineEtude).toBe('Informatique')
   })
+
+  it("efface le domaine d'étude quand la situation est absente", () => {
+    const fiche = normaliserFicheMembre({ ...minimal, domaineEtude: 'Informatique' })
+    expect(fiche.domaineEtude).toBeNull()
+  })
+})
+
+// Ces tests couvrent le chemin réellement emprunté en production. Les données
+// viennent d'un formulaire HTML : `FormData` ne rend que des chaînes, jamais des
+// nombres. Sans eux, la conversion pourrait être cassée ou supprimée sans que la
+// suite s'en aperçoive, et la fonction serait juste sous test et fausse en vrai.
+describe('normaliserFicheMembre — valeurs telles que les rend un formulaire', () => {
+  it('accepte un report initial donné sous forme de chaîne', () => {
+    expect(normaliserFicheMembre({ ...minimal, reportInitialAel: '5' }).reportInitialAel).toBe(5)
+  })
+
+  it('traite un report initial vidé par l’utilisateur comme zéro', () => {
+    expect(normaliserFicheMembre({ ...minimal, reportInitialAel: '' }).reportInitialAel).toBe(0)
+  })
+
+  it('refuse un report initial non numérique', () => {
+    expect(() => normaliserFicheMembre({ ...minimal, reportInitialAel: 'abc' })).toThrow(
+      FicheMembreInvalideError,
+    )
+  })
+
+  it('refuse un report initial décimal donné sous forme de chaîne', () => {
+    expect(() => normaliserFicheMembre({ ...minimal, reportInitialAel: '2.5' })).toThrow(
+      FicheMembreInvalideError,
+    )
+  })
+
+  it('traite un champ optionnel absent comme non renseigné', () => {
+    expect(normaliserFicheMembre({ ...minimal, ville: null }).ville).toBeNull()
+    expect(normaliserFicheMembre({ ...minimal, ville: undefined }).ville).toBeNull()
+  })
+
+  it('refuse un champ texte reçu sous une forme inattendue plutôt que de le perdre', () => {
+    expect(() => normaliserFicheMembre({ ...minimal, ville: 42 })).toThrow(
+      FicheMembreInvalideError,
+    )
+  })
 })
 ```
 
@@ -509,7 +551,14 @@ function texteObligatoire(valeur: unknown, champ: string): string {
 }
 
 function texteOptionnel(valeur: unknown): string | null {
-  const nettoye = typeof valeur === 'string' ? valeur.trim() : ''
+  // Absent et vide sont légitimes ; toute autre forme est une anomalie qu'il vaut
+  // mieux signaler que ramener silencieusement à `null`. Un `antenneId` avalé sans
+  // bruit détacherait un membre de son antenne sans que personne ne le voie.
+  if (valeur === null || valeur === undefined) return null
+  if (typeof valeur !== 'string') {
+    throw new FicheMembreInvalideError('un champ texte a reçu une valeur inattendue')
+  }
+  const nettoye = valeur.trim()
   return nettoye.length === 0 ? null : nettoye
 }
 
@@ -556,7 +605,7 @@ export function normaliserFicheMembre(brut: Record<string, unknown>): FicheMembr
 - [ ] **Step 4 : Lancer les tests et vérifier qu'ils passent**
 
 Run : `npm test`
-Expected : PASS, 30 tests réussis (15 hérités de la phase 0 et 15 nouveaux).
+Expected : PASS, 37 tests réussis (15 hérités de la phase 0 et 22 nouveaux).
 
 - [ ] **Step 5 : Commit**
 
@@ -807,7 +856,7 @@ export async function membreParId(id: string): Promise<MembreDetail | null> {
 
 - [ ] **Step 2 : Vérifier**
 
-Run : `npx tsc --noEmit`, `npm run lint`, `npm test` (30 tests).
+Run : `npx tsc --noEmit`, `npm run lint`, `npm test` (37 tests).
 Expected : les trois passent.
 
 - [ ] **Step 3 : Commit**
@@ -2095,7 +2144,7 @@ git commit -m "test: couvrir le parcours annuaire de bout en bout"
 
 - [ ] **Step 1 : Vérifier l'ensemble des suites**
 
-Run, dans l'ordre : `npx tsc --noEmit`, `npm run lint`, `npm test` (30 tests),
+Run, dans l'ordre : `npx tsc --noEmit`, `npm run lint`, `npm test` (37 tests),
 `npm run test:rls` (22 tests), `npm run test:e2e` (6 tests), `npm run build`.
 Expected : les six passent.
 
@@ -2133,7 +2182,7 @@ git commit -m "chore: documenter et deployer la phase 1a"
 
 ## Critères d'achèvement de la phase 1a
 
-- [ ] `npm test` passe — 30 tests, dont 15 sur la validation des fiches
+- [ ] `npm test` passe — 37 tests, dont 22 sur la validation des fiches
 - [ ] `npm run test:rls` passe — 22 tests, dont 12 sur les membres et les antennes
 - [ ] `npm run test:e2e` passe — 6 tests
 - [ ] `npm run build` passe sans erreur
