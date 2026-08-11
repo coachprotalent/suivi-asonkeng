@@ -2,6 +2,7 @@
 
 import { redirect } from 'next/navigation'
 import { z } from 'zod'
+import { profilCourant } from '@/lib/donnees/profils'
 import { clientAdmin } from '@/lib/supabase/admin'
 import { clientServeur } from '@/lib/supabase/serveur'
 import { LONGUEUR_MDP_MINIMALE } from './constantes'
@@ -37,6 +38,21 @@ export async function changerMotDePasse(
   } = await supabase.auth.getUser()
   if (!user) {
     redirect('/connexion')
+  }
+
+  // La phase 0 ne livre que le changement *forcé*. Sans ce contrôle, toute session
+  // authentifiée pourrait changer le mot de passe sans connaître l'ancien — et la
+  // personne dépossédée n'aurait aucun recours autonome (spec §5.4).
+  if (user.app_metadata?.doit_changer_mdp !== true) {
+    redirect('/tableau-de-bord')
+  }
+
+  // Une écriture par clé de service ne doit jamais reposer sur la seule présence
+  // d'une session : un compte d'authentification sans fiche, ou désactivé, ne doit
+  // pas l'atteindre. C'est le patron que les phases suivantes recopieront.
+  const profil = await profilCourant()
+  if (!profil) {
+    redirect('/deconnexion')
   }
 
   const { error } = await supabase.auth.updateUser({ password: saisie.data.motDePasse })

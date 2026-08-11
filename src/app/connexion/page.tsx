@@ -2,7 +2,6 @@
 
 import { useActionState } from 'react'
 import { seConnecter, type EtatConnexion } from './actions'
-import { MESSAGE_ECHEC_CONNEXION } from './messages'
 
 const etatInitial: EtatConnexion = { erreur: null }
 
@@ -41,7 +40,7 @@ export default function PageConnexion() {
 
         {etat.erreur ? (
           <p role="alert" className="text-sm text-red-600">
-            {etat.erreur ?? MESSAGE_ECHEC_CONNEXION}
+            {etat.erreur}
           </p>
         ) : null}
 

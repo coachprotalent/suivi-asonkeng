@@ -1612,7 +1612,9 @@ const URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const CLE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 const CLE_SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
-const MDP = 'MotDePasseDeTest!2026'
+// Tiré à chaque exécution : un mot de passe fixe dans un dépôt public ouvrirait
+// tout compte de test qu'une exécution interrompue aurait laissé derrière elle.
+const MDP = `Test-${crypto.randomUUID()}`
 const IDENT_SIMPLE = 'test.rls.simple'
 const IDENT_ADMIN = 'test.rls.admin'
 const IDENT_INTRUS = 'test.rls.intrus'
@@ -1878,8 +1880,10 @@ import { expect, test } from '@playwright/test'
 
 const IDENTIFIANT = 'test.e2e.connexion'
 const EMAIL = `${IDENTIFIANT}@asonkeng.local`
-const MDP_TEMPORAIRE = 'MotDePasseTemporaire!1'
-const MDP_CHOISI = 'MonNouveauMotDePasse!2026'
+// Tiré à chaque exécution : un mot de passe fixe dans un dépôt public ouvrirait
+// tout compte de test qu'une exécution interrompue aurait laissé derrière elle.
+const MDP_TEMPORAIRE = `Test-${crypto.randomUUID()}`
+const MDP_CHOISI = `Test-${crypto.randomUUID()}`
 
 const admin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,

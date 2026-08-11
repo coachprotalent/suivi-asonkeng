@@ -6,10 +6,13 @@ const URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const CLE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 const CLE_SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
-const MDP = 'MotDePasseDeTest!2026'
+// Tiré à chaque exécution : un mot de passe fixe dans un dépôt public ouvrirait
+// tout compte de test qu'une exécution interrompue aurait laissé derrière elle.
+const MDP = `Test-${crypto.randomUUID()}`
 const IDENT_SIMPLE = 'test.rls.simple'
 const IDENT_ADMIN = 'test.rls.admin'
 const IDENT_INTRUS = 'test.rls.intrus'
+const IDENT_DESACTIVE = 'test.rls.desactive'
 
 const admin = createClient(URL, CLE_SERVICE, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -93,6 +96,7 @@ afterAll(async () => {
   await supprimerCompte(IDENT_SIMPLE)
   await supprimerCompte(IDENT_ADMIN)
   await supprimerCompte(IDENT_INTRUS)
+  await supprimerCompte(IDENT_DESACTIVE)
 })
 
 describe('lecture de profils', () => {
@@ -184,5 +188,40 @@ describe('écriture refusée par défaut', () => {
     // Même exigence que pour les autres écritures : vérifier en base.
     const { data } = await admin.from('profils').select('nom_affichage').eq('id', idSimple).single()
     expect(data!.nom_affichage).not.toBe('Modifié')
+  })
+})
+
+describe('compte désactivé', () => {
+  it("un compte désactivé n'est plus lisible par le filtre actif", async () => {
+    await supprimerCompte(IDENT_DESACTIVE)
+    const idDesactive = await creerCompte(IDENT_DESACTIVE, false)
+    const clientDesactive = await connecter(IDENT_DESACTIVE)
+
+    try {
+      // D'abord vérifier que le compte lit bien son propre profil, tant qu'il est actif.
+      const { data: avant } = await clientDesactive
+        .from('profils')
+        .select('identifiant')
+        .eq('id', idDesactive)
+        .eq('actif', true)
+      expect(avant).toEqual([{ identifiant: IDENT_DESACTIVE }])
+
+      const { error: erreurDesactivation } = await admin
+        .from('profils')
+        .update({ actif: false })
+        .eq('id', idDesactive)
+      expect(erreurDesactivation).toBeNull()
+
+      // C'est exactement la requête que fait `profilCourant()` : elle ne doit plus
+      // rien renvoyer une fois le compte désactivé.
+      const { data: apres } = await clientDesactive
+        .from('profils')
+        .select('identifiant')
+        .eq('id', idDesactive)
+        .eq('actif', true)
+      expect(apres).toEqual([])
+    } finally {
+      await supprimerCompte(IDENT_DESACTIVE)
+    }
   })
 })

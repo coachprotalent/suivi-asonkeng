@@ -38,6 +38,9 @@ d'environnement doivent être renseignées sur Vercel, pour les environnements `
 Les autres variables de `.env.local` (jeton d'accès Supabase, identifiants du compte racine) ne
 servent qu'aux scripts locaux et ne doivent pas être transférées sur Vercel.
 
+Le déploiement automatique sur `git push` **n'est pas actif** : la liaison entre GitHub et Vercel
+n'a pas pu être établie. Seul `npx vercel --prod` déploie.
+
 ## Attention
 
 Un **seul** projet Supabase sert au développement et à la production. Les migrations sont

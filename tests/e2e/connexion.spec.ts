@@ -3,8 +3,10 @@ import { expect, test } from '@playwright/test'
 
 const IDENTIFIANT = 'test.e2e.connexion'
 const EMAIL = `${IDENTIFIANT}@asonkeng.local`
-const MDP_TEMPORAIRE = 'MotDePasseTemporaire!1'
-const MDP_CHOISI = 'MonNouveauMotDePasse!2026'
+// Tiré à chaque exécution : un mot de passe fixe dans un dépôt public ouvrirait
+// tout compte de test qu'une exécution interrompue aurait laissé derrière elle.
+const MDP_TEMPORAIRE = `Test-${crypto.randomUUID()}`
+const MDP_CHOISI = `Test-${crypto.randomUUID()}`
 
 const admin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,

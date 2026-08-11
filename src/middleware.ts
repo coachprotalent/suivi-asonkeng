@@ -7,6 +7,10 @@ const ROUTE_CHANGEMENT_MDP = '/changer-mot-de-passe'
 const ROUTE_DECONNEXION = '/deconnexion'
 const ROUTE_APRES_CONNEXION = '/tableau-de-bord'
 
+/** Compare un segment entier, pas un préfixe : `/connexion-aide` n'est pas `/connexion`. */
+const estRoute = (chemin: string, route: string) =>
+  chemin === route || chemin.startsWith(`${route}/`)
+
 export async function middleware(requete: NextRequest) {
   let reponse = NextResponse.next({ request: requete })
 
@@ -33,8 +37,8 @@ export async function middleware(requete: NextRequest) {
   } = await supabase.auth.getUser()
 
   const chemin = requete.nextUrl.pathname
-  const surConnexion = chemin.startsWith(ROUTE_CONNEXION)
-  const surChangementMdp = chemin.startsWith(ROUTE_CHANGEMENT_MDP)
+  const surConnexion = estRoute(chemin, ROUTE_CONNEXION)
+  const surChangementMdp = estRoute(chemin, ROUTE_CHANGEMENT_MDP)
 
   /**
    * Construit une redirection en **reportant les cookies** déjà posés sur `reponse`.
@@ -68,7 +72,7 @@ export async function middleware(requete: NextRequest) {
   // middleware voit un utilisateur authentifié et le renvoie au tableau de bord.
   // Un composant serveur ne peut pas effacer le cookie de session pendant son
   // rendu : seule une route dédiée le peut.
-  if (chemin.startsWith(ROUTE_DECONNEXION)) {
+  if (estRoute(chemin, ROUTE_DECONNEXION)) {
     return reponse
   }
 
