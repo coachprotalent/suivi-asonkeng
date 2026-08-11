@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { seDeconnecter } from '@/app/connexion/actions'
 import { exigerProfilActif } from '@/lib/securite/garde'
 
@@ -20,9 +21,9 @@ export default async function PageTableauDeBord() {
         </form>
       </header>
 
-      <p className="text-neutral-600">
-        Le socle est en place. Les membres, les statuts et l&apos;arborescence arrivent en phase 1.
-      </p>
+      <Link href="/membres" className="underline underline-offset-4">
+        Consulter l&apos;annuaire
+      </Link>
     </main>
   )
 }
