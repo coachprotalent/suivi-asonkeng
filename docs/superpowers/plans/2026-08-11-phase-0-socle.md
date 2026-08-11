@@ -737,7 +737,10 @@ et les colonnes internes de Supabase, ce qui casse à la moindre évolution de l
 - Modify: `package.json` (script `amorcer:racine`)
 
 **Interfaces:**
-- Consumes: `identifiantVersEmail` (Task 2), `clientAdmin` (Task 5)
+- Consumes: `identifiantVersEmail` (Task 2) **uniquement**. Surtout **pas** `clientAdmin` de
+  la Task 5 : `admin.ts` porte `import 'server-only'`, qui lève au chargement dans un script
+  Node ordinaire — vérifié, le script planterait. La duplication de `createClient` ici est
+  délibérée et nécessaire, ce n'est pas une entorse à DRY.
 - Produces: un compte administrateur `est_racine = true`, `membre_id = null`, avec
   `app_metadata.doit_changer_mdp = true`
 
