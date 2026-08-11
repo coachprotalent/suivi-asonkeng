@@ -45,3 +45,27 @@ n'a pas pu être établie. Seul `npx vercel --prod` déploie.
 
 Un **seul** projet Supabase sert au développement et à la production. Les migrations sont
 strictement additives. **Ne jamais exécuter `supabase db reset`.**
+
+## Phase 1a : le registre des membres
+
+La phase 1a livre le registre des membres, socle des phases suivantes :
+
+- **Annuaire** (`/membres`) — liste des membres actifs, avec recherche libre et filtre par
+  antenne.
+- **Fiches** (`/membres/[id]`) — consultation du détail d'un membre ; création
+  (`/membres/nouveau`) et modification (`/membres/[id]/modifier`) réservées aux administrateurs.
+- **Archivage** — une fiche archivée quitte l'annuaire mais reste consultable par lien direct ;
+  l'action est confirmée avant exécution et n'efface aucune donnée.
+- **Antennes** (`/antennes`, réservé aux administrateurs) — création d'antennes, désactivation et
+  réactivation ; une antenne désactivée reste visible et son rattachement aux fiches existantes
+  n'est jamais perdu.
+
+### Règle de sécurité
+
+Toute page et toute Server Action de l'application passent par `exigerProfilActif` ou
+`exigerAdministrateur` (`src/lib/securite/garde.ts`) — c'est l'unique point d'entrée qui vérifie
+la session et, le cas échéant, le rôle. Aucune écriture n'est possible depuis le navigateur : les
+créations, modifications, archivages et bascules d'antenne passent exclusivement par des Server
+Actions exécutées côté serveur, jamais par un appel direct du client à Supabase. Côté base, les
+politiques RLS n'autorisent que des `SELECT` : toute écriture transite par le serveur, qui agit
+avec la clé de service, jamais exposée au navigateur.
