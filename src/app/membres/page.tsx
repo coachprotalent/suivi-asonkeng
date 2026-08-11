@@ -17,8 +17,16 @@ export default async function PageAnnuaire({
 }) {
   const profil = await exigerProfilActif()
   const parametres = await searchParams
+
+  // Le filtre vient de l'adresse, donc du client. Une valeur qui n'est pas un
+  // identifiant ferait échouer la requête sur une colonne `uuid` — un signet périmé
+  // suffit. On l'ignore plutôt que de faire tomber l'écran.
+  const antenneFiltre = /^[0-9a-f-]{36}$/i.test(parametres.antenne ?? '')
+    ? parametres.antenne
+    : undefined
+
   const [membres, antennes, roles] = await Promise.all([
-    listerMembres({ recherche: parametres.recherche, antenneId: parametres.antenne }),
+    listerMembres({ recherche: parametres.recherche, antenneId: antenneFiltre }),
     listerAntennes(),
     rolesDuProfil(profil.id),
   ])
@@ -54,7 +62,7 @@ export default async function PageAnnuaire({
         />
         <select
           name="antenne"
-          defaultValue={parametres.antenne ?? ''}
+          defaultValue={antenneFiltre ?? ''}
           aria-label="Antenne"
           className="rounded-md border border-neutral-300 px-3 py-2"
         >

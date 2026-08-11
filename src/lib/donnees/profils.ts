@@ -52,6 +52,17 @@ export type RoleApp = 'administrateur' | 'moderateur'
 /** Rôles explicitement attribués. Les droits « Utilisateur » sont le socle implicite. */
 export async function rolesDuProfil(profilId: string): Promise<RoleApp[]> {
   const supabase = await clientServeur()
-  const { data } = await supabase.from('roles_profil').select('role').eq('profil_id', profilId)
+  const { data, error } = await supabase
+    .from('roles_profil')
+    .select('role')
+    .eq('profil_id', profilId)
+
+  // Ne jamais retomber sur une liste vide : « aucun rôle » et « la requête a
+  // échoué » auraient alors le même effet, et un administrateur verrait ses
+  // fonctions disparaître de l'écran sans qu'aucun message ne le lui dise.
+  if (error) {
+    throw new Error(`Lecture des rôles impossible : ${error.message}`)
+  }
+
   return (data ?? []).map((ligne) => ligne.role as RoleApp)
 }
