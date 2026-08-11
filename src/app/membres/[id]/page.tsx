@@ -58,32 +58,37 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
             </p>
           ) : null}
         </div>
-        {estAdmin ? (
-          <div className="flex items-center gap-4">
-            <Link href={`/membres/${membre.id}/modifier`} className="text-sm underline underline-offset-4">
-              Modifier
-            </Link>
-            {/*
-              Pas de bouton d'archivage sur une fiche déjà archivée : l'action
-              n'aurait aucun effet, et la proposer laisserait croire le contraire.
-              À la place, un rétablissement : sur mobile, un archivage accidentel
-              serait sinon définitif sans intervention en base, alors que la
-              confirmation promet « rien n'est supprimé ».
-            */}
-            {membre.etat === 'actif' ? (
-              <form action={archiverMembre}>
-                <input type="hidden" name="id" value={membre.id} />
-                <BoutonArchiver nomComplet={`${membre.prenom} ${membre.nom}`} archiver />
-              </form>
-            ) : null}
-            {membre.etat === 'archive' ? (
-              <form action={desarchiverMembre}>
-                <input type="hidden" name="id" value={membre.id} />
-                <BoutonArchiver nomComplet={`${membre.prenom} ${membre.nom}`} archiver={false} />
-              </form>
-            ) : null}
-          </div>
-        ) : null}
+        <div className="flex items-center gap-4">
+          <Link href={`/membres/${membre.id}/statuts`} className="text-sm underline underline-offset-4">
+            Statuts
+          </Link>
+          {estAdmin ? (
+            <>
+              <Link href={`/membres/${membre.id}/modifier`} className="text-sm underline underline-offset-4">
+                Modifier
+              </Link>
+              {/*
+                Pas de bouton d'archivage sur une fiche déjà archivée : l'action
+                n'aurait aucun effet, et la proposer laisserait croire le contraire.
+                À la place, un rétablissement : sur mobile, un archivage accidentel
+                serait sinon définitif sans intervention en base, alors que la
+                confirmation promet « rien n'est supprimé ».
+              */}
+              {membre.etat === 'actif' ? (
+                <form action={archiverMembre}>
+                  <input type="hidden" name="id" value={membre.id} />
+                  <BoutonArchiver nomComplet={`${membre.prenom} ${membre.nom}`} archiver />
+                </form>
+              ) : null}
+              {membre.etat === 'archive' ? (
+                <form action={desarchiverMembre}>
+                  <input type="hidden" name="id" value={membre.id} />
+                  <BoutonArchiver nomComplet={`${membre.prenom} ${membre.nom}`} archiver={false} />
+                </form>
+              ) : null}
+            </>
+          ) : null}
+        </div>
       </header>
 
       <dl className="divide-y divide-neutral-200">
