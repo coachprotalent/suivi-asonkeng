@@ -10,6 +10,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:rls": "dotenv -e .env.local -- vitest run --config vitest.rls.config.ts",
+    "test:e2e": "dotenv -e .env.local -- playwright test",
     "amorcer:racine": "tsx --env-file=.env.local scripts/creer-compte-racine.ts"
   },
   "dependencies": {
@@ -22,6 +23,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
