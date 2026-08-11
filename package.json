@@ -9,6 +9,7 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:rls": "dotenv -e .env.local -- vitest run --config vitest.rls.config.ts",
     "amorcer:racine": "tsx --env-file=.env.local scripts/creer-compte-racine.ts"
   },
   "dependencies": {
@@ -25,6 +26,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "dotenv-cli": "^11.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
     "tailwindcss": "4.3.3",
