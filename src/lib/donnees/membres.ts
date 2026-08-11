@@ -98,7 +98,17 @@ export async function listerMembres(filtres?: {
  */
 export async function membreParId(id: string): Promise<MembreDetail | null> {
   const supabase = await clientServeur()
-  const { data } = await supabase.from('membres').select(COLONNES_DETAIL).eq('id', id).maybeSingle()
+  const { data, error } = await supabase
+    .from('membres')
+    .select(COLONNES_DETAIL)
+    .eq('id', id)
+    .maybeSingle()
+  // Une erreur de lecture ne doit pas devenir « cette fiche n'existe pas » : les
+  // appelants font `notFound()` sur `null`, et une panne passagère ferait dire à
+  // l'application qu'une personne réelle n'est pas au registre.
+  if (error) {
+    throw new Error(`Lecture de la fiche impossible : ${error.message}`)
+  }
   if (!data) return null
 
   return {

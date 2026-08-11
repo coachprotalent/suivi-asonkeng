@@ -38,13 +38,19 @@ d'environnement doivent être renseignées sur Vercel, pour les environnements `
 Les autres variables de `.env.local` (jeton d'accès Supabase, identifiants du compte racine) ne
 servent qu'aux scripts locaux et ne doivent pas être transférées sur Vercel.
 
-Le déploiement automatique sur `git push` **n'est pas actif** : la liaison entre GitHub et Vercel
-n'a pas pu être établie. Seul `npx vercel --prod` déploie.
+> **Pousser sur `main` déploie en production.** La liaison GitHub–Vercel est active :
+> tout `git push` sur `main` met l'application en ligne, sur le projet Supabase qui
+> sert aussi de base de production. Il n'existe aucune intégration continue pour
+> arrêter un code fautif : lancez les six suites localement avant de pousser.
 
 ## Attention
 
 Un **seul** projet Supabase sert au développement et à la production. Les migrations sont
 strictement additives. **Ne jamais exécuter `supabase db reset`.**
+
+L'amorçage des antennes dans `20260812110000_antennes.sql` n'est **pas idempotent** : il insère
+Batouri, Cameroun et France sans vérifier leur présence. Une restauration depuis zéro échouera sur
+la contrainte d'unicité (`antennes_nom_key`) si ces antennes existent déjà.
 
 ## Phase 1a : le registre des membres
 

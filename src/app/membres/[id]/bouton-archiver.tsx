@@ -1,22 +1,33 @@
 'use client'
 
-export function BoutonArchiver({ nomComplet }: { nomComplet: string }) {
+export function BoutonArchiver({
+  nomComplet,
+  archiver,
+}: {
+  nomComplet: string
+  archiver: boolean
+}) {
+  const message = archiver
+    ? `Archiver la fiche de ${nomComplet} ?\n\n` +
+      "Elle disparaîtra de l'annuaire, mais rien n'est supprimé : " +
+      'la fiche et son historique restent consultables.'
+    : `Rétablir la fiche de ${nomComplet} ?\n\nElle réapparaîtra dans l'annuaire.`
+
   return (
     <button
       type="submit"
       onClick={(evenement) => {
-        const confirme = window.confirm(
-          `Archiver la fiche de ${nomComplet} ?\n\n` +
-            "Elle disparaîtra de l'annuaire, mais rien n'est supprimé : " +
-            'la fiche et son historique restent consultables.',
-        )
-        if (!confirme) {
+        if (!window.confirm(message)) {
           evenement.preventDefault()
         }
       }}
-      className="text-sm text-red-600 underline underline-offset-4"
+      className={
+        archiver
+          ? 'text-sm text-red-600 underline underline-offset-4'
+          : 'text-sm underline underline-offset-4'
+      }
     >
-      Archiver
+      {archiver ? 'Archiver' : 'Rétablir'}
     </button>
   )
 }

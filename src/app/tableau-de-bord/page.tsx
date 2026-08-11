@@ -1,9 +1,12 @@
 import Link from 'next/link'
 import { seDeconnecter } from '@/app/connexion/actions'
+import { rolesDuProfil } from '@/lib/donnees/profils'
 import { exigerProfilActif } from '@/lib/securite/garde'
 
 export default async function PageTableauDeBord() {
   const profil = await exigerProfilActif()
+  const roles = await rolesDuProfil(profil.id)
+  const estAdmin = roles.includes('administrateur')
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-12">
@@ -21,9 +24,16 @@ export default async function PageTableauDeBord() {
         </form>
       </header>
 
-      <Link href="/membres" className="underline underline-offset-4">
-        Consulter l&apos;annuaire
-      </Link>
+      <div className="flex flex-wrap gap-6">
+        <Link href="/membres" className="underline underline-offset-4">
+          Consulter l&apos;annuaire
+        </Link>
+        {estAdmin ? (
+          <Link href="/antennes" className="underline underline-offset-4">
+            Gérer les antennes
+          </Link>
+        ) : null}
+      </div>
     </main>
   )
 }

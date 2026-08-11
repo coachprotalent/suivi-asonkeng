@@ -23,9 +23,22 @@ export default async function PageModifierMembre({
       <Link href={`/membres/${membre.id}`} className="text-sm underline underline-offset-4">
         Retour à la fiche
       </Link>
-      <h1 className="mt-4 mb-8 text-2xl font-semibold">
+      <h1 className="mt-4 text-2xl font-semibold">
         Modifier {membre.prenom} {membre.nom}
       </h1>
+      {/*
+        Même bandeau que sur l'écran de consultation (tâche 9) : sans lui, un
+        administrateur arrivant par un lien périmé pouvait modifier une fiche
+        archivée en croyant suivre un membre actif.
+      */}
+      {membre.etat !== 'actif' ? (
+        <p className="mt-1 text-sm text-amber-700">
+          {membre.etat === 'archive'
+            ? 'Fiche archivée — elle ne figure plus dans l’annuaire.'
+            : 'Fiche en attente de validation.'}
+        </p>
+      ) : null}
+      <div className="mb-8" />
       <FormulaireMembre
         action={modifierMembre}
         antennes={antennes}

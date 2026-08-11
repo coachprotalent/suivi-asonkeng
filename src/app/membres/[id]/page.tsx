@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation'
 import { membreParId } from '@/lib/donnees/membres'
 import { rolesDuProfil } from '@/lib/donnees/profils'
 import { exigerProfilActif } from '@/lib/securite/garde'
-import { archiverMembre } from '../actions'
+import { archiverMembre, desarchiverMembre } from '../actions'
 import { BoutonArchiver } from './bouton-archiver'
 
 const LIBELLE_SITUATION: Record<string, string> = {
@@ -66,11 +66,20 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
             {/*
               Pas de bouton d'archivage sur une fiche déjà archivée : l'action
               n'aurait aucun effet, et la proposer laisserait croire le contraire.
+              À la place, un rétablissement : sur mobile, un archivage accidentel
+              serait sinon définitif sans intervention en base, alors que la
+              confirmation promet « rien n'est supprimé ».
             */}
             {membre.etat === 'actif' ? (
               <form action={archiverMembre}>
                 <input type="hidden" name="id" value={membre.id} />
-                <BoutonArchiver nomComplet={`${membre.prenom} ${membre.nom}`} />
+                <BoutonArchiver nomComplet={`${membre.prenom} ${membre.nom}`} archiver />
+              </form>
+            ) : null}
+            {membre.etat === 'archive' ? (
+              <form action={desarchiverMembre}>
+                <input type="hidden" name="id" value={membre.id} />
+                <BoutonArchiver nomComplet={`${membre.prenom} ${membre.nom}`} archiver={false} />
               </form>
             ) : null}
           </div>

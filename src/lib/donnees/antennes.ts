@@ -32,11 +32,17 @@ export async function listerToutesAntennes(): Promise<Antenne[]> {
 /** Antennes actives, triées par nom. */
 export async function listerAntennes(): Promise<Antenne[]> {
   const supabase = await clientServeur()
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('antennes')
     .select('id, nom, pays, actif')
     .eq('actif', true)
     .order('nom')
 
+  // Même exigence que `listerToutesAntennes` : sans elle, une panne de lecture vide
+  // le sélecteur d'antenne, une fiche est enregistrée détachée sans un mot, et
+  // l'écran de modification affiche « (désactivée) » à côté d'une antenne active.
+  if (error) {
+    throw new Error(`Lecture des antennes impossible : ${error.message}`)
+  }
   return (data ?? []) as Antenne[]
 }

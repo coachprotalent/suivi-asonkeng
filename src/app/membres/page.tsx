@@ -34,7 +34,10 @@ export default async function PageAnnuaire({
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-10">
-      <header className="mb-8 flex flex-wrap items-baseline justify-between gap-4">
+      <Link href="/tableau-de-bord" className="text-sm underline underline-offset-4">
+        Retour au tableau de bord
+      </Link>
+      <header className="mt-4 mb-8 flex flex-wrap items-baseline justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">Annuaire</h1>
           <p className="text-sm text-neutral-500">

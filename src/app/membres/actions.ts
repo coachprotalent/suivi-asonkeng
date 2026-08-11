@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
-import { FicheMembreInvalideError, normaliserFicheMembre } from '@/lib/domaine/membre'
+import { FicheMembreInvalideError, normaliserFicheMembre, type EtatMembre } from '@/lib/domaine/membre'
 import { exigerAdministrateur } from '@/lib/securite/garde'
 import { clientAdmin } from '@/lib/supabase/admin'
 import { MESSAGE_ECHEC_ENREGISTREMENT } from './messages'
@@ -104,6 +104,28 @@ export async function modifierMembre(
   redirect(`/membres/${id}`)
 }
 
+/**
+ * Écrit le nouvel état d'une fiche. Non exportée : dans un fichier `'use server'`,
+ * toute fonction exportée devient une Server Action appelable depuis le client, or
+ * celle-ci prend un état arbitraire — elle ne doit être atteignable que par
+ * `archiverMembre` et `desarchiverMembre`, qui, elles, valident l'appelant et
+ * n'exposent chacune qu'une seule transition.
+ */
+async function changerEtatMembre(id: string, etat: EtatMembre): Promise<void> {
+  // `.select('id')` n'est pas décoratif : une mise à jour sans effet ne renvoie pas
+  // d'erreur. Ces actions n'ont pas de canal de retour vers l'écran, alors plutôt
+  // que de rediriger comme si tout allait bien, on lève — un changement d'état qui
+  // ne change rien doit se voir.
+  const { data, error } = await clientAdmin()
+    .from('membres')
+    .update({ etat })
+    .eq('id', id)
+    .select('id')
+  if (error || !data || data.length === 0) {
+    throw new Error("La fiche n'a pas pu être mise à jour : aucune fiche ne correspond.")
+  }
+}
+
 export async function archiverMembre(donnees: FormData): Promise<void> {
   await exigerAdministrateur()
 
@@ -112,19 +134,25 @@ export async function archiverMembre(donnees: FormData): Promise<void> {
     redirect('/membres')
   }
 
-  // Même exigence que pour la modification : une mise à jour sans effet ne renvoie
-  // pas d'erreur. Cette action n'a pas de canal de retour vers l'écran, alors plutôt
-  // que de rediriger comme si tout allait bien, on lève — un archivage qui n'archive
-  // rien doit se voir.
-  const { data, error } = await clientAdmin()
-    .from('membres')
-    .update({ etat: 'archive' })
-    .eq('id', id)
-    .select('id')
-  if (error || !data || data.length === 0) {
-    throw new Error("La fiche n'a pas pu être archivée : aucune fiche ne correspond.")
-  }
+  await changerEtatMembre(id, 'archive')
 
   revalidatePath('/membres')
   redirect('/membres')
+}
+
+/**
+ * Rétablit une fiche archivée. Sans cette action, un archivage accidentel sur mobile
+ * est définitif sans intervention en base — alors que la confirmation promet « rien
+ * n'est supprimé ».
+ */
+export async function desarchiverMembre(donnees: FormData): Promise<void> {
+  await exigerAdministrateur()
+
+  const id = donnees.get('id')
+  if (typeof id !== 'string' || id.length === 0) {
+    redirect('/membres')
+  }
+
+  await changerEtatMembre(id, 'actif')
+  redirect(`/membres/${id}`)
 }
