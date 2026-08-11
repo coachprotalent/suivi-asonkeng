@@ -28,12 +28,14 @@ export type EntreeJournal = {
  * PostgREST renvoie un OBJET pour une ressource imbriquée en plusieurs-vers-un,
  * mais le client, faute de types `Database` générés, la déclare comme un tableau.
  * Les deux formes se ramènent ici à une seule. Même contournement que `nomAntenne`
- * dans `membres.ts`, généralisé parce que ce module en a besoin trois fois.
+ * dans `membres.ts`, généralisé pour trois relations distinctes de ce module
+ * (statut et groupe dans `statutsDuMembre`, statut et profil dans
+ * `journalDuMembre`), soit quatre appels.
  */
 type Imbrique<T> = T | T[] | null | undefined
 
 function premier<T>(valeur: Imbrique<T>): T | null {
-  if (!valeur) return null
+  if (valeur === null || valeur === undefined) return null
   return Array.isArray(valeur) ? (valeur[0] ?? null) : valeur
 }
 
@@ -85,14 +87,33 @@ export async function statutsDuMembre(membreId: string): Promise<StatutDuMembre[
   // ligne plutôt que dedans, pour n'avoir ensuite rien à en retirer.
   return (data ?? [])
     .map((l) => {
+      const statutId = l.statut_id as string
       const statut = premier(l.statuts as Imbrique<StatutImbrique>)
-      const groupe = premier(statut?.groupes_statut)
+      // `statuts.id` est référencé par `membre_statuts.statut_id` en `on delete
+      // restrict`, et la politique de lecture de `statuts` n'exige que `est_actif()`
+      // — comme celle de `membre_statuts`. Si la ligne a pu être lue, le statut est
+      // forcément lisible aussi : un `statut` absent ici n'est pas une donnée
+      // manquante, c'est une jointure cassée. La déguiser en « — » masquerait le
+      // défaut au lieu de le signaler.
+      if (!statut) {
+        throw new Error(
+          `Jointure incomplète : le statut ${statutId} référencé par membre_statuts est introuvable.`,
+        )
+      }
+      const groupe = premier(statut.groupes_statut)
+      // Même raisonnement : `statuts.groupe_id` est `not null` et référence
+      // `groupes_statut` en `on delete restrict`, sous la même politique de lecture.
+      if (!groupe) {
+        throw new Error(
+          `Jointure incomplète : le groupe du statut ${statutId} est introuvable.`,
+        )
+      }
       return {
-        ordreGroupe: Number(groupe?.ordre ?? 0),
+        ordreGroupe: groupe.ordre,
         ligne: {
-          statutId: l.statut_id as string,
-          libelle: statut?.libelle ?? '—',
-          groupeNom: groupe?.nom ?? '—',
+          statutId,
+          libelle: statut.libelle,
+          groupeNom: groupe.nom,
           dateAcquisition: l.date_acquisition as string | null,
           note: l.note as string | null,
         },
@@ -119,11 +140,20 @@ export async function journalDuMembre(membreId: string): Promise<EntreeJournal[]
   }
 
   return (data ?? []).map((l) => {
+    const id = l.id as string
     const statut = premier(l.statuts as Imbrique<{ libelle: string }>)
+    // `journal_statuts.statut_id` référence `statuts` en `on delete restrict`, sous
+    // la même politique de lecture que `journal_statuts` : un statut absent ici est
+    // une jointure cassée, pas une entrée sans statut légitime.
+    if (!statut) {
+      throw new Error(`Jointure incomplète : le statut de l'entrée de journal ${id} est introuvable.`)
+    }
+    // `par_profil_id`, lui, est en `on delete set null` : un auteur supprimé est un
+    // cas réel et attendu. Le repli à `null` reste donc correct ici, sans lever.
     const profil = premier(l.profils as Imbrique<{ nom_affichage: string }>)
     return {
-      id: l.id as string,
-      libelle: statut?.libelle ?? '—',
+      id,
+      libelle: statut.libelle,
       action: l.action as 'ajout' | 'retrait',
       le: l.le as string,
       parNomAffichage: profil?.nom_affichage ?? null,
