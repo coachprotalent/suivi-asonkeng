@@ -63,7 +63,7 @@ describe('normaliserFicheMembre', () => {
     expect(reportInitialAel).toBe(0)
   })
 
-  it("refuse un email de contact manifestement invalide", () => {
+  it('refuse un email de contact manifestement invalide', () => {
     expect(() => normaliserFicheMembre({ ...minimal, emailContact: 'pas-un-email' })).toThrow(
       FicheMembreInvalideError,
     )
@@ -83,12 +83,56 @@ describe('normaliserFicheMembre', () => {
     expect(fiche.domaineEtude).toBeNull()
   })
 
-  it("conserve le domaine d'étude pour un étudiant", () => {
+  it('conserve le domaine d\'étude pour un étudiant', () => {
     const fiche = normaliserFicheMembre({
       ...minimal,
       situation: 'etudiant',
       domaineEtude: 'Informatique',
     })
     expect(fiche.domaineEtude).toBe('Informatique')
+  })
+
+  it('efface le domaine d\'étude quand la situation est absente', () => {
+    const fiche = normaliserFicheMembre({ ...minimal, domaineEtude: 'Informatique' })
+    expect(fiche.domaineEtude).toBeNull()
+  })
+})
+
+// Ces tests couvrent le chemin réellement emprunté en production. Les données
+// viennent d'un formulaire HTML : `FormData` ne rend que des chaînes, jamais des
+// nombres. Sans eux, la conversion pourrait être cassée ou supprimée sans que la
+// suite s'en aperçoive, et la fonction serait juste sous test et fausse en vrai.
+describe('normaliserFicheMembre - valeurs telles que les rend un formulaire', () => {
+  const minimal = { nom: 'Nguem', prenom: 'Jérôme', reportInitialAel: 0 }
+
+  it('accepte un report initial donné sous forme de chaîne', () => {
+    expect(normaliserFicheMembre({ ...minimal, reportInitialAel: '5' }).reportInitialAel).toBe(5)
+  })
+
+  it('traite un report initial vidé par l\'utilisateur comme zéro', () => {
+    expect(normaliserFicheMembre({ ...minimal, reportInitialAel: '' }).reportInitialAel).toBe(0)
+  })
+
+  it('refuse un report initial non numérique', () => {
+    expect(() => normaliserFicheMembre({ ...minimal, reportInitialAel: 'abc' })).toThrow(
+      FicheMembreInvalideError,
+    )
+  })
+
+  it('refuse un report initial décimal donné sous forme de chaîne', () => {
+    expect(() => normaliserFicheMembre({ ...minimal, reportInitialAel: '2.5' })).toThrow(
+      FicheMembreInvalideError,
+    )
+  })
+
+  it('traite un champ optionnel absent comme non renseigné', () => {
+    expect(normaliserFicheMembre({ ...minimal, ville: null }).ville).toBeNull()
+    expect(normaliserFicheMembre({ ...minimal, ville: undefined }).ville).toBeNull()
+  })
+
+  it('refuse un champ texte reçu sous une forme inattendue plutôt que de le perdre', () => {
+    expect(() => normaliserFicheMembre({ ...minimal, ville: 42 })).toThrow(
+      FicheMembreInvalideError,
+    )
   })
 })

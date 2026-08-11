@@ -35,7 +35,14 @@ function texteObligatoire(valeur: unknown, champ: string): string {
 }
 
 function texteOptionnel(valeur: unknown): string | null {
-  const nettoye = typeof valeur === 'string' ? valeur.trim() : ''
+  // Absent et vide sont légitimes ; toute autre forme est une anomalie qu'il vaut
+  // mieux signaler que ramener silencieusement à `null`. Un `antenneId` avalé sans
+  // bruit détacherait un membre de son antenne sans que personne ne le voie.
+  if (valeur === null || valeur === undefined) return null
+  if (typeof valeur !== 'string') {
+    throw new FicheMembreInvalideError('un champ texte a reçu une valeur inattendue')
+  }
+  const nettoye = valeur.trim()
   return nettoye.length === 0 ? null : nettoye
 }
 
