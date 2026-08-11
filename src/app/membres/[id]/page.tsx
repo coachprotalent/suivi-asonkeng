@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { membreParId } from '@/lib/donnees/membres'
 import { rolesDuProfil } from '@/lib/donnees/profils'
 import { statutsDuMembre } from '@/lib/donnees/statuts'
+import { formaterDateSeule } from '@/lib/format/date'
 import { exigerProfilActif } from '@/lib/securite/garde'
 import { archiverMembre, desarchiverMembre } from '../actions'
 import { BoutonArchiver } from './bouton-archiver'
@@ -104,8 +105,14 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
       <section className="mt-8">
         <div className="mb-3 flex items-baseline justify-between gap-4">
           <h2 className="text-lg font-medium">Statuts</h2>
+          {/*
+            « Gérer » promettrait un pouvoir que ce rôle n'a pas : un non-administrateur
+            atteint le même écran mais n'y trouve ni formulaire d'attribution ni bouton de
+            retrait, seulement la consultation et le journal — c'est ce dernier qui décrit
+            le mieux ce que l'écran lui apporte de plus que cette fiche.
+          */}
           <Link href={`/membres/${membre.id}/statuts`} className="text-sm underline underline-offset-4">
-            Gérer
+            {estAdmin ? 'Gérer' : 'Journal'}
           </Link>
         </div>
         {statuts.length === 0 ? (
@@ -119,7 +126,7 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
               >
                 {statut.libelle}
                 {statut.dateAcquisition ? (
-                  <span className="text-neutral-500"> · {statut.dateAcquisition}</span>
+                  <span className="text-neutral-500"> · {formaterDateSeule(statut.dateAcquisition)}</span>
                 ) : null}
               </li>
             ))}

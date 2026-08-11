@@ -3,15 +3,11 @@ import { notFound } from 'next/navigation'
 import { membreParId } from '@/lib/donnees/membres'
 import { rolesDuProfil } from '@/lib/donnees/profils'
 import { journalDuMembre, listerCatalogue, statutsDuMembre } from '@/lib/donnees/statuts'
+import { formaterDateHeure, formaterDateSeule } from '@/lib/format/date'
 import { exigerProfilActif } from '@/lib/securite/garde'
 import { retirerStatut } from './actions'
 import { BoutonRetirerStatut } from './bouton-retirer-statut'
 import { FormulaireStatut } from './formulaire-statut'
-
-const FORMAT_DATE_HEURE = new Intl.DateTimeFormat('fr-FR', {
-  dateStyle: 'short',
-  timeStyle: 'short',
-})
 
 export default async function PageStatuts({ params }: { params: Promise<{ id: string }> }) {
   const profil = await exigerProfilActif()
@@ -63,7 +59,7 @@ export default async function PageStatuts({ params }: { params: Promise<{ id: st
                   <p className="font-medium">{statut.libelle}</p>
                   <p className="text-sm text-neutral-500">
                     {statut.groupeNom}
-                    {statut.dateAcquisition ? ` · depuis le ${statut.dateAcquisition}` : ''}
+                    {statut.dateAcquisition ? ` · depuis le ${formaterDateSeule(statut.dateAcquisition)}` : ''}
                   </p>
                   {statut.note ? <p className="mt-1 text-sm">{statut.note}</p> : null}
                 </div>
@@ -119,7 +115,7 @@ export default async function PageStatuts({ params }: { params: Promise<{ id: st
                 — {entree.libelle}
                 <span className="text-neutral-500">
                   {' '}
-                  · {FORMAT_DATE_HEURE.format(new Date(entree.le))}
+                  · {formaterDateHeure(entree.le)}
                   {/*
                     Le nom de l'auteur est capturé à l'écriture depuis la migration
                     20260813160000 et ne devrait plus manquer pour une nouvelle
