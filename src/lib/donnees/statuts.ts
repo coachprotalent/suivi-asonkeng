@@ -28,9 +28,10 @@ export type EntreeJournal = {
  * PostgREST renvoie un OBJET pour une ressource imbriquée en plusieurs-vers-un,
  * mais le client, faute de types `Database` générés, la déclare comme un tableau.
  * Les deux formes se ramènent ici à une seule. Même contournement que `nomAntenne`
- * dans `membres.ts`, généralisé pour trois relations distinctes de ce module
- * (statut et groupe dans `statutsDuMembre`, statut et profil dans
- * `journalDuMembre`), soit quatre appels.
+ * dans `membres.ts`, généralisé pour deux relations de ce module (statut et groupe
+ * dans `statutsDuMembre`, statut dans `journalDuMembre`), soit trois appels.
+ * `journalDuMembre` ne joint plus `profils` depuis la migration 20260813160000 : le
+ * nom de l'auteur est désormais une colonne propre du journal.
  */
 type Imbrique<T> = T | T[] | null | undefined
 
@@ -131,7 +132,7 @@ export async function journalDuMembre(membreId: string): Promise<EntreeJournal[]
   const supabase = await clientServeur()
   const { data, error } = await supabase
     .from('journal_statuts')
-    .select('id, action, le, motif, statuts(libelle), profils(nom_affichage)')
+    .select('id, action, le, motif, par_nom_affichage, statuts(libelle)')
     .eq('membre_id', membreId)
     .order('le', { ascending: false })
 
@@ -148,15 +149,22 @@ export async function journalDuMembre(membreId: string): Promise<EntreeJournal[]
     if (!statut) {
       throw new Error(`Jointure incomplète : le statut de l'entrée de journal ${id} est introuvable.`)
     }
-    // `par_profil_id`, lui, est en `on delete set null` : un auteur supprimé est un
-    // cas réel et attendu. Le repli à `null` reste donc correct ici, sans lever.
-    const profil = premier(l.profils as Imbrique<{ nom_affichage: string }>)
+    // Le nom de l'auteur est désormais capturé dans `journal_statuts.par_nom_affichage`
+    // par `attribuer_statut`/`retirer_statut` au moment de l'écriture (migration
+    // 20260813160000), et non plus lu par jointure sur `profils` : la politique
+    // `profils_lecture` limite un compte non-administrateur à son propre profil, et
+    // toute écriture de statut passe par un administrateur — la jointure rendait donc
+    // ce nom systématiquement absent pour quiconque n'est pas soi-même administrateur,
+    // c'est-à-dire pour le public même à qui cet écran est destiné. Un `null` ici ne
+    // signifie donc plus « auteur supprimé » : il ne concerne que les lignes écrites
+    // avant cette migration, ou le cas très rare où le profil était déjà introuvable
+    // au moment de l'écriture.
     return {
       id,
       libelle: statut.libelle,
       action: l.action as 'ajout' | 'retrait',
       le: l.le as string,
-      parNomAffichage: profil?.nom_affichage ?? null,
+      parNomAffichage: l.par_nom_affichage as string | null,
       motif: l.motif as string | null,
     }
   })

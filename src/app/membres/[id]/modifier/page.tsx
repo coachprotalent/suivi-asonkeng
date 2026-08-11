@@ -34,7 +34,7 @@ export default async function PageModifierMembre({
       {membre.etat !== 'actif' ? (
         <p className="mt-1 text-sm text-amber-700">
           {membre.etat === 'archive'
-            ? 'Fiche archivée — elle ne figure plus dans l’annuaire.'
+            ? "Fiche archivée — elle ne figure plus dans l'annuaire."
             : 'Fiche en attente de validation.'}
         </p>
       ) : null}

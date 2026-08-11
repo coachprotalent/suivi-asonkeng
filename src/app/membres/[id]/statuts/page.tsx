@@ -21,13 +21,16 @@ export default async function PageStatuts({ params }: { params: Promise<{ id: st
     notFound()
   }
 
-  const [statuts, journal, groupes, roles] = await Promise.all([
+  const [statuts, journal, roles] = await Promise.all([
     statutsDuMembre(membre.id),
     journalDuMembre(membre.id),
-    listerCatalogue(),
     rolesDuProfil(profil.id),
   ])
   const estAdmin = roles.includes('administrateur')
+  // Le catalogue ne sert qu'au formulaire d'attribution, rendu uniquement pour un
+  // administrateur : l'interroger pour tout visiteur — le cas le plus fréquent —
+  // ferait une requête inutile.
+  const groupes = estAdmin ? await listerCatalogue() : []
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
@@ -117,7 +120,13 @@ export default async function PageStatuts({ params }: { params: Promise<{ id: st
                 <span className="text-neutral-500">
                   {' '}
                   · {FORMAT_DATE_HEURE.format(new Date(entree.le))}
-                  {entree.parNomAffichage ? ` · par ${entree.parNomAffichage}` : ''}
+                  {/*
+                    Le nom de l'auteur est capturé à l'écriture depuis la migration
+                    20260813160000 et ne devrait plus manquer pour une nouvelle
+                    entrée. Un `null` reste possible sur une ligne antérieure à cette
+                    migration : on le dit plutôt que de l'omettre en silence.
+                  */}
+                  · par {entree.parNomAffichage ?? 'auteur inconnu'}
                 </span>
                 {entree.motif ? <p className="text-neutral-600">{entree.motif}</p> : null}
               </li>
