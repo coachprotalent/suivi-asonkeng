@@ -2570,16 +2570,27 @@ par groupe, dates d'acquisition, journal de tous les mouvements, catalogue admin
 c'est le neuvième enseignement de la phase 1a : une documentation devient fausse sans que rien
 ne bouge autour d'elle.
 
-- [ ] **Step 3 : Déployer**
+- [ ] **Step 3 : Déployer un aperçu**
 
-Le déploiement automatique est actif : la fusion sur `main` déploiera. Pour vérifier avant
-fusion, lance `npx vercel --prod` et rapporte l'URL.
+Le déploiement automatique est actif : **la fusion sur `main` déploiera en production**. La
+fusion est une décision de l'utilisateur, elle ne se prend pas ici.
 
-- [ ] **Step 4 : Vérifier en production**
+Lance donc `npx vercel` **sans** `--prod` : un déploiement d'aperçu, sur une URL distincte de
+l'URL de production. Rapporte cette URL.
 
-Sur l'URL de production, avec un compte administrateur jetable et Playwright : attribuer un
+`npx vercel --prod` publierait sur l'URL de production du code non fusionné — l'inverse de ce
+qu'on veut vérifier, et une action visible de l'extérieur qu'on ne prend pas de sa propre
+initiative.
+
+- [ ] **Step 4 : Vérifier sur l'aperçu**
+
+Sur l'URL d'aperçu, avec un compte administrateur jetable et Playwright : attribuer un
 statut, en attribuer un second du même groupe exclusif, vérifier l'éviction et le journal, puis
 nettoyer entièrement.
+
+Attention : l'aperçu vise **la même base que la production** — c'est le choix assumé d'un seul
+projet Supabase. Ce que tu écris pendant cette vérification est donc écrit pour de bon, et le
+nettoyage n'est pas une politesse.
 
 Vérifie enfin que la signature de la clé de service est absente du code servi au navigateur,
 **avec un contrôle positif** sur un texte connu.
