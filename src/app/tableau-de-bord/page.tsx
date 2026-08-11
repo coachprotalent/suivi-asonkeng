@@ -33,6 +33,11 @@ export default async function PageTableauDeBord() {
             Gérer les antennes
           </Link>
         ) : null}
+        {estAdmin ? (
+          <Link href="/statuts" className="underline underline-offset-4">
+            Gérer les statuts
+          </Link>
+        ) : null}
       </div>
     </main>
   )
