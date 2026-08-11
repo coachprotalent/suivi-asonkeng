@@ -1376,11 +1376,27 @@ export async function changerMotDePasse(
     app_metadata: { doit_changer_mdp: false },
   })
   if (erreurDrapeau) {
-    return { erreur: 'Mot de passe modifié, mais la session n\'a pas pu être mise à jour. Reconnectez-vous.' }
+    // Le mot de passe est bien changé, mais le drapeau reste actif en base : sans
+    // aide, la personne serait renvoyée ici indéfiniment. Resoumettre le formulaire
+    // rejoue les deux opérations et suffit à s'en sortir — c'est donc ce qu'on lui
+    // demande. Surtout pas « reconnectez-vous » : le middleware la ferait rebondir
+    // de l'écran de connexion vers celui-ci, et cette application n'a aucune
+    // réinitialisation autonome pour la rattraper.
+    return {
+      erreur: "Le changement n'a pas pu être finalisé. Soumettez à nouveau le formulaire.",
+    }
   }
 
   // Rafraîchir la session pour que le nouveau JWT porte le drapeau à false.
-  await supabase.auth.refreshSession()
+  // Si ce rafraîchissement échoue, le jeton conserve l'ancien drapeau et le
+  // middleware renverrait ici à la navigation suivante, sans explication et
+  // jusqu'à l'expiration naturelle du jeton. On envoie alors vers la déconnexion :
+  // le drapeau étant déjà effacé en base, une reconnexion avec le nouveau mot de
+  // passe aboutit directement au tableau de bord.
+  const { error: erreurRafraichissement } = await supabase.auth.refreshSession()
+  if (erreurRafraichissement) {
+    redirect('/deconnexion')
+  }
 
   redirect('/tableau-de-bord')
 }
@@ -1448,6 +1464,19 @@ export default function PageChangementMotDePasse() {
           {enCours ? 'Enregistrement…' : 'Enregistrer'}
         </button>
       </form>
+
+      {/*
+        Seule issue depuis cet écran. Le middleware renvoie ici toute navigation
+        tant que le drapeau est actif : sans ce lien, quelqu'un de bloqué n'aurait
+        aucun moyen de sortir, et cette application n'offre aucune réinitialisation
+        autonome. Un lien simple, car la déconnexion est une route, pas une action.
+      */}
+      <a
+        href="/deconnexion"
+        className="mt-6 text-center text-sm text-neutral-500 underline underline-offset-4"
+      >
+        Se déconnecter
+      </a>
     </main>
   )
 }
