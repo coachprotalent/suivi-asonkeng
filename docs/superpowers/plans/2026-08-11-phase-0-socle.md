@@ -609,7 +609,7 @@ git commit -m "feat: activer la RLS du socle en refus d'écriture par défaut"
   - `clientServeur(): Promise<SupabaseClient>` — sous RLS, session par cookies
   - `clientNavigateur(): SupabaseClient` — sous RLS, côté client
   - `clientAdmin(): SupabaseClient` — clé de service, contourne la RLS, serveur uniquement
-  - `envSupabase: { url: string; cleAnon: string }`
+  - `envSupabase: { url: string; cleAnon: string }` — **configuration publique uniquement**
 
 - [ ] **Step 1 : Écrire le lecteur d'environnement**
 
@@ -627,12 +627,14 @@ export const envSupabase = {
   url: requis('NEXT_PUBLIC_SUPABASE_URL', process.env.NEXT_PUBLIC_SUPABASE_URL),
   cleAnon: requis('NEXT_PUBLIC_SUPABASE_ANON_KEY', process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
 }
-
-/** Serveur uniquement — ne jamais importer depuis un composant client. */
-export function cleService(): string {
-  return requis('SUPABASE_SERVICE_ROLE_KEY', process.env.SUPABASE_SERVICE_ROLE_KEY)
-}
 ```
+
+**Ce module ne lit délibérément que la configuration publique.** Il est importé par le client
+navigateur, il ne peut donc pas porter `import 'server-only'`. Y placer la lecture de la clé de
+service reviendrait à laisser un composant client l'importer sans que rien ne l'en empêche à la
+compilation — la seule protection serait alors le fait que Next.js n'injecte pas les variables
+non préfixées `NEXT_PUBLIC_`, c'est-à-dire un comportement d'outil et non une garantie du code.
+La clé de service est donc lue dans `admin.ts`, qui porte `server-only`.
 
 - [ ] **Step 2 : Écrire le client serveur**
 
@@ -688,7 +690,16 @@ Créer `src/lib/supabase/admin.ts` :
 ```typescript
 import 'server-only'
 import { createClient } from '@supabase/supabase-js'
-import { cleService, envSupabase } from './env'
+import { envSupabase } from './env'
+
+/** La clé de service est lue ici, derrière `server-only`, et nulle part ailleurs. */
+function cleService(): string {
+  const valeur = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!valeur) {
+    throw new Error("Variable d'environnement manquante : SUPABASE_SERVICE_ROLE_KEY")
+  }
+  return valeur
+}
 
 /**
  * Client privilégié : contourne la RLS. Réservé aux Server Actions et scripts,
