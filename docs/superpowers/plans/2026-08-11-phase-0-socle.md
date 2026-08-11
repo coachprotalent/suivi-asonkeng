@@ -1023,6 +1023,14 @@ export async function seConnecter(
     return { erreur: MESSAGE_ECHEC_CONNEXION }
   }
 
+  // La garde du changement de mot de passe doit aussi vivre ici, et pas seulement
+  // dans le middleware : Next.js résout la redirection d'une Server Action côté
+  // serveur, sans repasser par le middleware. Sans ce contrôle, le tableau de bord
+  // s'affiche une fois avant d'être protégé — vérifié en conditions réelles.
+  if (data.user.app_metadata?.doit_changer_mdp === true) {
+    redirect('/changer-mot-de-passe')
+  }
+
   redirect('/tableau-de-bord')
 }
 
