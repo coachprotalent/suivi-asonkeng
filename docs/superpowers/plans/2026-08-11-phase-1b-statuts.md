@@ -431,12 +431,67 @@ grant execute on function prive.attribuer_statut(uuid, uuid, date, text, uuid) t
 grant execute on function prive.retirer_statut(uuid, uuid, uuid, text) to service_role;
 ```
 
-- [ ] **Step 2 : Appliquer la migration**
+- [ ] **Step 2 : Ouvrir un point d'appel dans le schéma public**
+
+Les fonctions vivent dans `prive`, qui n'est **pas** exposé par l'API — et ne doit pas l'être :
+c'est là que vivent `est_actif` et `est_admin`, et les rendre atteignables de l'extérieur
+annulerait la raison d'être de ce schéma. On ajoute donc une passerelle mince dans `public`,
+dont l'exécution reste réservée à la clé de service.
+
+Compléter le même fichier de migration, à la fin :
+
+```sql
+-- Passerelles appelables par l'API. Le schéma `prive` n'est pas exposé par PostgREST,
+-- et ne doit pas l'être : il contient les fonctions de sécurité du projet. Ces deux
+-- passerelles donnent à l'application un point d'entrée dans `public`, sans rien
+-- ouvrir d'autre — leur exécution est retirée à tous les rôles sauf `service_role`,
+-- que seules les Server Actions emploient, derrière `exigerAdministrateur`.
+
+create or replace function public.attribuer_statut(
+  p_membre uuid,
+  p_statut uuid,
+  p_date date,
+  p_note text,
+  p_par uuid
+)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  select prive.attribuer_statut(p_membre, p_statut, p_date, p_note, p_par);
+$$;
+
+create or replace function public.retirer_statut(
+  p_membre uuid,
+  p_statut uuid,
+  p_par uuid,
+  p_motif text
+)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  select prive.retirer_statut(p_membre, p_statut, p_par, p_motif);
+$$;
+
+revoke execute on function public.attribuer_statut(uuid, uuid, date, text, uuid) from public, anon, authenticated;
+revoke execute on function public.retirer_statut(uuid, uuid, uuid, text) from public, anon, authenticated;
+grant execute on function public.attribuer_statut(uuid, uuid, date, text, uuid) to service_role;
+grant execute on function public.retirer_statut(uuid, uuid, uuid, text) to service_role;
+```
+
+- [ ] **Step 3 : Appliquer la migration**
 
 Run : `npx supabase db push`
 Expected : appliquée sans erreur.
 
-- [ ] **Step 3 : Éprouver l'atomicité et l'exclusivité, en réel**
+**Vérifie immédiatement que les passerelles sont bien fermées** : avec la clé **anonyme**, un
+appel `POST /rest/v1/rpc/attribuer_statut` doit être refusé. **S'il réussissait, arrête-toi et
+renvoie BLOCKED** — ce serait une écriture ouverte à quiconque.
+
+- [ ] **Step 4 : Éprouver l'atomicité et l'exclusivité, en réel**
 
 C'est le cœur de la tâche : ces fonctions doivent être exercées, pas seulement lues.
 Crée un membre temporaire avec la clé de service, puis, en appelant les fonctions par RPC :
@@ -464,11 +519,11 @@ exposant temporairement la fonction autrement — **et si tu ne parviens pas à 
 contourne pas** : décris ce que tu observes et renvoie DONE_WITH_CONCERNS. La tâche suivante
 dépend de ce chemin d'appel.
 
-- [ ] **Step 4 : Vérifier les suites existantes**
+- [ ] **Step 5 : Vérifier les suites existantes**
 
 Run : `npm run test:rls` (22 tests), `npm test` (37 tests).
 
-- [ ] **Step 5 : Commit**
+- [ ] **Step 6 : Commit**
 
 ```bash
 git add supabase/migrations/20260813110000_membre_statuts.sql
@@ -858,7 +913,6 @@ export async function attribuerStatut(
   // mouvements : c'est une fonction Postgres, donc atomique. Deux appels séparés
   // laisseraient la fiche sans statut si le second échouait.
   const { error } = await clientAdmin()
-    .schema('prive')
     .rpc('attribuer_statut', {
       p_membre: membreId,
       p_statut: statutId,
@@ -888,7 +942,6 @@ export async function retirerStatut(donnees: FormData): Promise<void> {
   // La fonction lève si le membre ne porte pas ce statut : un retrait sans effet
   // ne doit pas passer pour un succès.
   const { error } = await clientAdmin()
-    .schema('prive')
     .rpc('retirer_statut', {
       p_membre: membreId,
       p_statut: statutId,
@@ -1722,7 +1775,7 @@ beforeAll(async () => {
 
   // Un statut sur chaque membre, posé par la fonction atomique.
   for (const membre of [idMembreActif, idMembreArchive]) {
-    const { error: erreurRpc } = await admin.schema('prive').rpc('attribuer_statut', {
+    const { error: erreurRpc } = await admin.rpc('attribuer_statut', {
       p_membre: membre,
       p_statut: idStatutRepenti,
       p_date: null,
