@@ -1504,8 +1504,41 @@ git commit -m "feat: ajouter le formulaire de creation d'une fiche membre"
 ### Task 9 : Fiche membre et modification
 
 **Files:**
+- Create: `src/app/membres/[id]/bouton-archiver.tsx`
 - Create: `src/app/membres/[id]/page.tsx`
 - Create: `src/app/membres/[id]/modifier/page.tsx`
+
+**Bouton d'archivage, à créer en premier.** L'archivage retire quelqu'un de l'annuaire d'un
+seul clic. Rien n'est détruit, mais un clic accidentel — sur mobile surtout — mérite une
+confirmation, et celle-ci doit dire ce qui se passe **réellement** plutôt qu'agiter un
+avertissement vague. Créer `src/app/membres/[id]/bouton-archiver.tsx` :
+
+```tsx
+'use client'
+
+export function BoutonArchiver({ nomComplet }: { nomComplet: string }) {
+  return (
+    <button
+      type="submit"
+      onClick={(evenement) => {
+        const confirme = window.confirm(
+          `Archiver la fiche de ${nomComplet} ?
+
+` +
+            "Elle disparaîtra de l'annuaire, mais rien n'est supprimé : " +
+            'la fiche et son historique restent consultables.',
+        )
+        if (!confirme) {
+          evenement.preventDefault()
+        }
+      }}
+      className="text-sm text-red-600 underline underline-offset-4"
+    >
+      Archiver
+    </button>
+  )
+}
+```
 
 **Interfaces:**
 - Consumes: `membreParId` (Task 5), `modifierMembre` et `archiverMembre` (Task 6),
@@ -1523,6 +1556,7 @@ import { membreParId } from '@/lib/donnees/membres'
 import { rolesDuProfil } from '@/lib/donnees/profils'
 import { exigerProfilActif } from '@/lib/securite/garde'
 import { archiverMembre } from '../actions'
+import { BoutonArchiver } from './bouton-archiver'
 
 const LIBELLE_SITUATION: Record<string, string> = {
   etudiant: 'Étudiant',
@@ -1559,20 +1593,38 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
       </Link>
 
       <header className="mt-4 mb-8 flex flex-wrap items-baseline justify-between gap-4">
-        <h1 className="text-2xl font-semibold">
-          {membre.prenom} {membre.nom}
-        </h1>
+        <div>
+          <h1 className="text-2xl font-semibold">
+            {membre.prenom} {membre.nom}
+          </h1>
+          {/*
+            L'état vit en base et n'était affiché nulle part : une fiche archivée
+            était indiscernable d'une fiche active, et un administrateur arrivant
+            par un lien périmé pouvait la modifier en croyant suivre un membre actif.
+          */}
+          {membre.etat !== 'actif' ? (
+            <p className="mt-1 text-sm text-amber-700">
+              {membre.etat === 'archive'
+                ? 'Fiche archivée — elle ne figure plus dans l’annuaire.'
+                : 'Fiche en attente de validation.'}
+            </p>
+          ) : null}
+        </div>
         {estAdmin ? (
           <div className="flex items-center gap-4">
             <Link href={`/membres/${membre.id}/modifier`} className="text-sm underline underline-offset-4">
               Modifier
             </Link>
-            <form action={archiverMembre}>
-              <input type="hidden" name="id" value={membre.id} />
-              <button type="submit" className="text-sm text-red-600 underline underline-offset-4">
-                Archiver
-              </button>
-            </form>
+            {/*
+              Pas de bouton d'archivage sur une fiche déjà archivée : l'action
+              n'aurait aucun effet, et la proposer laisserait croire le contraire.
+            */}
+            {membre.etat === 'actif' ? (
+              <form action={archiverMembre}>
+                <input type="hidden" name="id" value={membre.id} />
+                <BoutonArchiver nomComplet={`${membre.prenom} ${membre.nom}`} />
+              </form>
+            ) : null}
           </div>
         ) : null}
       </header>
@@ -1644,7 +1696,10 @@ Run : `npm run dev`, puis dérouler :
 2. cliquer « Modifier », changer la ville, enregistrer → retour sur la fiche, ville à jour ;
 3. mettre la situation à « Étudiant » et renseigner un domaine d'étude → il apparaît sur la fiche ;
 4. repasser la situation à « Travailleur » → le domaine d'étude disparaît de la fiche ;
-5. cliquer « Archiver » → retour à l'annuaire, la fiche n'y figure plus ;
+5. cliquer « Archiver » → une confirmation s'affiche ; la refuser ne change rien, l'accepter
+   ramène à l'annuaire où la fiche ne figure plus. Rouvrir ensuite la fiche par son adresse
+   directe : le bandeau « Fiche archivée » doit apparaître et le bouton « Archiver » avoir
+   disparu ;
 6. **le cas de l'antenne désactivée** : rattacher un membre à une antenne, désactiver
    cette antenne depuis `/antennes` (écran créé à la Task 10 — si elle n'existe pas encore,
    passer `actif` à faux directement avec la clé de service), puis rouvrir le formulaire de
