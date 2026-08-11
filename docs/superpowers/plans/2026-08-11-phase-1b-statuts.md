@@ -1320,7 +1320,8 @@ export function FormulaireStatut({
           className="rounded-md border border-neutral-300 px-3 py-2"
         />
         <span className="text-xs text-neutral-500">
-          Facultative. Elle n&apos;est pas toujours connue.
+          Facultative. Elle n&apos;est pas toujours connue. Sur un statut déjà porté,
+          laisser vide conserve la date enregistrée.
         </span>
       </label>
 
@@ -1331,6 +1332,17 @@ export function FormulaireStatut({
           maxLength={500}
           className="rounded-md border border-neutral-300 px-3 py-2"
         />
+        {/*
+          Cette mention n'est pas un ornement. `attribuer_statut` applique un
+          `coalesce` : sur un statut déjà porté, un champ vide veut dire « ne change
+          pas », jamais « efface ». Sans cette phrase, un administrateur qui vide la
+          note pour la supprimer verrait une redirection de succès et retrouverait
+          l'ancienne note intacte, sans le moindre avertissement.
+        */}
+        <span className="text-xs text-neutral-500">
+          Facultative. Sur un statut déjà porté, laisser vide conserve la note
+          enregistrée.
+        </span>
       </label>
 
       {etat.erreur ? (
