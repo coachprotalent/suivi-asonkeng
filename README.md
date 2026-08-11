@@ -81,8 +81,10 @@ catalogue administrable (`/statuts`, lien depuis le tableau de bord) :
   jamais une date déjà connue.
 - **Journal de tous les mouvements** — chaque ajout et chaque retrait est inscrit dans
   `journal_statuts`, avec le nom d'affichage de son auteur capturé au moment de l'écriture (donc
-  lisible même si le compte de l'auteur est ensuite supprimé). La table est protégée par un
-  déclencheur qui refuse toute mise à jour : le journal ne se réécrit pas, seule la suppression en
+  lisible même si le compte de l'auteur est ensuite supprimé). La table est protégée à la fois par
+  un déclencheur qui refuse toute mise à jour et par un retrait du droit de suppression à
+  `service_role` (`20260813170000_journal_sans_suppression.sql`) : le journal ne se réécrit pas et
+  ne se supprime pas ligne à ligne — même par l'application elle-même — seule la suppression en
   cascade avec le membre reste possible.
 - **Motif facultatif au retrait** — un administrateur peut retirer un statut sans en préciser la
   raison ; s'il en donne une, elle est journalisée avec le mouvement.
