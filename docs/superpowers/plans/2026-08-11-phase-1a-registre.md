@@ -1480,8 +1480,9 @@ git commit -m "feat: consulter et modifier une fiche membre"
 ### Task 10 : Gestion des antennes
 
 **Files:**
-- Create: `src/app/antennes/page.tsx`
 - Create: `src/app/antennes/actions.ts`
+- Create: `src/app/antennes/formulaire-antenne.tsx`
+- Create: `src/app/antennes/page.tsx`
 
 **Interfaces:**
 - Consumes: `exigerAdministrateur` (Task 1), `listerAntennes` (Task 2), `clientAdmin` (phase 0)
@@ -1525,15 +1526,6 @@ export async function creerAntenne(
   return { erreur: null }
 }
 
-/**
- * Variante sans état, utilisable directement comme `action` d'un formulaire dans un
- * Server Component. `creerAntenne` renvoie un état destiné à `useActionState`, qui
- * n'existe que dans un composant client : les deux ne sont pas interchangeables.
- */
-export async function ajouterAntenne(donnees: FormData): Promise<void> {
-  await creerAntenne({ erreur: null }, donnees)
-}
-
 export async function desactiverAntenne(donnees: FormData): Promise<void> {
   await exigerAdministrateur()
 
@@ -1549,7 +1541,62 @@ export async function desactiverAntenne(donnees: FormData): Promise<void> {
 }
 ```
 
-- [ ] **Step 2 : Écrire l'écran**
+- [ ] **Step 2 : Écrire le formulaire d'ajout**
+
+Un composant client, et non un simple formulaire de Server Component : `creerAntenne` renvoie un
+état d'erreur, et seul `useActionState` sait l'afficher. Sans cela, un nom d'antenne en double
+échouerait **en silence** — l'utilisateur verrait sa saisie disparaître sans explication.
+
+Créer `src/app/antennes/formulaire-antenne.tsx` :
+
+```tsx
+'use client'
+
+import { useActionState } from 'react'
+import { creerAntenne, type EtatAntenne } from './actions'
+
+const etatInitial: EtatAntenne = { erreur: null }
+
+export function FormulaireAntenne() {
+  const [etat, envoyer, enCours] = useActionState(creerAntenne, etatInitial)
+
+  return (
+    <form action={envoyer} className="flex flex-col gap-3">
+      <div className="flex flex-wrap gap-3">
+        <input
+          name="nom"
+          placeholder="Nom"
+          required
+          aria-label="Nom de l'antenne"
+          className="flex-1 rounded-md border border-neutral-300 px-3 py-2"
+        />
+        <input
+          name="pays"
+          placeholder="Pays"
+          required
+          aria-label="Pays de l'antenne"
+          className="flex-1 rounded-md border border-neutral-300 px-3 py-2"
+        />
+        <button
+          type="submit"
+          disabled={enCours}
+          className="rounded-md bg-neutral-900 px-4 py-2 text-white disabled:opacity-50"
+        >
+          {enCours ? 'Ajout…' : 'Ajouter'}
+        </button>
+      </div>
+
+      {etat.erreur ? (
+        <p role="alert" className="text-sm text-red-600">
+          {etat.erreur}
+        </p>
+      ) : null}
+    </form>
+  )
+}
+```
+
+- [ ] **Step 3 : Écrire l'écran**
 
 Créer `src/app/antennes/page.tsx` :
 
@@ -1557,7 +1604,8 @@ Créer `src/app/antennes/page.tsx` :
 import Link from 'next/link'
 import { listerAntennes } from '@/lib/donnees/antennes'
 import { exigerAdministrateur } from '@/lib/securite/garde'
-import { ajouterAntenne, desactiverAntenne } from './actions'
+import { desactiverAntenne } from './actions'
+import { FormulaireAntenne } from './formulaire-antenne'
 
 export default async function PageAntennes() {
   await exigerAdministrateur()
@@ -1587,31 +1635,13 @@ export default async function PageAntennes() {
       </ul>
 
       <h2 className="mb-4 text-lg font-medium">Ajouter une antenne</h2>
-      <form action={ajouterAntenne} className="flex flex-wrap gap-3">
-        <input
-          name="nom"
-          placeholder="Nom"
-          required
-          aria-label="Nom de l'antenne"
-          className="flex-1 rounded-md border border-neutral-300 px-3 py-2"
-        />
-        <input
-          name="pays"
-          placeholder="Pays"
-          required
-          aria-label="Pays de l'antenne"
-          className="flex-1 rounded-md border border-neutral-300 px-3 py-2"
-        />
-        <button type="submit" className="rounded-md bg-neutral-900 px-4 py-2 text-white">
-          Ajouter
-        </button>
-      </form>
+      <FormulaireAntenne />
     </main>
   )
 }
 ```
 
-- [ ] **Step 3 : Vérifier**
+- [ ] **Step 4 : Vérifier**
 
 Run : `npx tsc --noEmit`, `npm run lint`, `npm run build`.
 Expected : les trois passent.
@@ -1621,10 +1651,14 @@ Expected : les trois antennes d'amorçage apparaissent. Ajouter « Douala / Came
 apparaît dans la liste, et dans le sélecteur du formulaire membre. La désactiver : elle disparaît
 des deux.
 
-- [ ] **Step 4 : Commit**
+Essayer enfin d'ajouter une antenne portant un nom déjà pris.
+Expected : le message « Cette antenne existe déjà, ou n'a pas pu être créée. » s'affiche —
+l'échec ne doit jamais être silencieux.
+
+- [ ] **Step 5 : Commit**
 
 ```bash
-git add src/app/antennes/page.tsx src/app/antennes/actions.ts
+git add src/app/antennes/actions.ts src/app/antennes/formulaire-antenne.tsx src/app/antennes/page.tsx
 git commit -m "feat: gerer les antennes"
 ```
 
