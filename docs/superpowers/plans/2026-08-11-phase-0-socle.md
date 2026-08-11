@@ -1180,11 +1180,25 @@ export async function middleware(requete: NextRequest) {
   const surConnexion = chemin.startsWith(ROUTE_CONNEXION)
   const surChangementMdp = chemin.startsWith(ROUTE_CHANGEMENT_MDP)
 
+  /**
+   * Construit une redirection en **reportant les cookies** déjà posés sur `reponse`.
+   *
+   * Ce report n'est pas une précaution de style. `getUser()` peut rafraîchir le jeton
+   * au passage : `setAll` écrit alors les nouveaux cookies de session sur `reponse`.
+   * Une réponse de redirection neuve ne les porterait pas, le navigateur garderait un
+   * jeton que le serveur vient d'invalider, et l'utilisateur serait déconnecté — de
+   * façon apparemment aléatoire, puisque cela n'arrive que lorsqu'un rafraîchissement
+   * coïncide avec une redirection.
+   */
   const rediriger = (vers: string) => {
     const url = requete.nextUrl.clone()
     url.pathname = vers
     url.search = ''
-    return NextResponse.redirect(url)
+    const redirection = NextResponse.redirect(url)
+    for (const cookie of reponse.cookies.getAll()) {
+      redirection.cookies.set(cookie)
+    }
+    return redirection
   }
 
   if (!user) {
