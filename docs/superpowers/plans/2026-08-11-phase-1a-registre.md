@@ -1012,8 +1012,15 @@ export async function modifierMembre(
     }
   }
 
-  const { error } = await clientAdmin().from('membres').update(colonnes).eq('id', id)
-  if (error) {
+  // `.select('id')` n'est pas décoratif : sans lui, une mise à jour qui ne touche
+  // aucune ligne — identifiant inexistant ou forgé — ne renvoie **aucune erreur**,
+  // et l'application annoncerait « enregistré » alors que rien ne l'a été.
+  const { data, error } = await clientAdmin()
+    .from('membres')
+    .update(colonnes)
+    .eq('id', id)
+    .select('id')
+  if (error || !data || data.length === 0) {
     return { erreur: MESSAGE_ECHEC_ENREGISTREMENT }
   }
 
@@ -1030,7 +1037,19 @@ export async function archiverMembre(donnees: FormData): Promise<void> {
     redirect('/membres')
   }
 
-  await clientAdmin().from('membres').update({ etat: 'archive' }).eq('id', id)
+  // Même exigence que pour la modification : une mise à jour sans effet ne renvoie
+  // pas d'erreur. Cette action n'a pas de canal de retour vers l'écran, alors plutôt
+  // que de rediriger comme si tout allait bien, on lève — un archivage qui n'archive
+  // rien doit se voir.
+  const { data, error } = await clientAdmin()
+    .from('membres')
+    .update({ etat: 'archive' })
+    .eq('id', id)
+    .select('id')
+  if (error || !data || data.length === 0) {
+    throw new Error("La fiche n'a pas pu être archivée : aucune fiche ne correspond.")
+  }
+
   revalidatePath('/membres')
   redirect('/membres')
 }
