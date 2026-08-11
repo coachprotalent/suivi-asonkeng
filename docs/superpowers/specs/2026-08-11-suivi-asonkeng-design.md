@@ -342,6 +342,24 @@ après vérification explicite des droits. La RLS reste le filet de sécurité :
 ne peut pas contourner ce que les politiques de lecture interdisent, et aucun client compromis
 ne peut écrire quoi que ce soit.
 
+**Comment `prive.est_admin()` évite la récursion — le mécanisme réel.** Une politique posée sur
+`profils` doit savoir si l'appelant est administrateur, ce qui suppose de lire `profils` et
+`roles_profil` : naïvement, la politique se rappellerait elle-même sans fin. Ce n'est **pas**
+en s'abstenant de lire ces tables que la fonction s'en sort — elle les lit bel et bien. Elle
+s'en sort parce qu'elle est `SECURITY DEFINER` : elle s'exécute avec les privilèges de son
+propriétaire, lequel contourne la RLS, si bien qu'aucune politique ne se déclenche à
+l'intérieur de son corps.
+
+Cette conception repose donc sur une hypothèse : **le rôle propriétaire de la fonction possède
+`BYPASSRLS`**. Si elle était fausse, il n'y aurait ni erreur ni fuite — la fonction renverrait
+silencieusement `false` pour tout le monde et aucun administrateur ne verrait jamais le profil
+d'autrui. Un défaut invisible, en échec fermé.
+
+L'hypothèse a été vérifiée empiriquement sur le projet, et non supposée : avec deux comptes
+réels, le compte ordinaire ne lit que son propre profil et le compte administrateur lit les
+deux. Toute modification future du propriétaire des fonctions du schéma `prive` doit
+s'accompagner de ce même test.
+
 ### 5.4 Réinitialisation de mot de passe
 
 Le choix « identifiant sans email » (D10) supprime toute possibilité de réinitialisation

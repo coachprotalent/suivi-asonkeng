@@ -22,10 +22,14 @@ Supabase Auth.
 
 Ces contraintes s'appliquent implicitement à **toutes** les tâches.
 
-- **Versions exactes** : `next@16.3.0`, `react@19.2.8`, `typescript@7.0.2`,
+- **Versions exactes** : `next@16.3.0`, `react@19.2.8`, `typescript@6.0.3`,
   `@supabase/supabase-js@2.112.3`, `@supabase/ssr@0.12.4`, `vitest@4.1.10`,
   `tailwindcss@4.3.3`, `@playwright/test@1.62.1`, `tsx@4.23.12`, `zod@4.4.3`.
   Node 24.15.0, npm 11.12.1, CLI Supabase 2.113.0 via `npx supabase`.
+  **TypeScript est volontairement en 6.0.3 et non en 7.x** : `typescript-eslint`, embarqué par
+  `eslint-config-next`, déclare le pair `typescript >=4.8.4 <6.1.0` et refuse de démarrer sous
+  TS 7 — `npm run lint` échoue alors intégralement. Ne pas « mettre à jour » vers TS 7 tant que
+  typescript-eslint ne l'annonce pas comme supporté.
 - **Langue** : tout le code, les noms de tables, colonnes, fonctions, routes et messages
   d'interface sont en **français**. Identifiants SQL en `snake_case` minuscule.
 - **Un seul projet Supabase** sert au développement et à la production (décision utilisateur).
@@ -133,14 +137,22 @@ Ajouter dans `package.json`, section `scripts` :
 
 - [ ] **Step 4 : Écrire un test de santé du harnais**
 
+Ce test vérifie une vraie contrainte globale — la version de Node — et non une tautologie.
+Il disparaîtra à la Task 2, une fois le premier vrai test en place.
+
 Créer `src/lib/domaine/sante.test.ts` :
 
 ```typescript
 import { describe, expect, it } from 'vitest'
 
-describe('harnais de test', () => {
-  it('exécute les tests unitaires', () => {
-    expect(1 + 1).toBe(2)
+describe('environnement de test', () => {
+  it('tourne sur Node 24 ou plus récent', () => {
+    const majeure = Number(process.versions.node.split('.')[0])
+    expect(majeure).toBeGreaterThanOrEqual(24)
+  })
+
+  it('résout les fichiers de test sous src/', () => {
+    expect(import.meta.url).toContain('/src/lib/domaine/')
   })
 })
 ```
@@ -597,7 +609,7 @@ git commit -m "feat: activer la RLS du socle en refus d'écriture par défaut"
   - `clientServeur(): Promise<SupabaseClient>` — sous RLS, session par cookies
   - `clientNavigateur(): SupabaseClient` — sous RLS, côté client
   - `clientAdmin(): SupabaseClient` — clé de service, contourne la RLS, serveur uniquement
-  - `envSupabase: { url: string; cleAnon: string }`
+  - `envSupabase: { url: string; cleAnon: string }` — **configuration publique uniquement**
 
 - [ ] **Step 1 : Écrire le lecteur d'environnement**
 
@@ -615,12 +627,14 @@ export const envSupabase = {
   url: requis('NEXT_PUBLIC_SUPABASE_URL', process.env.NEXT_PUBLIC_SUPABASE_URL),
   cleAnon: requis('NEXT_PUBLIC_SUPABASE_ANON_KEY', process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
 }
-
-/** Serveur uniquement — ne jamais importer depuis un composant client. */
-export function cleService(): string {
-  return requis('SUPABASE_SERVICE_ROLE_KEY', process.env.SUPABASE_SERVICE_ROLE_KEY)
-}
 ```
+
+**Ce module ne lit délibérément que la configuration publique.** Il est importé par le client
+navigateur, il ne peut donc pas porter `import 'server-only'`. Y placer la lecture de la clé de
+service reviendrait à laisser un composant client l'importer sans que rien ne l'en empêche à la
+compilation — la seule protection serait alors le fait que Next.js n'injecte pas les variables
+non préfixées `NEXT_PUBLIC_`, c'est-à-dire un comportement d'outil et non une garantie du code.
+La clé de service est donc lue dans `admin.ts`, qui porte `server-only`.
 
 - [ ] **Step 2 : Écrire le client serveur**
 
@@ -676,7 +690,16 @@ Créer `src/lib/supabase/admin.ts` :
 ```typescript
 import 'server-only'
 import { createClient } from '@supabase/supabase-js'
-import { cleService, envSupabase } from './env'
+import { envSupabase } from './env'
+
+/** La clé de service est lue ici, derrière `server-only`, et nulle part ailleurs. */
+function cleService(): string {
+  const valeur = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!valeur) {
+    throw new Error("Variable d'environnement manquante : SUPABASE_SERVICE_ROLE_KEY")
+  }
+  return valeur
+}
 
 /**
  * Client privilégié : contourne la RLS. Réservé aux Server Actions et scripts,
@@ -714,7 +737,10 @@ et les colonnes internes de Supabase, ce qui casse à la moindre évolution de l
 - Modify: `package.json` (script `amorcer:racine`)
 
 **Interfaces:**
-- Consumes: `identifiantVersEmail` (Task 2), `clientAdmin` (Task 5)
+- Consumes: `identifiantVersEmail` (Task 2) **uniquement**. Surtout **pas** `clientAdmin` de
+  la Task 5 : `admin.ts` porte `import 'server-only'`, qui lève au chargement dans un script
+  Node ordinaire — vérifié, le script planterait. La duplication de `createClient` ici est
+  délibérée et nécessaire, ce n'est pas une entorse à DRY.
 - Produces: un compte administrateur `est_racine = true`, `membre_id = null`, avec
   `app_metadata.doit_changer_mdp = true`
 
@@ -810,6 +836,13 @@ Dans `package.json`, section `scripts` :
 
 Renseigner `RACINE_MOT_DE_PASSE` dans `.env.local` avec un mot de passe d'au moins 12 caractères.
 
+**Piège vérifié en pratique — entourer la valeur de guillemets doubles.** L'analyseur
+`--env-file` de Node traite un `#` comme un début de commentaire : un mot de passe contenant ce
+caractère est silencieusement tronqué à ce qui le précède. Sans guillemets, un mot de passe de
+20 caractères devient 3, sans le moindre avertissement. Le garde-fou `motDePasse.length < 12`
+du script attrape le cas, mais la même règle vaut pour toute valeur contenant `#`, une espace
+ou un `$`.
+
 Run : `npm run amorcer:racine`
 Expected : `Compte racine « racine » créé. Le mot de passe devra être changé à la première connexion.`
 
@@ -855,7 +888,16 @@ export type Profil = {
   actif: boolean
 }
 
-/** Profil du compte connecté, ou null si personne n'est connecté. */
+/**
+ * Profil du compte connecté, ou `null`. Trois situations renvoient `null` et ne sont
+ * volontairement pas distinguées, parce qu'elles appellent toutes la même réaction —
+ * renvoyer vers l'écran de connexion : personne n'est connecté, le compte n'a pas de
+ * fiche profil, ou le compte est désactivé.
+ *
+ * Le filtre `actif` est un contrôle d'accès, pas un confort. Désactiver un compte ne
+ * révoque pas son jeton : sans ce filtre, la personne garderait l'accès jusqu'à
+ * expiration, environ une heure. La politique RLS ne filtre pas non plus sur `actif`.
+ */
 export async function profilCourant(): Promise<Profil | null> {
   const supabase = await clientServeur()
 
@@ -868,6 +910,7 @@ export async function profilCourant(): Promise<Profil | null> {
     .from('profils')
     .select('id, identifiant, nom_affichage, membre_id, est_racine, actif')
     .eq('id', user.id)
+    .eq('actif', true)
     .maybeSingle()
 
   if (!data) return null
@@ -978,6 +1021,14 @@ export async function seConnecter(
   if (!profil?.actif) {
     await supabase.auth.signOut()
     return { erreur: MESSAGE_ECHEC_CONNEXION }
+  }
+
+  // La garde du changement de mot de passe doit aussi vivre ici, et pas seulement
+  // dans le middleware : Next.js résout la redirection d'une Server Action côté
+  // serveur, sans repasser par le middleware. Sans ce contrôle, le tableau de bord
+  // s'affiche une fois avant d'être protégé — vérifié en conditions réelles.
+  if (data.user.app_metadata?.doit_changer_mdp === true) {
+    redirect('/changer-mot-de-passe')
   }
 
   redirect('/tableau-de-bord')
@@ -1105,6 +1156,7 @@ import { envSupabase } from '@/lib/supabase/env'
 
 const ROUTE_CONNEXION = '/connexion'
 const ROUTE_CHANGEMENT_MDP = '/changer-mot-de-passe'
+const ROUTE_DECONNEXION = '/deconnexion'
 const ROUTE_APRES_CONNEXION = '/tableau-de-bord'
 
 export async function middleware(requete: NextRequest) {
@@ -1136,15 +1188,40 @@ export async function middleware(requete: NextRequest) {
   const surConnexion = chemin.startsWith(ROUTE_CONNEXION)
   const surChangementMdp = chemin.startsWith(ROUTE_CHANGEMENT_MDP)
 
+  /**
+   * Construit une redirection en **reportant les cookies** déjà posés sur `reponse`.
+   *
+   * Ce report n'est pas une précaution de style. `getUser()` peut rafraîchir le jeton
+   * au passage : `setAll` écrit alors les nouveaux cookies de session sur `reponse`.
+   * Une réponse de redirection neuve ne les porterait pas, le navigateur garderait un
+   * jeton que le serveur vient d'invalider, et l'utilisateur serait déconnecté — de
+   * façon apparemment aléatoire, puisque cela n'arrive que lorsqu'un rafraîchissement
+   * coïncide avec une redirection.
+   */
   const rediriger = (vers: string) => {
     const url = requete.nextUrl.clone()
     url.pathname = vers
     url.search = ''
-    return NextResponse.redirect(url)
+    const redirection = NextResponse.redirect(url)
+    for (const cookie of reponse.cookies.getAll()) {
+      redirection.cookies.set(cookie)
+    }
+    return redirection
   }
 
   if (!user) {
     return surConnexion ? reponse : rediriger(ROUTE_CONNEXION)
+  }
+
+  // Toujours laisser passer la déconnexion, avant toute autre garde.
+  // Sans cette exception, un compte désactivé boucle sans fin : son jeton reste
+  // valide, donc le middleware le laisse entrer ; la page appelle profilCourant(),
+  // qui filtre sur `actif` et renvoie null ; la page redirige vers /connexion ; le
+  // middleware voit un utilisateur authentifié et le renvoie au tableau de bord.
+  // Un composant serveur ne peut pas effacer le cookie de session pendant son
+  // rendu : seule une route dédiée le peut.
+  if (chemin.startsWith(ROUTE_DECONNEXION)) {
+    return reponse
   }
 
   // Drapeau lu dans le JWT : aucune requête base (spec §4.1).
@@ -1187,7 +1264,43 @@ git commit -m "feat: protéger les routes et rafraîchir la session via le middl
 **Files:**
 - Create: `src/app/changer-mot-de-passe/page.tsx`
 - Create: `src/app/changer-mot-de-passe/actions.ts`
+- Create: `src/app/changer-mot-de-passe/constantes.ts`
+- Create: `src/app/deconnexion/route.ts`
 - Create: `src/app/tableau-de-bord/page.tsx`
+
+**Route de déconnexion — à créer en premier, le tableau de bord en dépend.**
+Créer `src/app/deconnexion/route.ts` :
+
+```typescript
+import { NextResponse, type NextRequest } from 'next/server'
+import { clientServeur } from '@/lib/supabase/serveur'
+
+/**
+ * Efface la session puis renvoie vers l'écran de connexion.
+ *
+ * Une route plutôt qu'une Server Action ou un composant : c'est le seul endroit qui
+ * puisse écrire des cookies dans ce flux. Un compte désactivé conserve un jeton
+ * valide ; sans cette route, il boucle entre le middleware et le tableau de bord.
+ */
+export async function GET(requete: NextRequest) {
+  const supabase = await clientServeur()
+  await supabase.auth.signOut()
+
+  const url = requete.nextUrl.clone()
+  url.pathname = '/connexion'
+  url.search = ''
+  return NextResponse.redirect(url)
+}
+```
+
+> **Contrainte Next.js 16 découverte à la Task 8 — lire avant d'écrire le code.**
+> Un fichier portant `'use server'` **ne peut exporter que des fonctions asynchrones**. La
+> construction échoue sinon, avec `Only async functions are allowed to be exported in a
+> "use server" file`. La constante `LONGUEUR_MDP_MINIMALE` ci-dessous ne peut donc **pas**
+> vivre dans `actions.ts` : elle va dans `constantes.ts`, importée par `actions.ts` et par
+> `page.tsx`. Les exports de **types** restent autorisés, étant effacés à la compilation.
+> La Task 8 a rencontré exactement ce problème avec son message d'échec et l'a résolu de la
+> même façon, dans `src/app/connexion/messages.ts`.
 
 **Interfaces:**
 - Consumes: `clientServeur`, `clientAdmin` (Task 5), `profilCourant` (Task 7), `seDeconnecter` (Task 8)
@@ -1196,7 +1309,17 @@ git commit -m "feat: protéger les routes et rafraîchir la session via le middl
   - `changerMotDePasse(etat: EtatChangement, donnees: FormData): Promise<EtatChangement>`
   - `LONGUEUR_MDP_MINIMALE: number` — vaut `12`
 
-- [ ] **Step 1 : Écrire l'action de changement**
+- [ ] **Step 1 : Écrire la constante partagée puis l'action de changement**
+
+Créer `src/app/changer-mot-de-passe/constantes.ts` :
+
+```typescript
+/**
+ * Vit hors de `actions.ts` : un fichier `'use server'` ne peut exporter que des
+ * fonctions asynchrones (contrainte Next.js 16, vérifiée à la Task 8).
+ */
+export const LONGUEUR_MDP_MINIMALE = 12
+```
 
 Créer `src/app/changer-mot-de-passe/actions.ts` :
 
@@ -1207,8 +1330,7 @@ import { redirect } from 'next/navigation'
 import { z } from 'zod'
 import { clientAdmin } from '@/lib/supabase/admin'
 import { clientServeur } from '@/lib/supabase/serveur'
-
-export const LONGUEUR_MDP_MINIMALE = 12
+import { LONGUEUR_MDP_MINIMALE } from './constantes'
 
 export type EtatChangement = { erreur: string | null }
 
@@ -1254,11 +1376,27 @@ export async function changerMotDePasse(
     app_metadata: { doit_changer_mdp: false },
   })
   if (erreurDrapeau) {
-    return { erreur: 'Mot de passe modifié, mais la session n\'a pas pu être mise à jour. Reconnectez-vous.' }
+    // Le mot de passe est bien changé, mais le drapeau reste actif en base : sans
+    // aide, la personne serait renvoyée ici indéfiniment. Resoumettre le formulaire
+    // rejoue les deux opérations et suffit à s'en sortir — c'est donc ce qu'on lui
+    // demande. Surtout pas « reconnectez-vous » : le middleware la ferait rebondir
+    // de l'écran de connexion vers celui-ci, et cette application n'a aucune
+    // réinitialisation autonome pour la rattraper.
+    return {
+      erreur: "Le changement n'a pas pu être finalisé. Soumettez à nouveau le formulaire.",
+    }
   }
 
   // Rafraîchir la session pour que le nouveau JWT porte le drapeau à false.
-  await supabase.auth.refreshSession()
+  // Si ce rafraîchissement échoue, le jeton conserve l'ancien drapeau et le
+  // middleware renverrait ici à la navigation suivante, sans explication et
+  // jusqu'à l'expiration naturelle du jeton. On envoie alors vers la déconnexion :
+  // le drapeau étant déjà effacé en base, une reconnexion avec le nouveau mot de
+  // passe aboutit directement au tableau de bord.
+  const { error: erreurRafraichissement } = await supabase.auth.refreshSession()
+  if (erreurRafraichissement) {
+    redirect('/deconnexion')
+  }
 
   redirect('/tableau-de-bord')
 }
@@ -1272,11 +1410,8 @@ Créer `src/app/changer-mot-de-passe/page.tsx` :
 'use client'
 
 import { useActionState } from 'react'
-import {
-  changerMotDePasse,
-  LONGUEUR_MDP_MINIMALE,
-  type EtatChangement,
-} from './actions'
+import { changerMotDePasse, type EtatChangement } from './actions'
+import { LONGUEUR_MDP_MINIMALE } from './constantes'
 
 const etatInitial: EtatChangement = { erreur: null }
 
@@ -1329,6 +1464,19 @@ export default function PageChangementMotDePasse() {
           {enCours ? 'Enregistrement…' : 'Enregistrer'}
         </button>
       </form>
+
+      {/*
+        Seule issue depuis cet écran. Le middleware renvoie ici toute navigation
+        tant que le drapeau est actif : sans ce lien, quelqu'un de bloqué n'aurait
+        aucun moyen de sortir, et cette application n'offre aucune réinitialisation
+        autonome. Un lien simple, car la déconnexion est une route, pas une action.
+      */}
+      <a
+        href="/deconnexion"
+        className="mt-6 text-center text-sm text-neutral-500 underline underline-offset-4"
+      >
+        Se déconnecter
+      </a>
     </main>
   )
 }
@@ -1346,7 +1494,11 @@ import { profilCourant } from '@/lib/donnees/profils'
 export default async function PageTableauDeBord() {
   const profil = await profilCourant()
   if (!profil) {
-    redirect('/connexion')
+    // Vers /deconnexion et non /connexion : le jeton peut encore être valide alors
+    // que le profil est absent ou le compte désactivé. Rediriger vers /connexion
+    // ferait boucler le middleware indéfiniment. La route de déconnexion efface la
+    // session, ce qu'un composant serveur ne peut pas faire pendant son rendu.
+    redirect('/deconnexion')
   }
 
   return (
@@ -1460,9 +1612,12 @@ const URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const CLE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 const CLE_SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
-const MDP = 'MotDePasseDeTest!2026'
+// Tiré à chaque exécution : un mot de passe fixe dans un dépôt public ouvrirait
+// tout compte de test qu'une exécution interrompue aurait laissé derrière elle.
+const MDP = `Test-${crypto.randomUUID()}`
 const IDENT_SIMPLE = 'test.rls.simple'
 const IDENT_ADMIN = 'test.rls.admin'
+const IDENT_INTRUS = 'test.rls.intrus'
 
 const admin = createClient(URL, CLE_SERVICE, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -1476,11 +1631,25 @@ async function creerCompte(identifiant: string, estAdmin: boolean): Promise<stri
   })
   if (error || !data.user) throw new Error(`création impossible : ${error?.message}`)
 
-  await admin
+  // Vérifier ces insertions n'est pas du zèle : le nettoyage retrouve les comptes
+  // par la table `profils`. Une insertion qui échouerait en silence laisserait un
+  // compte d'authentification que plus aucune exécution ne saurait retrouver.
+  const { error: erreurProfil } = await admin
     .from('profils')
     .insert({ id: data.user.id, identifiant, nom_affichage: `Test ${identifiant}` })
+  if (erreurProfil) {
+    await admin.auth.admin.deleteUser(data.user.id)
+    throw new Error(`insertion du profil impossible : ${erreurProfil.message}`)
+  }
+
   if (estAdmin) {
-    await admin.from('roles_profil').insert({ profil_id: data.user.id, role: 'administrateur' })
+    const { error: erreurRole } = await admin
+      .from('roles_profil')
+      .insert({ profil_id: data.user.id, role: 'administrateur' })
+    if (erreurRole) {
+      await admin.auth.admin.deleteUser(data.user.id)
+      throw new Error(`attribution du rôle impossible : ${erreurRole.message}`)
+    }
   }
   return data.user.id
 }
@@ -1499,7 +1668,16 @@ async function connecter(identifiant: string): Promise<SupabaseClient> {
 
 async function supprimerCompte(identifiant: string) {
   const { data } = await admin.from('profils').select('id').eq('identifiant', identifiant).maybeSingle()
-  if (data) await admin.auth.admin.deleteUser(data.id)
+  if (data) {
+    await admin.auth.admin.deleteUser(data.id)
+    return
+  }
+
+  // Rattrapage : sans fiche profil, le compte d'authentification resterait
+  // introuvable par la recherche ci-dessus et survivrait à toutes les exécutions.
+  const { data: comptes } = await admin.auth.admin.listUsers()
+  const orphelin = comptes?.users.find((u) => u.email === identifiantVersEmail(identifiant))
+  if (orphelin) await admin.auth.admin.deleteUser(orphelin.id)
 }
 
 let idSimple: string
@@ -1540,9 +1718,17 @@ describe('lecture de profils', () => {
     expect(data!.map((l) => l.id)).toEqual(expect.arrayContaining([idSimple, idAdmin]))
   })
 
-  it('un visiteur anonyme ne lit aucun profil', async () => {
-    const { data } = await clientAnonyme.from('profils').select('id')
-    expect(data ?? []).toEqual([])
+  it('un visiteur anonyme se voit refuser la lecture', async () => {
+    const { data, error } = await clientAnonyme.from('profils').select('id')
+
+    // Vérifier l'erreur, et pas seulement l'absence de données. `data` vaut `null`
+    // pour n'importe quelle panne — table renommée, réseau coupé, mauvais projet —
+    // et une assertion qui se contenterait de `data` resterait verte alors que la
+    // sécurité serait cassée. Le code `42501` est le refus de privilège Postgres :
+    // le rôle anonyme n'a aucun droit de lecture, le refus tombe même avant la RLS.
+    expect(error).not.toBeNull()
+    expect(error!.code).toBe('42501')
+    expect(data).toBeNull()
   })
 })
 
@@ -1560,10 +1746,20 @@ describe('écriture refusée par défaut', () => {
   })
 
   it('un utilisateur ne peut pas insérer un profil', async () => {
-    const { error } = await clientSimple
-      .from('profils')
-      .insert({ id: idSimple, identifiant: 'test.rls.intrus', nom_affichage: 'Intrus' })
+    // Un identifiant neuf, jamais `idSimple` : réutiliser une clé existante ferait
+    // échouer l'insertion sur une collision de clé primaire, et le test resterait
+    // vert même si l'écriture venait à être autorisée.
+    const { error } = await clientSimple.from('profils').insert({
+      id: crypto.randomUUID(),
+      identifiant: IDENT_INTRUS,
+      nom_affichage: 'Intrus',
+    })
     expect(error).not.toBeNull()
+    expect(error!.code).toBe('42501')
+
+    // Et confirmer en base : le retour d'appel seul ne prouve pas l'absence d'écriture.
+    const { data } = await admin.from('profils').select('id').eq('identifiant', IDENT_INTRUS)
+    expect(data).toEqual([])
   })
 
   it('un utilisateur ne peut pas supprimer un profil', async () => {
@@ -1591,6 +1787,10 @@ describe('écriture refusée par défaut', () => {
       .eq('id', idSimple)
       .select()
     expect(error).not.toBeNull()
+
+    // Même exigence que pour les autres écritures : vérifier en base.
+    const { data } = await admin.from('profils').select('nom_affichage').eq('id', idSimple).single()
+    expect(data!.nom_affichage).not.toBe('Modifié')
   })
 })
 ```
@@ -1653,7 +1853,10 @@ export default defineConfig({
   webServer: {
     command: 'npm run dev',
     url: 'http://localhost:3000/connexion',
-    reuseExistingServer: true,
+    // Réutiliser un serveur déjà lancé fait courir le risque de tester du code
+    // périmé, laissé par une session précédente. On l'accepte en local, où c'est
+    // un confort, jamais en intégration continue.
+    reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },
 })
@@ -1677,8 +1880,10 @@ import { expect, test } from '@playwright/test'
 
 const IDENTIFIANT = 'test.e2e.connexion'
 const EMAIL = `${IDENTIFIANT}@asonkeng.local`
-const MDP_TEMPORAIRE = 'MotDePasseTemporaire!1'
-const MDP_CHOISI = 'MonNouveauMotDePasse!2026'
+// Tiré à chaque exécution : un mot de passe fixe dans un dépôt public ouvrirait
+// tout compte de test qu'une exécution interrompue aurait laissé derrière elle.
+const MDP_TEMPORAIRE = `Test-${crypto.randomUUID()}`
+const MDP_CHOISI = `Test-${crypto.randomUUID()}`
 
 const admin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -1688,7 +1893,17 @@ const admin = createClient(
 
 async function supprimerCompte() {
   const { data } = await admin.from('profils').select('id').eq('identifiant', IDENTIFIANT).maybeSingle()
-  if (data) await admin.auth.admin.deleteUser(data.id)
+  if (data) {
+    await admin.auth.admin.deleteUser(data.id)
+    return
+  }
+
+  // Rattrapage par email. Sans lui, un compte d'authentification créé mais privé de
+  // fiche profil resterait introuvable — et la création suivante échouerait pour
+  // toujours sur « adresse déjà enregistrée », bloquant la suite entière.
+  const { data: comptes } = await admin.auth.admin.listUsers()
+  const orphelin = comptes?.users.find((u) => u.email === EMAIL)
+  if (orphelin) await admin.auth.admin.deleteUser(orphelin.id)
 }
 
 test.beforeAll(async () => {
@@ -1700,9 +1915,18 @@ test.beforeAll(async () => {
     app_metadata: { doit_changer_mdp: true },
   })
   if (error || !data.user) throw new Error(error?.message)
-  await admin
+
+  // Cette insertion doit être vérifiée. Si elle échoue en silence, le compte
+  // d'authentification survit sans fiche profil : le nettoyage le cherchant par
+  // `profils`, il devient introuvable, et toutes les exécutions suivantes échouent
+  // définitivement sur « adresse déjà enregistrée ».
+  const { error: erreurProfil } = await admin
     .from('profils')
     .insert({ id: data.user.id, identifiant: IDENTIFIANT, nom_affichage: 'Compte de test E2E' })
+  if (erreurProfil) {
+    await admin.auth.admin.deleteUser(data.user.id)
+    throw new Error(`insertion du profil de test impossible : ${erreurProfil.message}`)
+  }
 })
 
 test.afterAll(supprimerCompte)
