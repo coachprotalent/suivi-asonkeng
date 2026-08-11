@@ -1148,6 +1148,7 @@ import { envSupabase } from '@/lib/supabase/env'
 
 const ROUTE_CONNEXION = '/connexion'
 const ROUTE_CHANGEMENT_MDP = '/changer-mot-de-passe'
+const ROUTE_DECONNEXION = '/deconnexion'
 const ROUTE_APRES_CONNEXION = '/tableau-de-bord'
 
 export async function middleware(requete: NextRequest) {
@@ -1188,6 +1189,17 @@ export async function middleware(requete: NextRequest) {
 
   if (!user) {
     return surConnexion ? reponse : rediriger(ROUTE_CONNEXION)
+  }
+
+  // Toujours laisser passer la déconnexion, avant toute autre garde.
+  // Sans cette exception, un compte désactivé boucle sans fin : son jeton reste
+  // valide, donc le middleware le laisse entrer ; la page appelle profilCourant(),
+  // qui filtre sur `actif` et renvoie null ; la page redirige vers /connexion ; le
+  // middleware voit un utilisateur authentifié et le renvoie au tableau de bord.
+  // Un composant serveur ne peut pas effacer le cookie de session pendant son
+  // rendu : seule une route dédiée le peut.
+  if (chemin.startsWith(ROUTE_DECONNEXION)) {
+    return reponse
   }
 
   // Drapeau lu dans le JWT : aucune requête base (spec §4.1).
@@ -1231,7 +1243,33 @@ git commit -m "feat: protéger les routes et rafraîchir la session via le middl
 - Create: `src/app/changer-mot-de-passe/page.tsx`
 - Create: `src/app/changer-mot-de-passe/actions.ts`
 - Create: `src/app/changer-mot-de-passe/constantes.ts`
+- Create: `src/app/deconnexion/route.ts`
 - Create: `src/app/tableau-de-bord/page.tsx`
+
+**Route de déconnexion — à créer en premier, le tableau de bord en dépend.**
+Créer `src/app/deconnexion/route.ts` :
+
+```typescript
+import { NextResponse, type NextRequest } from 'next/server'
+import { clientServeur } from '@/lib/supabase/serveur'
+
+/**
+ * Efface la session puis renvoie vers l'écran de connexion.
+ *
+ * Une route plutôt qu'une Server Action ou un composant : c'est le seul endroit qui
+ * puisse écrire des cookies dans ce flux. Un compte désactivé conserve un jeton
+ * valide ; sans cette route, il boucle entre le middleware et le tableau de bord.
+ */
+export async function GET(requete: NextRequest) {
+  const supabase = await clientServeur()
+  await supabase.auth.signOut()
+
+  const url = requete.nextUrl.clone()
+  url.pathname = '/connexion'
+  url.search = ''
+  return NextResponse.redirect(url)
+}
+```
 
 > **Contrainte Next.js 16 découverte à la Task 8 — lire avant d'écrire le code.**
 > Un fichier portant `'use server'` **ne peut exporter que des fonctions asynchrones**. La
@@ -1405,7 +1443,11 @@ import { profilCourant } from '@/lib/donnees/profils'
 export default async function PageTableauDeBord() {
   const profil = await profilCourant()
   if (!profil) {
-    redirect('/connexion')
+    // Vers /deconnexion et non /connexion : le jeton peut encore être valide alors
+    // que le profil est absent ou le compte désactivé. Rediriger vers /connexion
+    // ferait boucler le middleware indéfiniment. La route de déconnexion efface la
+    // session, ce qu'un composant serveur ne peut pas faire pendant son rendu.
+    redirect('/deconnexion')
   }
 
   return (
