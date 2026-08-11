@@ -2,7 +2,7 @@
 
 import { redirect } from 'next/navigation'
 import { z } from 'zod'
-import { profilCourant } from '@/lib/donnees/profils'
+import { exigerProfilActif } from '@/lib/securite/garde'
 import { clientAdmin } from '@/lib/supabase/admin'
 import { clientServeur } from '@/lib/supabase/serveur'
 import { LONGUEUR_MDP_MINIMALE } from './constantes'
@@ -50,10 +50,7 @@ export async function changerMotDePasse(
   // Une écriture par clé de service ne doit jamais reposer sur la seule présence
   // d'une session : un compte d'authentification sans fiche, ou désactivé, ne doit
   // pas l'atteindre. C'est le patron que les phases suivantes recopieront.
-  const profil = await profilCourant()
-  if (!profil) {
-    redirect('/deconnexion')
-  }
+  await exigerProfilActif()
 
   const { error } = await supabase.auth.updateUser({ password: saisie.data.motDePasse })
   if (error) {
