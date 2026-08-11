@@ -1040,8 +1040,17 @@ const c = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABAS
 
 // Les trois `select` sont copiés MOT POUR MOT depuis src/lib/donnees/statuts.ts.
 // Les recopier de mémoire ne prouverait rien sur le code réellement livré.
+//
+// Ceux ci-dessous sont une copie datée : le module fait autorité, pas ce bloc.
+// Ils ont DÉJÀ divergé une fois — `statuts(id, libelle, actif)` ici contre
+// `statuts(id, libelle, actif, ordre)` dans le module, si bien que ce contrôle
+// aurait affiché OK sans jamais éprouver `ordre`, la clé de tri. Ouvre le fichier
+// et compare avant de lancer : un contrôle qui éprouve autre chose que ce qu'on
+// livre est pire qu'un contrôle absent, parce qu'il rassure.
 const requetes = {
-  catalogue: c.from('groupes_statut').select('id, nom, exclusif, ordre, statuts(id, libelle, actif)'),
+  catalogue: c
+    .from('groupes_statut')
+    .select('id, nom, exclusif, ordre, statuts(id, libelle, actif, ordre)'),
   statutsDuMembre: c
     .from('membre_statuts')
     .select('statut_id, date_acquisition, note, statuts(libelle, groupes_statut(nom, ordre))')
