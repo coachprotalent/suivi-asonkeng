@@ -833,6 +833,13 @@ Dans `package.json`, section `scripts` :
 
 Renseigner `RACINE_MOT_DE_PASSE` dans `.env.local` avec un mot de passe d'au moins 12 caractères.
 
+**Piège vérifié en pratique — entourer la valeur de guillemets doubles.** L'analyseur
+`--env-file` de Node traite un `#` comme un début de commentaire : un mot de passe contenant ce
+caractère est silencieusement tronqué à ce qui le précède. Sans guillemets, un mot de passe de
+20 caractères devient 3, sans le moindre avertissement. Le garde-fou `motDePasse.length < 12`
+du script attrape le cas, mais la même règle vaut pour toute valeur contenant `#`, une espace
+ou un `$`.
+
 Run : `npm run amorcer:racine`
 Expected : `Compte racine « racine » créé. Le mot de passe devra être changé à la première connexion.`
 
