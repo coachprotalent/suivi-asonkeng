@@ -1452,9 +1452,24 @@ export default async function PageStatuts({ params }: { params: Promise<{ id: st
                   {statut.note ? <p className="mt-1 text-sm">{statut.note}</p> : null}
                 </div>
                 {estAdmin ? (
-                  <form action={retirerStatut}>
+                  <form action={retirerStatut} className="flex items-start gap-2">
                     <input type="hidden" name="membreId" value={membre.id} />
                     <input type="hidden" name="statutId" value={statut.statutId} />
+                    {/*
+                      `maxLength` n'est pas décoratif : `retirerStatut` n'a aucun canal
+                      pour renvoyer un message de validation, et un motif trop long y
+                      serait journalisé puis remplacé par null — le retrait réussirait
+                      sans le motif, sans un mot à l'utilisateur. La limite se voit
+                      donc au moment où l'on écrit, pas après coup.
+                    */}
+                    <input
+                      type="text"
+                      name="motif"
+                      maxLength={500}
+                      placeholder="Motif du retrait (facultatif)"
+                      aria-label={`Motif du retrait du statut « ${statut.libelle} »`}
+                      className="w-56 rounded border border-neutral-300 px-2 py-1 text-sm"
+                    />
                     <BoutonRetirerStatut libelle={statut.libelle} />
                   </form>
                 ) : null}
@@ -1527,7 +1542,14 @@ Puis, avec un compte administrateur jetable et Playwright, sur un membre de test
    montre trois entrées, dont le retrait automatique avec son motif ;
 5. attribuer « Baptisé d'eau » — groupe non exclusif : il s'ajoute **sans** retirer le premier ;
 6. retirer un statut demande confirmation ; la refuser ne change rien ;
-7. une date d'acquisition dans le futur est refusée avec un message lisible.
+7. une date d'acquisition dans le futur est refusée avec un message lisible ;
+8. retirer un statut **en saisissant un motif** : le motif apparaît au journal, sur la
+   ligne du retrait. Vérifie-le à l'écran, puis en base — c'est la seule preuve que le
+   champ est bien câblé jusqu'à `journal_statuts.motif` ; un champ qui ne remonte nulle
+   part se voit d'autant moins qu'il est facultatif ;
+9. retirer un statut **sans** motif : le retrait aboutit, et le journal n'affiche
+   simplement pas de motif sur cette ligne. Sans ce cas, rien ne distingue « facultatif »
+   de « obligatoire mais jamais testé à vide ».
 
 Supprime ensuite le membre de test et le compte jetable, et confirme que `membres`,
 `membre_statuts` et `journal_statuts` sont revenus à leur état initial.
