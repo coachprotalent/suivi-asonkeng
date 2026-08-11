@@ -2,6 +2,8 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { membreParId } from '@/lib/donnees/membres'
 import { rolesDuProfil } from '@/lib/donnees/profils'
+import { statutsDuMembre } from '@/lib/donnees/statuts'
+import { formaterDateSeule } from '@/lib/format/date'
 import { exigerProfilActif } from '@/lib/securite/garde'
 import { archiverMembre, desarchiverMembre } from '../actions'
 import { BoutonArchiver } from './bouton-archiver'
@@ -20,7 +22,10 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
     notFound()
   }
 
-  const roles = await rolesDuProfil(profil.id)
+  const [roles, statuts] = await Promise.all([
+    rolesDuProfil(profil.id),
+    statutsDuMembre(membre.id),
+  ])
   const estAdmin = roles.includes('administrateur')
 
   const lignes: Array<[string, string | null]> = [
@@ -53,37 +58,39 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
           {membre.etat !== 'actif' ? (
             <p className="mt-1 text-sm text-amber-700">
               {membre.etat === 'archive'
-                ? 'Fiche archivée — elle ne figure plus dans l’annuaire.'
+                ? "Fiche archivée — elle ne figure plus dans l'annuaire."
                 : 'Fiche en attente de validation.'}
             </p>
           ) : null}
         </div>
-        {estAdmin ? (
-          <div className="flex items-center gap-4">
-            <Link href={`/membres/${membre.id}/modifier`} className="text-sm underline underline-offset-4">
-              Modifier
-            </Link>
-            {/*
-              Pas de bouton d'archivage sur une fiche déjà archivée : l'action
-              n'aurait aucun effet, et la proposer laisserait croire le contraire.
-              À la place, un rétablissement : sur mobile, un archivage accidentel
-              serait sinon définitif sans intervention en base, alors que la
-              confirmation promet « rien n'est supprimé ».
-            */}
-            {membre.etat === 'actif' ? (
-              <form action={archiverMembre}>
-                <input type="hidden" name="id" value={membre.id} />
-                <BoutonArchiver nomComplet={`${membre.prenom} ${membre.nom}`} archiver />
-              </form>
-            ) : null}
-            {membre.etat === 'archive' ? (
-              <form action={desarchiverMembre}>
-                <input type="hidden" name="id" value={membre.id} />
-                <BoutonArchiver nomComplet={`${membre.prenom} ${membre.nom}`} archiver={false} />
-              </form>
-            ) : null}
-          </div>
-        ) : null}
+        <div className="flex items-center gap-4">
+          {estAdmin ? (
+            <>
+              <Link href={`/membres/${membre.id}/modifier`} className="text-sm underline underline-offset-4">
+                Modifier
+              </Link>
+              {/*
+                Pas de bouton d'archivage sur une fiche déjà archivée : l'action
+                n'aurait aucun effet, et la proposer laisserait croire le contraire.
+                À la place, un rétablissement : sur mobile, un archivage accidentel
+                serait sinon définitif sans intervention en base, alors que la
+                confirmation promet « rien n'est supprimé ».
+              */}
+              {membre.etat === 'actif' ? (
+                <form action={archiverMembre}>
+                  <input type="hidden" name="id" value={membre.id} />
+                  <BoutonArchiver nomComplet={`${membre.prenom} ${membre.nom}`} archiver />
+                </form>
+              ) : null}
+              {membre.etat === 'archive' ? (
+                <form action={desarchiverMembre}>
+                  <input type="hidden" name="id" value={membre.id} />
+                  <BoutonArchiver nomComplet={`${membre.prenom} ${membre.nom}`} archiver={false} />
+                </form>
+              ) : null}
+            </>
+          ) : null}
+        </div>
       </header>
 
       <dl className="divide-y divide-neutral-200">
@@ -94,6 +101,38 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
           </div>
         ))}
       </dl>
+
+      <section className="mt-8">
+        <div className="mb-3 flex items-baseline justify-between gap-4">
+          <h2 className="text-lg font-medium">Statuts</h2>
+          {/*
+            « Gérer » promettrait un pouvoir que ce rôle n'a pas : un non-administrateur
+            atteint le même écran mais n'y trouve ni formulaire d'attribution ni bouton de
+            retrait, seulement la consultation et le journal — c'est ce dernier qui décrit
+            le mieux ce que l'écran lui apporte de plus que cette fiche.
+          */}
+          <Link href={`/membres/${membre.id}/statuts`} className="text-sm underline underline-offset-4">
+            {estAdmin ? 'Gérer' : 'Journal'}
+          </Link>
+        </div>
+        {statuts.length === 0 ? (
+          <p className="text-sm text-neutral-600">Aucun statut attribué.</p>
+        ) : (
+          <ul className="flex flex-wrap gap-2">
+            {statuts.map((statut) => (
+              <li
+                key={statut.statutId}
+                className="rounded-full border border-neutral-300 px-3 py-1 text-sm"
+              >
+                {statut.libelle}
+                {statut.dateAcquisition ? (
+                  <span className="text-neutral-500"> · {formaterDateSeule(statut.dateAcquisition)}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </main>
   )
 }

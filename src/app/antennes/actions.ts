@@ -21,7 +21,7 @@ export async function creerAntenne(
   const { error } = await clientAdmin().from('antennes').insert({ nom, pays })
   if (error) {
     // La contrainte d'unicité est le cas de loin le plus probable.
-    return { erreur: 'Cette antenne existe déjà, ou n’a pas pu être créée.' }
+    return { erreur: "Cette antenne existe déjà, ou n'a pas pu être créée." }
   }
 
   revalidatePath('/antennes')

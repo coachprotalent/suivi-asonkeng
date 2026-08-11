@@ -431,12 +431,70 @@ grant execute on function prive.attribuer_statut(uuid, uuid, date, text, uuid) t
 grant execute on function prive.retirer_statut(uuid, uuid, uuid, text) to service_role;
 ```
 
-- [ ] **Step 2 : Appliquer la migration**
+- [ ] **Step 2 : Ouvrir un point d'appel dans le schéma public**
+
+Les fonctions vivent dans `prive`, qui n'est **pas** exposé par l'API — et ne doit pas l'être :
+c'est là que vivent `est_actif` et `est_admin`, et les rendre atteignables de l'extérieur
+annulerait la raison d'être de ce schéma. On ajoute donc une passerelle mince dans `public`,
+dont l'exécution reste réservée à la clé de service.
+
+Créer une **nouvelle** migration `supabase/migrations/20260813120000_passerelles_statuts.sql` —
+et non compléter la précédente, qui est déjà appliquée. `supabase db push` suit les migrations
+par version et non par contenu : modifier un fichier appliqué ne rejoue rien, et laisse le
+dépôt en désaccord silencieux avec la base.
+
+```sql
+-- Passerelles appelables par l'API. Le schéma `prive` n'est pas exposé par PostgREST,
+-- et ne doit pas l'être : il contient les fonctions de sécurité du projet. Ces deux
+-- passerelles donnent à l'application un point d'entrée dans `public`, sans rien
+-- ouvrir d'autre — leur exécution est retirée à tous les rôles sauf `service_role`,
+-- que seules les Server Actions emploient, derrière `exigerAdministrateur`.
+
+create or replace function public.attribuer_statut(
+  p_membre uuid,
+  p_statut uuid,
+  p_date date,
+  p_note text,
+  p_par uuid
+)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  select prive.attribuer_statut(p_membre, p_statut, p_date, p_note, p_par);
+$$;
+
+create or replace function public.retirer_statut(
+  p_membre uuid,
+  p_statut uuid,
+  p_par uuid,
+  p_motif text
+)
+returns void
+language sql
+security definer
+set search_path = ''
+as $$
+  select prive.retirer_statut(p_membre, p_statut, p_par, p_motif);
+$$;
+
+revoke execute on function public.attribuer_statut(uuid, uuid, date, text, uuid) from public, anon, authenticated;
+revoke execute on function public.retirer_statut(uuid, uuid, uuid, text) from public, anon, authenticated;
+grant execute on function public.attribuer_statut(uuid, uuid, date, text, uuid) to service_role;
+grant execute on function public.retirer_statut(uuid, uuid, uuid, text) to service_role;
+```
+
+- [ ] **Step 3 : Appliquer la migration**
 
 Run : `npx supabase db push`
 Expected : appliquée sans erreur.
 
-- [ ] **Step 3 : Éprouver l'atomicité et l'exclusivité, en réel**
+**Vérifie immédiatement que les passerelles sont bien fermées** : avec la clé **anonyme**, un
+appel `POST /rest/v1/rpc/attribuer_statut` doit être refusé. **S'il réussissait, arrête-toi et
+renvoie BLOCKED** — ce serait une écriture ouverte à quiconque.
+
+- [ ] **Step 4 : Éprouver l'atomicité et l'exclusivité, en réel**
 
 C'est le cœur de la tâche : ces fonctions doivent être exercées, pas seulement lues.
 Crée un membre temporaire avec la clé de service, puis, en appelant les fonctions par RPC :
@@ -464,11 +522,167 @@ exposant temporairement la fonction autrement — **et si tu ne parviens pas à 
 contourne pas** : décris ce que tu observes et renvoie DONE_WITH_CONCERNS. La tâche suivante
 dépend de ce chemin d'appel.
 
-- [ ] **Step 4 : Vérifier les suites existantes**
+- [ ] **Step 5 : Durcissement issu de la revue**
+
+Quatre défauts ont été trouvés par la revue de cette tâche, dont deux critiques. Créer
+`supabase/migrations/20260813130000_durcir_statuts.sql` :
+
+```sql
+-- Durcissement issu de la revue de la Task 2. Migration séparée : les précédentes
+-- sont déjà appliquées et ne se réécrivent pas.
+
+-- 1. Le journal ne se réécrit pas.
+--    Le commentaire de la table promettait « en insertion seule » sans que rien ne
+--    l'impose : la trace était modifiable par la clé de service, c'est-à-dire par le
+--    seul chemin d'écriture de l'application.
+create or replace function prive.refuser_reecriture_journal()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  raise exception 'Le journal des statuts ne se réécrit pas.';
+end;
+$$;
+
+create trigger journal_statuts_sans_reecriture
+  before update on public.journal_statuts
+  for each row execute function prive.refuser_reecriture_journal();
+
+comment on table public.journal_statuts is
+  'Trace de chaque mouvement de statut, protégée contre la réécriture par un déclencheur : aucune modification n''est possible, par personne. La suppression reste possible en cascade avec le membre — seule voie d''effacement complet d''une personne. L''application, elle, archive et ne supprime jamais.';
+
+-- 2. Le garde d'exclusivité couvre aussi les modifications.
+--    Il ne portait que sur `insert` : un `update` changeant `statut_id` pour un autre
+--    statut du même groupe exclusif passait sans aucun contrôle, alors que le
+--    commentaire promettait que l'invariant tenait pour toute écriture directe.
+drop trigger if exists membre_statuts_exclusivite on public.membre_statuts;
+create trigger membre_statuts_exclusivite
+  before insert or update on public.membre_statuts
+  for each row execute function prive.refuser_statut_exclusif_double();
+
+-- 3. Attribution : verrou de concurrence, pas d'écrasement, journal fidèle.
+create or replace function prive.attribuer_statut(
+  p_membre uuid,
+  p_statut uuid,
+  p_date date,
+  p_note text,
+  p_par uuid
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_groupe uuid;
+  v_exclusif boolean;
+  v_evince uuid;
+  v_nouveau boolean;
+begin
+  -- `for update` verrouille la ligne du membre pour la durée de la transaction.
+  -- Sans ce verrou, deux attributions simultanées de deux statuts d'un même groupe
+  -- exclusif réussiraient toutes les deux : aucune ne voit l'insertion non validée
+  -- de l'autre, leurs clés primaires diffèrent, et le déclencheur ne voit rien. Le
+  -- membre porterait alors deux statuts qui s'excluent, sans la moindre erreur.
+  perform 1 from public.membres m where m.id = p_membre for update;
+  if not found then
+    raise exception 'Membre inconnu.';
+  end if;
+
+  select s.groupe_id, g.exclusif into v_groupe, v_exclusif
+  from public.statuts s
+  join public.groupes_statut g on g.id = s.groupe_id
+  where s.id = p_statut and s.actif;
+
+  if v_groupe is null then
+    raise exception 'Statut inconnu ou désactivé.';
+  end if;
+
+  if v_exclusif then
+    for v_evince in
+      select ms.statut_id
+      from public.membre_statuts ms
+      join public.statuts s2 on s2.id = ms.statut_id
+      where ms.membre_id = p_membre and s2.groupe_id = v_groupe and ms.statut_id <> p_statut
+    loop
+      delete from public.membre_statuts
+      where membre_id = p_membre and statut_id = v_evince;
+
+      insert into public.journal_statuts (membre_id, statut_id, action, par_profil_id, motif)
+      values (p_membre, v_evince, 'retrait', p_par, 'Remplacé par un autre statut du même groupe');
+    end loop;
+  end if;
+
+  -- `coalesce` plutôt qu'écrasement : réattribuer un statut déjà porté sans
+  -- renseigner de date effacerait la date d'acquisition existante — une information
+  -- qu'on ne retrouve pas. Une valeur fournie remplace, une valeur absente laisse.
+  insert into public.membre_statuts (membre_id, statut_id, date_acquisition, note, attribue_par)
+  values (p_membre, p_statut, p_date, nullif(trim(coalesce(p_note, '')), ''), p_par)
+  on conflict (membre_id, statut_id) do update
+    set date_acquisition = coalesce(excluded.date_acquisition, membre_statuts.date_acquisition),
+        note = coalesce(excluded.note, membre_statuts.note),
+        attribue_par = excluded.attribue_par,
+        attribue_le = now()
+  returning (xmax = 0) into v_nouveau;
+
+  -- Journaliser un « ajout » alors que le statut était déjà porté ferait mentir le
+  -- journal sur ce qui s'est réellement passé.
+  if v_nouveau then
+    insert into public.journal_statuts (membre_id, statut_id, action, par_profil_id)
+    values (p_membre, p_statut, 'ajout', p_par);
+  end if;
+end;
+$$;
+
+-- 4. Retrait : une erreur d'usage doit sortir en 400, pas en 500.
+--    `no_data_found` était traduit en erreur serveur par PostgREST, alors que
+--    « ce membre ne porte pas ce statut » est une condition ordinaire.
+create or replace function prive.retirer_statut(
+  p_membre uuid,
+  p_statut uuid,
+  p_par uuid,
+  p_motif text
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_supprimees integer;
+begin
+  delete from public.membre_statuts
+  where membre_id = p_membre and statut_id = p_statut;
+
+  get diagnostics v_supprimees = row_count;
+  if v_supprimees = 0 then
+    -- Un retrait sans effet ne doit pas passer pour un succès.
+    raise exception 'Ce membre ne porte pas ce statut.';
+  end if;
+
+  insert into public.journal_statuts (membre_id, statut_id, action, par_profil_id, motif)
+  values (p_membre, p_statut, 'retrait', p_par, nullif(trim(coalesce(p_motif, '')), ''));
+end;
+$$;
+
+-- 5. Commentaires : dire ce que les objets font réellement.
+comment on function prive.refuser_statut_exclusif_double() is
+  'Garde d''invariant sur membre_statuts. Il s''exécute à chaque insertion et modification, et ne lève que si le membre porterait deux statuts d''un même groupe exclusif. Les fonctions d''attribution évinçant le concurrent avant d''insérer, il ne lève jamais sur le chemin normal.';
+
+comment on function public.attribuer_statut(uuid, uuid, date, text, uuid) is
+  'Passerelle appelable par l''API vers prive.attribuer_statut. Exécution réservée à service_role : le schéma prive n''est pas exposé et ne doit pas l''être.';
+
+comment on function public.retirer_statut(uuid, uuid, uuid, text) is
+  'Passerelle appelable par l''API vers prive.retirer_statut. Exécution réservée à service_role.';
+```
+
+- [ ] **Step 6 : Vérifier les suites existantes**
 
 Run : `npm run test:rls` (22 tests), `npm test` (37 tests).
 
-- [ ] **Step 5 : Commit**
+- [ ] **Step 7 : Commit**
 
 ```bash
 git add supabase/migrations/20260813110000_membre_statuts.sql
@@ -531,7 +745,7 @@ describe('normaliserDateAcquisition', () => {
     expect(normaliserDateAcquisition(aujourdhui)).toBe(aujourdhui)
   })
 
-  it('refuse une valeur qui n’est pas du texte plutôt que de la perdre', () => {
+  it("refuse une valeur qui n'est pas du texte plutôt que de la perdre", () => {
     expect(() => normaliserDateAcquisition(20250312)).toThrow(StatutInvalideError)
   })
 })
@@ -547,7 +761,7 @@ describe('normaliserNote', () => {
     expect(normaliserNote(null)).toBeNull()
   })
 
-  it('refuse une valeur qui n’est pas du texte', () => {
+  it("refuse une valeur qui n'est pas du texte", () => {
     expect(() => normaliserNote(42)).toThrow(StatutInvalideError)
   })
 
@@ -691,6 +905,26 @@ export type EntreeJournal = {
 }
 
 /**
+ * PostgREST renvoie un OBJET pour une ressource imbriquée en plusieurs-vers-un,
+ * mais le client, faute de types `Database` générés, la déclare comme un tableau.
+ * Les deux formes se ramènent ici à une seule. Même contournement que `nomAntenne`
+ * dans `membres.ts`, généralisé pour trois relations distinctes de ce module
+ * (statut et groupe dans `statutsDuMembre`, statut et profil dans
+ * `journalDuMembre`), soit quatre appels.
+ */
+type Imbrique<T> = T | T[] | null | undefined
+
+function premier<T>(valeur: Imbrique<T>): T | null {
+  if (valeur === null || valeur === undefined) return null
+  return Array.isArray(valeur) ? (valeur[0] ?? null) : valeur
+}
+
+type StatutImbrique = {
+  libelle: string
+  groupes_statut: Imbrique<{ nom: string; ordre: number }>
+}
+
+/**
  * Catalogue groupé, trié. `inclureInactifs` sert l'écran d'administration : sans
  * lui, un statut désactivé disparaîtrait de l'interface sans retour possible —
  * l'impasse déjà rencontrée avec les antennes en phase 1a.
@@ -729,21 +963,47 @@ export async function statutsDuMembre(membreId: string): Promise<StatutDuMembre[
     throw new Error(`Lecture des statuts impossible : ${error.message}`)
   }
 
+  // L'ordre du groupe sert au tri mais ne sort pas d'ici : on le porte à côté de la
+  // ligne plutôt que dedans, pour n'avoir ensuite rien à en retirer.
   return (data ?? [])
     .map((l) => {
-      const statut = l.statuts as Record<string, unknown> | null
-      const groupe = (statut?.groupes_statut ?? null) as Record<string, unknown> | null
+      const statutId = l.statut_id as string
+      const statut = premier(l.statuts as Imbrique<StatutImbrique>)
+      // `statuts.id` est référencé par `membre_statuts.statut_id` en `on delete
+      // restrict`, et la politique de lecture de `statuts` n'exige que `est_actif()`
+      // — comme celle de `membre_statuts`. Si la ligne a pu être lue, le statut est
+      // forcément lisible aussi : un `statut` absent ici n'est pas une donnée
+      // manquante, c'est une jointure cassée. La déguiser en « — » masquerait le
+      // défaut au lieu de le signaler.
+      if (!statut) {
+        throw new Error(
+          `Jointure incomplète : le statut ${statutId} référencé par membre_statuts est introuvable.`,
+        )
+      }
+      const groupe = premier(statut.groupes_statut)
+      // Même raisonnement : `statuts.groupe_id` est `not null` et référence
+      // `groupes_statut` en `on delete restrict`, sous la même politique de lecture.
+      if (!groupe) {
+        throw new Error(
+          `Jointure incomplète : le groupe du statut ${statutId} est introuvable.`,
+        )
+      }
       return {
-        statutId: l.statut_id as string,
-        libelle: (statut?.libelle as string) ?? '—',
-        groupeNom: (groupe?.nom as string) ?? '—',
-        ordreGroupe: Number(groupe?.ordre ?? 0),
-        dateAcquisition: l.date_acquisition as string | null,
-        note: l.note as string | null,
+        ordreGroupe: groupe.ordre,
+        ligne: {
+          statutId,
+          libelle: statut.libelle,
+          groupeNom: groupe.nom,
+          dateAcquisition: l.date_acquisition as string | null,
+          note: l.note as string | null,
+        },
       }
     })
-    .sort((a, b) => a.ordreGroupe - b.ordreGroupe || a.libelle.localeCompare(b.libelle, 'fr'))
-    .map(({ ordreGroupe: _ordreGroupe, ...reste }) => reste)
+    .sort(
+      (a, b) =>
+        a.ordreGroupe - b.ordreGroupe || a.ligne.libelle.localeCompare(b.ligne.libelle, 'fr'),
+    )
+    .map(({ ligne }) => ligne)
 }
 
 /** Journal d'un membre, du plus récent au plus ancien. */
@@ -760,14 +1020,23 @@ export async function journalDuMembre(membreId: string): Promise<EntreeJournal[]
   }
 
   return (data ?? []).map((l) => {
-    const statut = l.statuts as Record<string, unknown> | null
-    const profil = l.profils as Record<string, unknown> | null
+    const id = l.id as string
+    const statut = premier(l.statuts as Imbrique<{ libelle: string }>)
+    // `journal_statuts.statut_id` référence `statuts` en `on delete restrict`, sous
+    // la même politique de lecture que `journal_statuts` : un statut absent ici est
+    // une jointure cassée, pas une entrée sans statut légitime.
+    if (!statut) {
+      throw new Error(`Jointure incomplète : le statut de l'entrée de journal ${id} est introuvable.`)
+    }
+    // `par_profil_id`, lui, est en `on delete set null` : un auteur supprimé est un
+    // cas réel et attendu. Le repli à `null` reste donc correct ici, sans lever.
+    const profil = premier(l.profils as Imbrique<{ nom_affichage: string }>)
     return {
-      id: l.id as string,
-      libelle: (statut?.libelle as string) ?? '—',
+      id,
+      libelle: statut.libelle,
       action: l.action as 'ajout' | 'retrait',
       le: l.le as string,
-      parNomAffichage: (profil?.nom_affichage as string) ?? null,
+      parNomAffichage: profil?.nom_affichage ?? null,
       motif: l.motif as string | null,
     }
   })
@@ -778,6 +1047,65 @@ export async function journalDuMembre(membreId: string): Promise<EntreeJournal[]
 
 Run : `npx tsc --noEmit`, `npm run lint`, `npm test`.
 Expected : les trois passent.
+
+- [ ] **Step 2 bis : Éprouver les requêtes contre la vraie base**
+
+Les trois vérifications ci-dessus ne prouvent que la compilation. Un nom de colonne
+faux ou une jointure ambiguë vit dans une **chaîne de caractères** : ni `tsc`, ni
+ESLint, ni les tests unitaires ne peuvent les voir. Sans cette étape, une requête
+cassée ne se découvrirait qu'à la Task 6, trois tâches plus loin.
+
+Ces fonctions appellent `clientServeur()`, qui exige un contexte de requête Next :
+on ne peut pas les appeler directement depuis un script. On éprouve donc les
+**requêtes elles-mêmes**, à l'identique, avec la clé de service.
+
+Crée un fichier temporaire hors du dépôt (pas dans le répertoire de travail) :
+
+```javascript
+import { createClient } from '@supabase/supabase-js'
+
+const c = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { autoRefreshToken: false, persistSession: false },
+})
+
+// Les trois `select` sont copiés MOT POUR MOT depuis src/lib/donnees/statuts.ts.
+// Les recopier de mémoire ne prouverait rien sur le code réellement livré.
+//
+// Ceux ci-dessous sont une copie datée : le module fait autorité, pas ce bloc.
+// Ils ont DÉJÀ divergé une fois — `statuts(id, libelle, actif)` ici contre
+// `statuts(id, libelle, actif, ordre)` dans le module, si bien que ce contrôle
+// aurait affiché OK sans jamais éprouver `ordre`, la clé de tri. Ouvre le fichier
+// et compare avant de lancer : un contrôle qui éprouve autre chose que ce qu'on
+// livre est pire qu'un contrôle absent, parce qu'il rassure.
+const requetes = {
+  catalogue: c
+    .from('groupes_statut')
+    .select('id, nom, exclusif, ordre, statuts(id, libelle, actif, ordre)'),
+  statutsDuMembre: c
+    .from('membre_statuts')
+    .select('statut_id, date_acquisition, note, statuts(libelle, groupes_statut(nom, ordre))')
+    .limit(1),
+  journal: c
+    .from('journal_statuts')
+    .select('id, action, le, motif, statuts(libelle), profils(nom_affichage)')
+    .limit(1),
+}
+
+for (const [nom, requete] of Object.entries(requetes)) {
+  const { error } = await requete
+  console.log(error ? `${nom} : ECHEC — ${error.code} ${error.message}` : `${nom} : OK`)
+}
+```
+
+Run : `node --env-file=.env.local <chemin-du-fichier-temporaire>`
+Expected : les trois lignes affichent `OK`.
+
+Si l'une échoue, le défaut est dans la requête du module, pas dans le script :
+corrige `src/lib/donnees/statuts.ts` et relance. Un `42703` désigne une colonne
+inexistante, un `PGRST200` une jointure que PostgREST ne sait pas résoudre.
+
+Supprime le fichier temporaire, puis vérifie qu'il n'apparaît pas dans
+`git status`.
 
 - [ ] **Step 3 : Commit**
 
@@ -858,7 +1186,6 @@ export async function attribuerStatut(
   // mouvements : c'est une fonction Postgres, donc atomique. Deux appels séparés
   // laisseraient la fiche sans statut si le second échouait.
   const { error } = await clientAdmin()
-    .schema('prive')
     .rpc('attribuer_statut', {
       p_membre: membreId,
       p_statut: statutId,
@@ -888,7 +1215,6 @@ export async function retirerStatut(donnees: FormData): Promise<void> {
   // La fonction lève si le membre ne porte pas ce statut : un retrait sans effet
   // ne doit pas passer pour un succès.
   const { error } = await clientAdmin()
-    .schema('prive')
     .rpc('retirer_statut', {
       p_membre: membreId,
       p_statut: statutId,
@@ -994,7 +1320,8 @@ export function FormulaireStatut({
           className="rounded-md border border-neutral-300 px-3 py-2"
         />
         <span className="text-xs text-neutral-500">
-          Facultative. Elle n&apos;est pas toujours connue.
+          Facultative. Elle n&apos;est pas toujours connue. Sur un statut déjà porté,
+          laisser vide conserve la date enregistrée.
         </span>
       </label>
 
@@ -1005,6 +1332,17 @@ export function FormulaireStatut({
           maxLength={500}
           className="rounded-md border border-neutral-300 px-3 py-2"
         />
+        {/*
+          Cette mention n'est pas un ornement. `attribuer_statut` applique un
+          `coalesce` : sur un statut déjà porté, un champ vide veut dire « ne change
+          pas », jamais « efface ». Sans cette phrase, un administrateur qui vide la
+          note pour la supprimer verrait une redirection de succès et retrouverait
+          l'ancienne note intacte, sans le moindre avertissement.
+        */}
+        <span className="text-xs text-neutral-500">
+          Facultative. Sur un statut déjà porté, laisser vide conserve la note
+          enregistrée.
+        </span>
       </label>
 
       {etat.erreur ? (
@@ -1064,15 +1402,11 @@ import { notFound } from 'next/navigation'
 import { membreParId } from '@/lib/donnees/membres'
 import { rolesDuProfil } from '@/lib/donnees/profils'
 import { journalDuMembre, listerCatalogue, statutsDuMembre } from '@/lib/donnees/statuts'
+import { formaterDateHeure, formaterDateSeule } from '@/lib/format/date'
 import { exigerProfilActif } from '@/lib/securite/garde'
 import { retirerStatut } from './actions'
 import { BoutonRetirerStatut } from './bouton-retirer-statut'
 import { FormulaireStatut } from './formulaire-statut'
-
-const FORMAT_DATE_HEURE = new Intl.DateTimeFormat('fr-FR', {
-  dateStyle: 'short',
-  timeStyle: 'short',
-})
 
 export default async function PageStatuts({ params }: { params: Promise<{ id: string }> }) {
   const profil = await exigerProfilActif()
@@ -1082,13 +1416,16 @@ export default async function PageStatuts({ params }: { params: Promise<{ id: st
     notFound()
   }
 
-  const [statuts, journal, groupes, roles] = await Promise.all([
+  const [statuts, journal, roles] = await Promise.all([
     statutsDuMembre(membre.id),
     journalDuMembre(membre.id),
-    listerCatalogue(),
     rolesDuProfil(profil.id),
   ])
   const estAdmin = roles.includes('administrateur')
+  // Le catalogue ne sert qu'au formulaire d'attribution, rendu uniquement pour un
+  // administrateur : l'interroger pour tout visiteur — le cas le plus fréquent —
+  // ferait une requête inutile.
+  const groupes = estAdmin ? await listerCatalogue() : []
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
@@ -1103,7 +1440,7 @@ export default async function PageStatuts({ params }: { params: Promise<{ id: st
         {membre.etat !== 'actif' ? (
           <p className="mt-1 text-sm text-amber-700">
             {membre.etat === 'archive'
-              ? 'Fiche archivée — elle ne figure plus dans l’annuaire.'
+              ? "Fiche archivée — elle ne figure plus dans l'annuaire."
               : 'Fiche en attente de validation.'}
           </p>
         ) : null}
@@ -1121,14 +1458,29 @@ export default async function PageStatuts({ params }: { params: Promise<{ id: st
                   <p className="font-medium">{statut.libelle}</p>
                   <p className="text-sm text-neutral-500">
                     {statut.groupeNom}
-                    {statut.dateAcquisition ? ` · depuis le ${statut.dateAcquisition}` : ''}
+                    {statut.dateAcquisition ? ` · depuis le ${formaterDateSeule(statut.dateAcquisition)}` : ''}
                   </p>
                   {statut.note ? <p className="mt-1 text-sm">{statut.note}</p> : null}
                 </div>
                 {estAdmin ? (
-                  <form action={retirerStatut}>
+                  <form action={retirerStatut} className="flex items-start gap-2">
                     <input type="hidden" name="membreId" value={membre.id} />
                     <input type="hidden" name="statutId" value={statut.statutId} />
+                    {/*
+                      `maxLength` n'est pas décoratif : `retirerStatut` n'a aucun canal
+                      pour renvoyer un message de validation, et un motif trop long y
+                      serait journalisé puis remplacé par null — le retrait réussirait
+                      sans le motif, sans un mot à l'utilisateur. La limite se voit
+                      donc au moment où l'on écrit, pas après coup.
+                    */}
+                    <input
+                      type="text"
+                      name="motif"
+                      maxLength={500}
+                      placeholder="Motif du retrait (facultatif)"
+                      aria-label={`Motif du retrait du statut « ${statut.libelle} »`}
+                      className="w-56 rounded border border-neutral-300 px-2 py-1 text-sm"
+                    />
                     <BoutonRetirerStatut libelle={statut.libelle} />
                   </form>
                 ) : null}
@@ -1162,8 +1514,14 @@ export default async function PageStatuts({ params }: { params: Promise<{ id: st
                 — {entree.libelle}
                 <span className="text-neutral-500">
                   {' '}
-                  · {FORMAT_DATE_HEURE.format(new Date(entree.le))}
-                  {entree.parNomAffichage ? ` · par ${entree.parNomAffichage}` : ''}
+                  · {formaterDateHeure(entree.le)}
+                  {/*
+                    Le nom de l'auteur est capturé à l'écriture depuis la migration
+                    20260813160000 et ne devrait plus manquer pour une nouvelle
+                    entrée. Un `null` reste possible sur une ligne antérieure à cette
+                    migration : on le dit plutôt que de l'omettre en silence.
+                  */}
+                  · par {entree.parNomAffichage ?? 'auteur inconnu'}
                 </span>
                 {entree.motif ? <p className="text-neutral-600">{entree.motif}</p> : null}
               </li>
@@ -1201,7 +1559,14 @@ Puis, avec un compte administrateur jetable et Playwright, sur un membre de test
    montre trois entrées, dont le retrait automatique avec son motif ;
 5. attribuer « Baptisé d'eau » — groupe non exclusif : il s'ajoute **sans** retirer le premier ;
 6. retirer un statut demande confirmation ; la refuser ne change rien ;
-7. une date d'acquisition dans le futur est refusée avec un message lisible.
+7. une date d'acquisition dans le futur est refusée avec un message lisible ;
+8. retirer un statut **en saisissant un motif** : le motif apparaît au journal, sur la
+   ligne du retrait. Vérifie-le à l'écran, puis en base — c'est la seule preuve que le
+   champ est bien câblé jusqu'à `journal_statuts.motif` ; un champ qui ne remonte nulle
+   part se voit d'autant moins qu'il est facultatif ;
+9. retirer un statut **sans** motif : le retrait aboutit, et le journal n'affiche
+   simplement pas de motif sur cette ligne. Sans ce cas, rien ne distingue « facultatif »
+   de « obligatoire mais jamais testé à vide ».
 
 Supprime ensuite le membre de test et le compte jetable, et confirme que `membres`,
 `membre_statuts` et `journal_statuts` sont revenus à leur état initial.
@@ -1246,6 +1611,13 @@ import { clientAdmin } from '@/lib/supabase/admin'
 
 export type EtatCatalogue = { erreur: string | null }
 
+// Code Postgres du unique_violation. On discrimine sur `error.code`, jamais sur le
+// texte du message : un doublon réel doit être annoncé franchement, mais tout autre
+// échec (panne, identifiant de groupe forgé, violation de clé étrangère) ne doit pas
+// laisser croire à un doublon qui n'en est pas un. Même principe que
+// `src/app/membres/[id]/statuts/actions.ts`, qui discrimine sur `error.details`.
+const CODE_VIOLATION_UNICITE = '23505'
+
 export async function creerGroupe(
   _etat: EtatCatalogue,
   donnees: FormData,
@@ -1260,7 +1632,20 @@ export async function creerGroupe(
 
   const { error } = await clientAdmin().from('groupes_statut').insert({ nom, exclusif })
   if (error) {
-    return { erreur: 'Ce groupe existe déjà, ou n’a pas pu être créé.' }
+    // Trace serveur systématique : un administrateur qui signale « ça ne marche pas »
+    // doit trouver quelque chose d'exploitable dans les journaux, pas seulement un
+    // message générique à l'écran. Même exigence que pour `attribuerStatut`.
+    console.error("creerGroupe : échec de l'insertion", {
+      nom,
+      exclusif,
+      code: error.code,
+      details: error.details,
+      message: error.message,
+    })
+    if (error.code === CODE_VIOLATION_UNICITE) {
+      return { erreur: 'Ce groupe existe déjà.' }
+    }
+    return { erreur: "Le groupe n'a pas pu être créé." }
   }
 
   revalidatePath('/statuts')
@@ -1283,11 +1668,26 @@ export async function creerStatut(
     .from('statuts')
     .insert({ groupe_id: groupeId, libelle })
   if (error) {
-    return { erreur: 'Ce statut existe déjà dans ce groupe, ou n’a pas pu être créé.' }
+    console.error("creerStatut : échec de l'insertion", {
+      groupeId,
+      libelle,
+      code: error.code,
+      details: error.details,
+      message: error.message,
+    })
+    if (error.code === CODE_VIOLATION_UNICITE) {
+      return { erreur: 'Ce statut existe déjà dans ce groupe.' }
+    }
+    return { erreur: "Le statut n'a pas pu être créé." }
   }
 
   revalidatePath('/statuts')
-  revalidatePath('/membres')
+  // Les écrans qui AFFICHENT un libellé de statut sont les fiches membres et leurs
+  // écrans de statuts, pas l'annuaire — celui-ci ne montre aucun statut. Le `type`
+  // est obligatoire sur un segment dynamique, et `/membres/[id]` n'invalide PAS
+  // `/membres/[id]/statuts` : chacun se déclare.
+  revalidatePath('/membres/[id]', 'page')
+  revalidatePath('/membres/[id]/statuts', 'page')
   return { erreur: null }
 }
 
@@ -1304,7 +1704,15 @@ export async function reactiverStatut(donnees: FormData): Promise<void> {
 
 async function basculerStatut(donnees: FormData, actif: boolean): Promise<void> {
   const id = donnees.get('id')
-  if (typeof id !== 'string' || id.length === 0) return
+  if (typeof id !== 'string' || id.length === 0) {
+    // Champ caché absent : atteignable seulement par une requête forgée, jamais par
+    // l'interface. Le risque est donc faible, mais on journalise quand même — un cas
+    // qui ne devrait jamais arriver et qui arrive est un symptôme. Même raisonnement
+    // que `attribuerStatut`/`retirerStatut` dans
+    // `src/app/membres/[id]/statuts/actions.ts`.
+    console.error('basculerStatut : identifiant manquant dans le formulaire', { actif })
+    return
+  }
 
   // `.select('id')` puis vérification : une mise à jour qui ne touche aucune ligne
   // ne renvoie aucune erreur, et le bouton aurait l'air d'avoir fonctionné.
@@ -1319,7 +1727,8 @@ async function basculerStatut(donnees: FormData, actif: boolean): Promise<void> 
   }
 
   revalidatePath('/statuts')
-  revalidatePath('/membres')
+  revalidatePath('/membres/[id]', 'page')
+  revalidatePath('/membres/[id]/statuts', 'page')
 }
 ```
 
@@ -1484,7 +1893,7 @@ export default async function PageCatalogueStatuts() {
           <h2 className="mb-1 text-lg font-medium">{groupe.nom}</h2>
           <p className="mb-3 text-sm text-neutral-500">
             {groupe.exclusif
-              ? 'Un membre ne peut porter qu’un seul statut de ce groupe.'
+              ? "Un membre ne peut porter qu'un seul statut de ce groupe."
               : 'Les statuts de ce groupe se cumulent.'}
           </p>
           {groupe.statuts.length === 0 ? (
@@ -1579,8 +1988,14 @@ Ajouter, après la liste des informations :
       <section className="mt-8">
         <div className="mb-3 flex items-baseline justify-between gap-4">
           <h2 className="text-lg font-medium">Statuts</h2>
+          {/*
+            « Gérer » promettrait un pouvoir que ce rôle n'a pas : un non-administrateur
+            atteint le même écran mais n'y trouve ni formulaire d'attribution ni bouton de
+            retrait, seulement la consultation et le journal — c'est ce dernier qui décrit
+            le mieux ce que l'écran lui apporte de plus que cette fiche.
+          */}
           <Link href={`/membres/${membre.id}/statuts`} className="text-sm underline underline-offset-4">
-            Gérer
+            {estAdmin ? 'Gérer' : 'Journal'}
           </Link>
         </div>
         {statuts.length === 0 ? (
@@ -1593,8 +2008,14 @@ Ajouter, après la liste des informations :
                 className="rounded-full border border-neutral-300 px-3 py-1 text-sm"
               >
                 {statut.libelle}
+                {/*
+                  `formaterDateSeule` et non la chaîne brute : `date_acquisition` est une
+                  colonne Postgres `date`, sérialisée en `AAAA-MM-JJ`. Le formateur force
+                  `timeZone: 'UTC'` — sans quoi, à l'ouest de Greenwich, le 15 janvier
+                  s'afficherait au 14. Une date lisible et fausse est pire qu'une date brute.
+                */}
                 {statut.dateAcquisition ? (
-                  <span className="text-neutral-500"> · {statut.dateAcquisition}</span>
+                  <span className="text-neutral-500"> · {formaterDateSeule(statut.dateAcquisition)}</span>
                 ) : null}
               </li>
             ))}
@@ -1722,7 +2143,7 @@ beforeAll(async () => {
 
   // Un statut sur chaque membre, posé par la fonction atomique.
   for (const membre of [idMembreActif, idMembreArchive]) {
-    const { error: erreurRpc } = await admin.schema('prive').rpc('attribuer_statut', {
+    const { error: erreurRpc } = await admin.rpc('attribuer_statut', {
       p_membre: membre,
       p_statut: idStatutRepenti,
       p_date: null,
@@ -1899,7 +2320,7 @@ describe('compte désactivé', () => {
 - [ ] **Step 2 : Lancer les tests**
 
 Run : `npm run test:rls`
-Expected : rapporte le **compte réel** — il devrait passer de 22 à 34 tests (12 nouveaux).
+Expected : rapporte le **compte réel** — il devrait passer de 22 à 38 tests (16 nouveaux).
 
 **Si un test échoue, la faille est réelle : corrige la migration, jamais le test.** Si une
 assertion sur `42501` échoue, relève le code obtenu, arrête-toi et renvoie DONE_WITH_CONCERNS.
@@ -2052,7 +2473,7 @@ test("attribuer un second statut du meme groupe evince le premier", async ({ pag
   expect(data).toHaveLength(3)
 })
 
-test('un statut d’un autre groupe se cumule sans rien retirer', async ({ page }) => {
+test("un statut d'un autre groupe se cumule sans rien retirer", async ({ page }) => {
   await seConnecter(page, IDENT_ADMIN, MDP_ADMIN)
   await page.goto(`/membres/${idMembre}/statuts`)
 
@@ -2136,8 +2557,8 @@ git commit -m "test: couvrir l'attribution des statuts de bout en bout"
 
 - [ ] **Step 1 : Vérifier l'ensemble des suites**
 
-Run, dans l'ordre : `npx tsc --noEmit`, `npm run lint`, `npm test` (48 tests),
-`npm run test:rls` (34 tests), `npm run test:e2e` (11 tests), `npm run build`.
+Run, dans l'ordre : `npx tsc --noEmit`, `npm run lint`, `npm test` (54 tests),
+`npm run test:rls` (38 tests), `npm run test:e2e` (14 tests), `npm run build`.
 Expected : les six passent. Rapporte les comptes réels.
 
 - [ ] **Step 2 : Compléter le README**
@@ -2149,16 +2570,27 @@ par groupe, dates d'acquisition, journal de tous les mouvements, catalogue admin
 c'est le neuvième enseignement de la phase 1a : une documentation devient fausse sans que rien
 ne bouge autour d'elle.
 
-- [ ] **Step 3 : Déployer**
+- [ ] **Step 3 : Déployer un aperçu**
 
-Le déploiement automatique est actif : la fusion sur `main` déploiera. Pour vérifier avant
-fusion, lance `npx vercel --prod` et rapporte l'URL.
+Le déploiement automatique est actif : **la fusion sur `main` déploiera en production**. La
+fusion est une décision de l'utilisateur, elle ne se prend pas ici.
 
-- [ ] **Step 4 : Vérifier en production**
+Lance donc `npx vercel` **sans** `--prod` : un déploiement d'aperçu, sur une URL distincte de
+l'URL de production. Rapporte cette URL.
 
-Sur l'URL de production, avec un compte administrateur jetable et Playwright : attribuer un
+`npx vercel --prod` publierait sur l'URL de production du code non fusionné — l'inverse de ce
+qu'on veut vérifier, et une action visible de l'extérieur qu'on ne prend pas de sa propre
+initiative.
+
+- [ ] **Step 4 : Vérifier sur l'aperçu**
+
+Sur l'URL d'aperçu, avec un compte administrateur jetable et Playwright : attribuer un
 statut, en attribuer un second du même groupe exclusif, vérifier l'éviction et le journal, puis
 nettoyer entièrement.
+
+Attention : l'aperçu vise **la même base que la production** — c'est le choix assumé d'un seul
+projet Supabase. Ce que tu écris pendant cette vérification est donc écrit pour de bon, et le
+nettoyage n'est pas une politesse.
 
 Vérifie enfin que la signature de la clé de service est absente du code servi au navigateur,
 **avec un contrôle positif** sur un texte connu.
@@ -2174,9 +2606,9 @@ git commit -m "chore: documenter et deployer la phase 1b"
 
 ## Critères d'achèvement de la phase 1b
 
-- [ ] `npm test` passe — 48 tests
-- [ ] `npm run test:rls` passe — 34 tests, dont le contrôle positif du compte réactivé
-- [ ] `npm run test:e2e` passe — 11 tests, dont la preuve par mutation du garde d'attribution
+- [ ] `npm test` passe — 54 tests
+- [ ] `npm run test:rls` passe — 38 tests, dont le contrôle positif du compte réactivé
+- [ ] `npm run test:e2e` passe — 14 tests, dont deux requetes forgees qui eprouvent le garde serveur lui-meme, et non le seul masquage de l'interface
 - [ ] `npm run build` passe sans erreur
 - [ ] Aucune politique RLS d'écriture n'existe sur aucune table
 - [ ] Toute page et toute action traverse `exigerProfilActif` ou `exigerAdministrateur` ;

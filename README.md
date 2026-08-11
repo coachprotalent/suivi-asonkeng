@@ -66,12 +66,38 @@ La phase 1a livre le registre des membres, socle des phases suivantes :
   réactivation ; une antenne désactivée reste visible et son rattachement aux fiches existantes
   n'est jamais perdu.
 
+## Phase 1b : les statuts d'un membre
+
+La phase 1b ajoute des statuts attribuables à un membre (`/membres/[id]/statuts`) et leur
+catalogue administrable (`/statuts`, lien depuis le tableau de bord) :
+
+- **Cumulables, avec exclusivité par groupe** — un membre peut porter plusieurs statuts à la
+  fois, mais un groupe marqué exclusif (par exemple « Cheminement ») n'en tolère qu'un seul :
+  en attribuer un second du même groupe évince automatiquement le premier. L'invariant est posé
+  deux fois — une fonction Postgres qui évince avant d'insérer sur le chemin normal, et un
+  déclencheur `before insert or update` qui refuse toute violation directe de la table.
+- **Date d'acquisition et note facultatives** — la date, si renseignée, doit exister au calendrier
+  et ne peut pas être dans le futur ; une valeur absente lors d'une réattribution ne remplace
+  jamais une date déjà connue.
+- **Journal de tous les mouvements** — chaque ajout et chaque retrait est inscrit dans
+  `journal_statuts`, avec le nom d'affichage de son auteur capturé au moment de l'écriture (donc
+  lisible même si le compte de l'auteur est ensuite supprimé). La table est protégée par un
+  déclencheur qui refuse toute mise à jour : le journal ne se réécrit pas, seule la suppression en
+  cascade avec le membre reste possible.
+- **Motif facultatif au retrait** — un administrateur peut retirer un statut sans en préciser la
+  raison ; s'il en donne une, elle est journalisée avec le mouvement.
+- **Catalogue administrable** — un administrateur crée des groupes et des statuts, désactive un
+  statut existant (il disparaît du formulaire d'attribution sans effacer les attributions déjà
+  posées) et le réactive depuis le même écran.
+
 ### Règle de sécurité
 
 Toute page et toute Server Action de l'application passent par `exigerProfilActif` ou
 `exigerAdministrateur` (`src/lib/securite/garde.ts`) — c'est l'unique point d'entrée qui vérifie
-la session et, le cas échéant, le rôle. Aucune écriture n'est possible depuis le navigateur : les
-créations, modifications, archivages et bascules d'antenne passent exclusivement par des Server
-Actions exécutées côté serveur, jamais par un appel direct du client à Supabase. Côté base, les
-politiques RLS n'autorisent que des `SELECT` : toute écriture transite par le serveur, qui agit
-avec la clé de service, jamais exposée au navigateur.
+la session et, le cas échéant, le rôle ; aucun appel direct à `profilCourant` n'existe ailleurs
+dans le code de l'application. Aucune écriture n'est possible depuis le navigateur : les
+créations, modifications, archivages, bascules d'antenne, attributions et retraits de statuts
+passent exclusivement par des Server Actions exécutées côté serveur, jamais par un appel direct
+du client à Supabase. Côté base, les politiques RLS n'autorisent que des `SELECT` sur toutes les
+tables : toute écriture transite par le serveur, qui agit avec la clé de service, jamais exposée
+au navigateur.
