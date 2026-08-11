@@ -888,7 +888,16 @@ export type Profil = {
   actif: boolean
 }
 
-/** Profil du compte connecté, ou null si personne n'est connecté. */
+/**
+ * Profil du compte connecté, ou `null`. Trois situations renvoient `null` et ne sont
+ * volontairement pas distinguées, parce qu'elles appellent toutes la même réaction —
+ * renvoyer vers l'écran de connexion : personne n'est connecté, le compte n'a pas de
+ * fiche profil, ou le compte est désactivé.
+ *
+ * Le filtre `actif` est un contrôle d'accès, pas un confort. Désactiver un compte ne
+ * révoque pas son jeton : sans ce filtre, la personne garderait l'accès jusqu'à
+ * expiration, environ une heure. La politique RLS ne filtre pas non plus sur `actif`.
+ */
 export async function profilCourant(): Promise<Profil | null> {
   const supabase = await clientServeur()
 
@@ -901,6 +910,7 @@ export async function profilCourant(): Promise<Profil | null> {
     .from('profils')
     .select('id, identifiant, nom_affichage, membre_id, est_racine, actif')
     .eq('id', user.id)
+    .eq('actif', true)
     .maybeSingle()
 
   if (!data) return null
