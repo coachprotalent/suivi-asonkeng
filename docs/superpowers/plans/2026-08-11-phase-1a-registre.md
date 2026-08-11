@@ -198,7 +198,20 @@ export async function exigerAdministrateur(): Promise<Profil> {
 }
 ```
 
-- [ ] **Step 5 : Faire adopter le garde par le tableau de bord**
+- [ ] **Step 5 : Faire adopter le garde partout où il doit l'être**
+
+Un garde qui centralise un contrôle ne sert à rien tant que des appelants continuent de le
+refaire à la main : la copie oubliée devient la faille. Cherche donc **tous** les appels directs
+à `profilCourant` hors de `garde.ts` et fais-les passer par le garde.
+
+À ce jour il y en a deux — le tableau de bord et l'action de changement de mot de passe. Dans
+`src/app/changer-mot-de-passe/actions.ts`, remplacer le bloc qui appelle `profilCourant()` puis
+redirige vers `/deconnexion` par un simple `await exigerProfilActif()`, en important le garde
+depuis `@/lib/securite/garde`, et retirer l'import de `profilCourant` devenu inutile.
+
+Vérifie ensuite par une recherche qu'aucun appel direct ne subsiste hors de `garde.ts`.
+
+- [ ] **Step 5b : Faire adopter le garde par le tableau de bord**
 
 Dans `src/app/tableau-de-bord/page.tsx`, remplacer l'appel direct à `profilCourant()` et sa
 redirection manuelle par :
@@ -1847,15 +1860,35 @@ describe('écriture refusée par défaut', () => {
 })
 
 describe('compte désactivé', () => {
+  // Ces deux tests sont la seule preuve d'exécution de `prive.est_actif()`. La fonction
+  // est `SECURITY DEFINER` — elle échappe volontairement à la RLS — et vérifier sa
+  // signature ne prouve rien de sa logique. Ici on la met réellement à l'épreuve, sur
+  // les deux tables dont les politiques en dépendent.
   it('un compte désactivé ne lit plus les membres', async () => {
     await admin.from('profils').update({ actif: false }).eq('id', idSimple)
     try {
       const { data } = await clientSimple.from('membres').select('id').eq('id', idMembreActif)
-      // `prive.est_actif()` renvoie faux : la politique ne laisse plus passer aucune ligne.
       expect(data).toEqual([])
     } finally {
       await admin.from('profils').update({ actif: true }).eq('id', idSimple)
     }
+  })
+
+  it('un compte désactivé ne lit plus les antennes', async () => {
+    await admin.from('profils').update({ actif: false }).eq('id', idSimple)
+    try {
+      const { data } = await clientSimple.from('antennes').select('id')
+      expect(data).toEqual([])
+    } finally {
+      await admin.from('profils').update({ actif: true }).eq('id', idSimple)
+    }
+  })
+
+  it('un compte réactivé lit de nouveau les membres', async () => {
+    // Contrôle positif : sans lui, les deux tests ci-dessus passeraient aussi si la
+    // lecture était cassée pour une raison sans rapport avec `actif`.
+    const { data } = await clientSimple.from('membres').select('id').eq('id', idMembreActif)
+    expect(data).toHaveLength(1)
   })
 })
 ```
@@ -1863,7 +1896,7 @@ describe('compte désactivé', () => {
 - [ ] **Step 2 : Lancer les tests**
 
 Run : `npm run test:rls`
-Expected : 20 tests passent — 10 hérités de la phase 0 et 10 nouveaux.
+Expected : 22 tests passent — 10 hérités de la phase 0 et 12 nouveaux.
 
 **Si un test échoue, la faille est réelle : corrigez la migration, jamais le test.** En
 particulier, si `expect(error!.code).toBe('42501')` échoue, relevez le code réellement obtenu et
@@ -2040,7 +2073,7 @@ git commit -m "test: couvrir le parcours annuaire de bout en bout"
 - [ ] **Step 1 : Vérifier l'ensemble des suites**
 
 Run, dans l'ordre : `npx tsc --noEmit`, `npm run lint`, `npm test` (30 tests),
-`npm run test:rls` (20 tests), `npm run test:e2e` (6 tests), `npm run build`.
+`npm run test:rls` (22 tests), `npm run test:e2e` (6 tests), `npm run build`.
 Expected : les six passent.
 
 - [ ] **Step 2 : Compléter le README**
@@ -2078,7 +2111,7 @@ git commit -m "chore: documenter et deployer la phase 1a"
 ## Critères d'achèvement de la phase 1a
 
 - [ ] `npm test` passe — 30 tests, dont 15 sur la validation des fiches
-- [ ] `npm run test:rls` passe — 20 tests, dont 10 sur les membres et les antennes
+- [ ] `npm run test:rls` passe — 22 tests, dont 12 sur les membres et les antennes
 - [ ] `npm run test:e2e` passe — 6 tests
 - [ ] `npm run build` passe sans erreur
 - [ ] La requête sur `pg_policies` ne renvoie **que** des politiques `SELECT`
