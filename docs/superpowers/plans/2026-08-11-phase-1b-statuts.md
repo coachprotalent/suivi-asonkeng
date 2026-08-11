@@ -2558,7 +2558,7 @@ git commit -m "test: couvrir l'attribution des statuts de bout en bout"
 - [ ] **Step 1 : Vérifier l'ensemble des suites**
 
 Run, dans l'ordre : `npx tsc --noEmit`, `npm run lint`, `npm test` (54 tests),
-`npm run test:rls` (38 tests), `npm run test:e2e` (11 tests), `npm run build`.
+`npm run test:rls` (38 tests), `npm run test:e2e` (13 tests), `npm run build`.
 Expected : les six passent. Rapporte les comptes réels.
 
 - [ ] **Step 2 : Compléter le README**
@@ -2597,7 +2597,7 @@ git commit -m "chore: documenter et deployer la phase 1b"
 
 - [ ] `npm test` passe — 54 tests
 - [ ] `npm run test:rls` passe — 38 tests, dont le contrôle positif du compte réactivé
-- [ ] `npm run test:e2e` passe — 11 tests, dont la preuve par mutation du garde d'attribution
+- [ ] `npm run test:e2e` passe — 13 tests, dont deux requetes forgees qui eprouvent le garde serveur lui-meme, et non le seul masquage de l'interface
 - [ ] `npm run build` passe sans erreur
 - [ ] Aucune politique RLS d'écriture n'existe sur aucune table
 - [ ] Toute page et toute action traverse `exigerProfilActif` ou `exigerAdministrateur` ;
