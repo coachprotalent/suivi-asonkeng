@@ -101,7 +101,7 @@ export default async function PageStatuts({ params }: { params: Promise<{ id: st
       <section>
         <h2 className="mb-1 text-lg font-medium">Journal</h2>
         <p className="mb-4 text-sm text-neutral-500">
-          Chaque mouvement est conservé : c&apos;est la seule trace des modifications.
+          Chaque ajout et chaque retrait est conservé : c&apos;est la seule trace de ces mouvements.
         </p>
         {journal.length === 0 ? (
           <p className="text-neutral-600">Aucun mouvement enregistré.</p>
