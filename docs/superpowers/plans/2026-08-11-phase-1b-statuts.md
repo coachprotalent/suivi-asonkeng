@@ -1402,15 +1402,11 @@ import { notFound } from 'next/navigation'
 import { membreParId } from '@/lib/donnees/membres'
 import { rolesDuProfil } from '@/lib/donnees/profils'
 import { journalDuMembre, listerCatalogue, statutsDuMembre } from '@/lib/donnees/statuts'
+import { formaterDateHeure, formaterDateSeule } from '@/lib/format/date'
 import { exigerProfilActif } from '@/lib/securite/garde'
 import { retirerStatut } from './actions'
 import { BoutonRetirerStatut } from './bouton-retirer-statut'
 import { FormulaireStatut } from './formulaire-statut'
-
-const FORMAT_DATE_HEURE = new Intl.DateTimeFormat('fr-FR', {
-  dateStyle: 'short',
-  timeStyle: 'short',
-})
 
 export default async function PageStatuts({ params }: { params: Promise<{ id: string }> }) {
   const profil = await exigerProfilActif()
@@ -1420,13 +1416,16 @@ export default async function PageStatuts({ params }: { params: Promise<{ id: st
     notFound()
   }
 
-  const [statuts, journal, groupes, roles] = await Promise.all([
+  const [statuts, journal, roles] = await Promise.all([
     statutsDuMembre(membre.id),
     journalDuMembre(membre.id),
-    listerCatalogue(),
     rolesDuProfil(profil.id),
   ])
   const estAdmin = roles.includes('administrateur')
+  // Le catalogue ne sert qu'au formulaire d'attribution, rendu uniquement pour un
+  // administrateur : l'interroger pour tout visiteur — le cas le plus fréquent —
+  // ferait une requête inutile.
+  const groupes = estAdmin ? await listerCatalogue() : []
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
@@ -1459,7 +1458,7 @@ export default async function PageStatuts({ params }: { params: Promise<{ id: st
                   <p className="font-medium">{statut.libelle}</p>
                   <p className="text-sm text-neutral-500">
                     {statut.groupeNom}
-                    {statut.dateAcquisition ? ` · depuis le ${statut.dateAcquisition}` : ''}
+                    {statut.dateAcquisition ? ` · depuis le ${formaterDateSeule(statut.dateAcquisition)}` : ''}
                   </p>
                   {statut.note ? <p className="mt-1 text-sm">{statut.note}</p> : null}
                 </div>
@@ -1515,8 +1514,14 @@ export default async function PageStatuts({ params }: { params: Promise<{ id: st
                 — {entree.libelle}
                 <span className="text-neutral-500">
                   {' '}
-                  · {FORMAT_DATE_HEURE.format(new Date(entree.le))}
-                  {entree.parNomAffichage ? ` · par ${entree.parNomAffichage}` : ''}
+                  · {formaterDateHeure(entree.le)}
+                  {/*
+                    Le nom de l'auteur est capturé à l'écriture depuis la migration
+                    20260813160000 et ne devrait plus manquer pour une nouvelle
+                    entrée. Un `null` reste possible sur une ligne antérieure à cette
+                    migration : on le dit plutôt que de l'omettre en silence.
+                  */}
+                  · par {entree.parNomAffichage ?? 'auteur inconnu'}
                 </span>
                 {entree.motif ? <p className="text-neutral-600">{entree.motif}</p> : null}
               </li>
@@ -1983,8 +1988,14 @@ Ajouter, après la liste des informations :
       <section className="mt-8">
         <div className="mb-3 flex items-baseline justify-between gap-4">
           <h2 className="text-lg font-medium">Statuts</h2>
+          {/*
+            « Gérer » promettrait un pouvoir que ce rôle n'a pas : un non-administrateur
+            atteint le même écran mais n'y trouve ni formulaire d'attribution ni bouton de
+            retrait, seulement la consultation et le journal — c'est ce dernier qui décrit
+            le mieux ce que l'écran lui apporte de plus que cette fiche.
+          */}
           <Link href={`/membres/${membre.id}/statuts`} className="text-sm underline underline-offset-4">
-            Gérer
+            {estAdmin ? 'Gérer' : 'Journal'}
           </Link>
         </div>
         {statuts.length === 0 ? (
@@ -1997,8 +2008,14 @@ Ajouter, après la liste des informations :
                 className="rounded-full border border-neutral-300 px-3 py-1 text-sm"
               >
                 {statut.libelle}
+                {/*
+                  `formaterDateSeule` et non la chaîne brute : `date_acquisition` est une
+                  colonne Postgres `date`, sérialisée en `AAAA-MM-JJ`. Le formateur force
+                  `timeZone: 'UTC'` — sans quoi, à l'ouest de Greenwich, le 15 janvier
+                  s'afficherait au 14. Une date lisible et fausse est pire qu'une date brute.
+                */}
                 {statut.dateAcquisition ? (
-                  <span className="text-neutral-500"> · {statut.dateAcquisition}</span>
+                  <span className="text-neutral-500"> · {formaterDateSeule(statut.dateAcquisition)}</span>
                 ) : null}
               </li>
             ))}
@@ -2540,7 +2557,7 @@ git commit -m "test: couvrir l'attribution des statuts de bout en bout"
 
 - [ ] **Step 1 : Vérifier l'ensemble des suites**
 
-Run, dans l'ordre : `npx tsc --noEmit`, `npm run lint`, `npm test` (48 tests),
+Run, dans l'ordre : `npx tsc --noEmit`, `npm run lint`, `npm test` (54 tests),
 `npm run test:rls` (34 tests), `npm run test:e2e` (11 tests), `npm run build`.
 Expected : les six passent. Rapporte les comptes réels.
 
@@ -2578,7 +2595,7 @@ git commit -m "chore: documenter et deployer la phase 1b"
 
 ## Critères d'achèvement de la phase 1b
 
-- [ ] `npm test` passe — 48 tests
+- [ ] `npm test` passe — 54 tests
 - [ ] `npm run test:rls` passe — 34 tests, dont le contrôle positif du compte réactivé
 - [ ] `npm run test:e2e` passe — 11 tests, dont la preuve par mutation du garde d'attribution
 - [ ] `npm run build` passe sans erreur
