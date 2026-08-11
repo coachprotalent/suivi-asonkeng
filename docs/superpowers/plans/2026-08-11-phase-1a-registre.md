@@ -646,7 +646,10 @@ create table public.membres (
   email_contact text,
   ville text,
   pays text,
-  antenne_id uuid references public.antennes (id) on delete set null,
+  -- `restrict` et non `set null` : supprimer une antenne à laquelle des membres sont
+  -- rattachés doit échouer bruyamment, pas les détacher en silence. La voie prévue
+  -- est la désactivation (`actif = false`), qui préserve l'information.
+  antenne_id uuid references public.antennes (id) on delete restrict,
   situation public.situation_membre,
   domaine_etude text,
   faiseur_de_disciple_id uuid references public.membres (id) on delete set null,
