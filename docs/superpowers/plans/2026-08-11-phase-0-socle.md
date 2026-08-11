@@ -1615,6 +1615,7 @@ const CLE_SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY!
 const MDP = 'MotDePasseDeTest!2026'
 const IDENT_SIMPLE = 'test.rls.simple'
 const IDENT_ADMIN = 'test.rls.admin'
+const IDENT_INTRUS = 'test.rls.intrus'
 
 const admin = createClient(URL, CLE_SERVICE, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -1628,11 +1629,25 @@ async function creerCompte(identifiant: string, estAdmin: boolean): Promise<stri
   })
   if (error || !data.user) throw new Error(`création impossible : ${error?.message}`)
 
-  await admin
+  // Vérifier ces insertions n'est pas du zèle : le nettoyage retrouve les comptes
+  // par la table `profils`. Une insertion qui échouerait en silence laisserait un
+  // compte d'authentification que plus aucune exécution ne saurait retrouver.
+  const { error: erreurProfil } = await admin
     .from('profils')
     .insert({ id: data.user.id, identifiant, nom_affichage: `Test ${identifiant}` })
+  if (erreurProfil) {
+    await admin.auth.admin.deleteUser(data.user.id)
+    throw new Error(`insertion du profil impossible : ${erreurProfil.message}`)
+  }
+
   if (estAdmin) {
-    await admin.from('roles_profil').insert({ profil_id: data.user.id, role: 'administrateur' })
+    const { error: erreurRole } = await admin
+      .from('roles_profil')
+      .insert({ profil_id: data.user.id, role: 'administrateur' })
+    if (erreurRole) {
+      await admin.auth.admin.deleteUser(data.user.id)
+      throw new Error(`attribution du rôle impossible : ${erreurRole.message}`)
+    }
   }
   return data.user.id
 }
@@ -1651,7 +1666,16 @@ async function connecter(identifiant: string): Promise<SupabaseClient> {
 
 async function supprimerCompte(identifiant: string) {
   const { data } = await admin.from('profils').select('id').eq('identifiant', identifiant).maybeSingle()
-  if (data) await admin.auth.admin.deleteUser(data.id)
+  if (data) {
+    await admin.auth.admin.deleteUser(data.id)
+    return
+  }
+
+  // Rattrapage : sans fiche profil, le compte d'authentification resterait
+  // introuvable par la recherche ci-dessus et survivrait à toutes les exécutions.
+  const { data: comptes } = await admin.auth.admin.listUsers()
+  const orphelin = comptes?.users.find((u) => u.email === identifiantVersEmail(identifiant))
+  if (orphelin) await admin.auth.admin.deleteUser(orphelin.id)
 }
 
 let idSimple: string
@@ -1692,9 +1716,17 @@ describe('lecture de profils', () => {
     expect(data!.map((l) => l.id)).toEqual(expect.arrayContaining([idSimple, idAdmin]))
   })
 
-  it('un visiteur anonyme ne lit aucun profil', async () => {
-    const { data } = await clientAnonyme.from('profils').select('id')
-    expect(data ?? []).toEqual([])
+  it('un visiteur anonyme se voit refuser la lecture', async () => {
+    const { data, error } = await clientAnonyme.from('profils').select('id')
+
+    // Vérifier l'erreur, et pas seulement l'absence de données. `data` vaut `null`
+    // pour n'importe quelle panne — table renommée, réseau coupé, mauvais projet —
+    // et une assertion qui se contenterait de `data` resterait verte alors que la
+    // sécurité serait cassée. Le code `42501` est le refus de privilège Postgres :
+    // le rôle anonyme n'a aucun droit de lecture, le refus tombe même avant la RLS.
+    expect(error).not.toBeNull()
+    expect(error!.code).toBe('42501')
+    expect(data).toBeNull()
   })
 })
 
@@ -1712,10 +1744,20 @@ describe('écriture refusée par défaut', () => {
   })
 
   it('un utilisateur ne peut pas insérer un profil', async () => {
-    const { error } = await clientSimple
-      .from('profils')
-      .insert({ id: idSimple, identifiant: 'test.rls.intrus', nom_affichage: 'Intrus' })
+    // Un identifiant neuf, jamais `idSimple` : réutiliser une clé existante ferait
+    // échouer l'insertion sur une collision de clé primaire, et le test resterait
+    // vert même si l'écriture venait à être autorisée.
+    const { error } = await clientSimple.from('profils').insert({
+      id: crypto.randomUUID(),
+      identifiant: IDENT_INTRUS,
+      nom_affichage: 'Intrus',
+    })
     expect(error).not.toBeNull()
+    expect(error!.code).toBe('42501')
+
+    // Et confirmer en base : le retour d'appel seul ne prouve pas l'absence d'écriture.
+    const { data } = await admin.from('profils').select('id').eq('identifiant', IDENT_INTRUS)
+    expect(data).toEqual([])
   })
 
   it('un utilisateur ne peut pas supprimer un profil', async () => {
@@ -1743,6 +1785,10 @@ describe('écriture refusée par défaut', () => {
       .eq('id', idSimple)
       .select()
     expect(error).not.toBeNull()
+
+    // Même exigence que pour les autres écritures : vérifier en base.
+    const { data } = await admin.from('profils').select('nom_affichage').eq('id', idSimple).single()
+    expect(data!.nom_affichage).not.toBe('Modifié')
   })
 })
 ```
