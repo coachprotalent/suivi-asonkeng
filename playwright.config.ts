@@ -7,7 +7,10 @@ export default defineConfig({
   webServer: {
     command: 'npm run dev',
     url: 'http://localhost:3000/connexion',
-    reuseExistingServer: true,
+    // Réutiliser un serveur déjà lancé fait courir le risque de tester du code
+    // périmé, laissé par une session précédente. On l'accepte en local, où c'est
+    // un confort, jamais en intégration continue.
+    reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },
 })
