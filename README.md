@@ -50,7 +50,10 @@ strictement additives. **Ne jamais exécuter `supabase db reset`.**
 
 L'amorçage des antennes dans `20260812110000_antennes.sql` n'est **pas idempotent** : il insère
 Batouri, Cameroun et France sans vérifier leur présence. Une restauration depuis zéro échouera sur
-la contrainte d'unicité (`antennes_nom_key`) si ces antennes existent déjà.
+la contrainte d'unicité (`antennes_nom_key`) si ces antennes existent déjà. Il en va de même pour
+l'amorçage du catalogue des statuts dans `20260813100000_statuts.sql` : il insère 2 groupes et 5
+statuts sans condition, et échouera pour la même raison (`groupes_statut_nom_key`,
+`statuts_libelle_unique_par_groupe`) si une restauration les retrouve déjà présents.
 
 ## Phase 1a : le registre des membres
 
