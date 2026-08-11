@@ -993,6 +993,56 @@ export async function journalDuMembre(membreId: string): Promise<EntreeJournal[]
 Run : `npx tsc --noEmit`, `npm run lint`, `npm test`.
 Expected : les trois passent.
 
+- [ ] **Step 2 bis : Éprouver les requêtes contre la vraie base**
+
+Les trois vérifications ci-dessus ne prouvent que la compilation. Un nom de colonne
+faux ou une jointure ambiguë vit dans une **chaîne de caractères** : ni `tsc`, ni
+ESLint, ni les tests unitaires ne peuvent les voir. Sans cette étape, une requête
+cassée ne se découvrirait qu'à la Task 6, trois tâches plus loin.
+
+Ces fonctions appellent `clientServeur()`, qui exige un contexte de requête Next :
+on ne peut pas les appeler directement depuis un script. On éprouve donc les
+**requêtes elles-mêmes**, à l'identique, avec la clé de service.
+
+Crée un fichier temporaire hors du dépôt (pas dans le répertoire de travail) :
+
+```javascript
+import { createClient } from '@supabase/supabase-js'
+
+const c = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { autoRefreshToken: false, persistSession: false },
+})
+
+// Les trois `select` sont copiés MOT POUR MOT depuis src/lib/donnees/statuts.ts.
+// Les recopier de mémoire ne prouverait rien sur le code réellement livré.
+const requetes = {
+  catalogue: c.from('groupes_statut').select('id, nom, exclusif, ordre, statuts(id, libelle, actif)'),
+  statutsDuMembre: c
+    .from('membre_statuts')
+    .select('statut_id, date_acquisition, note, statuts(libelle, groupes_statut(nom, ordre))')
+    .limit(1),
+  journal: c
+    .from('journal_statuts')
+    .select('id, action, le, motif, statuts(libelle), profils(nom_affichage)')
+    .limit(1),
+}
+
+for (const [nom, requete] of Object.entries(requetes)) {
+  const { error } = await requete
+  console.log(error ? `${nom} : ECHEC — ${error.code} ${error.message}` : `${nom} : OK`)
+}
+```
+
+Run : `node --env-file=.env.local <chemin-du-fichier-temporaire>`
+Expected : les trois lignes affichent `OK`.
+
+Si l'une échoue, le défaut est dans la requête du module, pas dans le script :
+corrige `src/lib/donnees/statuts.ts` et relance. Un `42703` désigne une colonne
+inexistante, un `PGRST200` une jointure que PostgREST ne sait pas résoudre.
+
+Supprime le fichier temporaire, puis vérifie qu'il n'apparaît pas dans
+`git status`.
+
 - [ ] **Step 3 : Commit**
 
 ```bash
