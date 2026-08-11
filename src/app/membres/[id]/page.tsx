@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { membreParId } from '@/lib/donnees/membres'
 import { rolesDuProfil } from '@/lib/donnees/profils'
+import { statutsDuMembre } from '@/lib/donnees/statuts'
 import { exigerProfilActif } from '@/lib/securite/garde'
 import { archiverMembre, desarchiverMembre } from '../actions'
 import { BoutonArchiver } from './bouton-archiver'
@@ -20,7 +21,10 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
     notFound()
   }
 
-  const roles = await rolesDuProfil(profil.id)
+  const [roles, statuts] = await Promise.all([
+    rolesDuProfil(profil.id),
+    statutsDuMembre(membre.id),
+  ])
   const estAdmin = roles.includes('administrateur')
 
   const lignes: Array<[string, string | null]> = [
@@ -59,9 +63,6 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
           ) : null}
         </div>
         <div className="flex items-center gap-4">
-          <Link href={`/membres/${membre.id}/statuts`} className="text-sm underline underline-offset-4">
-            Statuts
-          </Link>
           {estAdmin ? (
             <>
               <Link href={`/membres/${membre.id}/modifier`} className="text-sm underline underline-offset-4">
@@ -99,6 +100,32 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
           </div>
         ))}
       </dl>
+
+      <section className="mt-8">
+        <div className="mb-3 flex items-baseline justify-between gap-4">
+          <h2 className="text-lg font-medium">Statuts</h2>
+          <Link href={`/membres/${membre.id}/statuts`} className="text-sm underline underline-offset-4">
+            Gérer
+          </Link>
+        </div>
+        {statuts.length === 0 ? (
+          <p className="text-sm text-neutral-600">Aucun statut attribué.</p>
+        ) : (
+          <ul className="flex flex-wrap gap-2">
+            {statuts.map((statut) => (
+              <li
+                key={statut.statutId}
+                className="rounded-full border border-neutral-300 px-3 py-1 text-sm"
+              >
+                {statut.libelle}
+                {statut.dateAcquisition ? (
+                  <span className="text-neutral-500"> · {statut.dateAcquisition}</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </main>
   )
 }
