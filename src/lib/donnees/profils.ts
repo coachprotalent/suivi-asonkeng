@@ -46,3 +46,12 @@ export async function profilCourant(): Promise<Profil | null> {
     actif: data.actif,
   }
 }
+
+export type RoleApp = 'administrateur' | 'moderateur'
+
+/** Rôles explicitement attribués. Les droits « Utilisateur » sont le socle implicite. */
+export async function rolesDuProfil(profilId: string): Promise<RoleApp[]> {
+  const supabase = await clientServeur()
+  const { data } = await supabase.from('roles_profil').select('role').eq('profil_id', profilId)
+  return (data ?? []).map((ligne) => ligne.role as RoleApp)
+}

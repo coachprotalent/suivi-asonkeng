@@ -1,16 +1,8 @@
-import { redirect } from 'next/navigation'
 import { seDeconnecter } from '@/app/connexion/actions'
-import { profilCourant } from '@/lib/donnees/profils'
+import { exigerProfilActif } from '@/lib/securite/garde'
 
 export default async function PageTableauDeBord() {
-  const profil = await profilCourant()
-  if (!profil) {
-    // Vers /deconnexion et non /connexion : le jeton peut encore être valide alors
-    // que le profil est absent ou le compte désactivé. Rediriger vers /connexion
-    // ferait boucler le middleware indéfiniment. La route de déconnexion efface la
-    // session, ce qu'un composant serveur ne peut pas faire pendant son rendu.
-    redirect('/deconnexion')
-  }
+  const profil = await exigerProfilActif()
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-12">
