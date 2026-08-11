@@ -38,10 +38,40 @@ d'environnement doivent être renseignées sur Vercel, pour les environnements `
 Les autres variables de `.env.local` (jeton d'accès Supabase, identifiants du compte racine) ne
 servent qu'aux scripts locaux et ne doivent pas être transférées sur Vercel.
 
-Le déploiement automatique sur `git push` **n'est pas actif** : la liaison entre GitHub et Vercel
-n'a pas pu être établie. Seul `npx vercel --prod` déploie.
+> **Pousser sur `main` déploie en production.** La liaison GitHub–Vercel est active :
+> tout `git push` sur `main` met l'application en ligne, sur le projet Supabase qui
+> sert aussi de base de production. Il n'existe aucune intégration continue pour
+> arrêter un code fautif : lancez les six suites localement avant de pousser.
 
 ## Attention
 
 Un **seul** projet Supabase sert au développement et à la production. Les migrations sont
 strictement additives. **Ne jamais exécuter `supabase db reset`.**
+
+L'amorçage des antennes dans `20260812110000_antennes.sql` n'est **pas idempotent** : il insère
+Batouri, Cameroun et France sans vérifier leur présence. Une restauration depuis zéro échouera sur
+la contrainte d'unicité (`antennes_nom_key`) si ces antennes existent déjà.
+
+## Phase 1a : le registre des membres
+
+La phase 1a livre le registre des membres, socle des phases suivantes :
+
+- **Annuaire** (`/membres`) — liste des membres actifs, avec recherche libre et filtre par
+  antenne.
+- **Fiches** (`/membres/[id]`) — consultation du détail d'un membre ; création
+  (`/membres/nouveau`) et modification (`/membres/[id]/modifier`) réservées aux administrateurs.
+- **Archivage** — une fiche archivée quitte l'annuaire mais reste consultable par lien direct ;
+  l'action est confirmée avant exécution et n'efface aucune donnée.
+- **Antennes** (`/antennes`, réservé aux administrateurs) — création d'antennes, désactivation et
+  réactivation ; une antenne désactivée reste visible et son rattachement aux fiches existantes
+  n'est jamais perdu.
+
+### Règle de sécurité
+
+Toute page et toute Server Action de l'application passent par `exigerProfilActif` ou
+`exigerAdministrateur` (`src/lib/securite/garde.ts`) — c'est l'unique point d'entrée qui vérifie
+la session et, le cas échéant, le rôle. Aucune écriture n'est possible depuis le navigateur : les
+créations, modifications, archivages et bascules d'antenne passent exclusivement par des Server
+Actions exécutées côté serveur, jamais par un appel direct du client à Supabase. Côté base, les
+politiques RLS n'autorisent que des `SELECT` : toute écriture transite par le serveur, qui agit
+avec la clé de service, jamais exposée au navigateur.

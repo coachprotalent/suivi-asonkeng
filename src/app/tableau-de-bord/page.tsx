@@ -1,16 +1,12 @@
-import { redirect } from 'next/navigation'
+import Link from 'next/link'
 import { seDeconnecter } from '@/app/connexion/actions'
-import { profilCourant } from '@/lib/donnees/profils'
+import { rolesDuProfil } from '@/lib/donnees/profils'
+import { exigerProfilActif } from '@/lib/securite/garde'
 
 export default async function PageTableauDeBord() {
-  const profil = await profilCourant()
-  if (!profil) {
-    // Vers /deconnexion et non /connexion : le jeton peut encore être valide alors
-    // que le profil est absent ou le compte désactivé. Rediriger vers /connexion
-    // ferait boucler le middleware indéfiniment. La route de déconnexion efface la
-    // session, ce qu'un composant serveur ne peut pas faire pendant son rendu.
-    redirect('/deconnexion')
-  }
+  const profil = await exigerProfilActif()
+  const roles = await rolesDuProfil(profil.id)
+  const estAdmin = roles.includes('administrateur')
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-12">
@@ -28,9 +24,16 @@ export default async function PageTableauDeBord() {
         </form>
       </header>
 
-      <p className="text-neutral-600">
-        Le socle est en place. Les membres, les statuts et l&apos;arborescence arrivent en phase 1.
-      </p>
+      <div className="flex flex-wrap gap-6">
+        <Link href="/membres" className="underline underline-offset-4">
+          Consulter l&apos;annuaire
+        </Link>
+        {estAdmin ? (
+          <Link href="/antennes" className="underline underline-offset-4">
+            Gérer les antennes
+          </Link>
+        ) : null}
+      </div>
     </main>
   )
 }

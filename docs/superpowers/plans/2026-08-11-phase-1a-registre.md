@@ -154,7 +154,18 @@ export type RoleApp = 'administrateur' | 'moderateur'
 /** Rôles explicitement attribués. Les droits « Utilisateur » sont le socle implicite. */
 export async function rolesDuProfil(profilId: string): Promise<RoleApp[]> {
   const supabase = await clientServeur()
-  const { data } = await supabase.from('roles_profil').select('role').eq('profil_id', profilId)
+  const { data, error } = await supabase
+    .from('roles_profil')
+    .select('role')
+    .eq('profil_id', profilId)
+
+  // Ne jamais retomber sur une liste vide : « aucun rôle » et « la requête a
+  // échoué » auraient alors le même effet, et un administrateur verrait ses
+  // fonctions disparaître de l'écran sans qu'aucun message ne le lui dise.
+  if (error) {
+    throw new Error(`Lecture des rôles impossible : ${error.message}`)
+  }
+
   return (data ?? []).map((ligne) => ligne.role as RoleApp)
 }
 ```
@@ -198,7 +209,20 @@ export async function exigerAdministrateur(): Promise<Profil> {
 }
 ```
 
-- [ ] **Step 5 : Faire adopter le garde par le tableau de bord**
+- [ ] **Step 5 : Faire adopter le garde partout où il doit l'être**
+
+Un garde qui centralise un contrôle ne sert à rien tant que des appelants continuent de le
+refaire à la main : la copie oubliée devient la faille. Cherche donc **tous** les appels directs
+à `profilCourant` hors de `garde.ts` et fais-les passer par le garde.
+
+À ce jour il y en a deux — le tableau de bord et l'action de changement de mot de passe. Dans
+`src/app/changer-mot-de-passe/actions.ts`, remplacer le bloc qui appelle `profilCourant()` puis
+redirige vers `/deconnexion` par un simple `await exigerProfilActif()`, en important le garde
+depuis `@/lib/securite/garde`, et retirer l'import de `profilCourant` devenu inutile.
+
+Vérifie ensuite par une recherche qu'aucun appel direct ne subsiste hors de `garde.ts`.
+
+- [ ] **Step 5b : Faire adopter le garde par le tableau de bord**
 
 Dans `src/app/tableau-de-bord/page.tsx`, remplacer l'appel direct à `profilCourant()` et sa
 redirection manuelle par :
@@ -304,6 +328,27 @@ export type Antenne = {
   nom: string
   pays: string
   actif: boolean
+}
+
+/**
+ * Toutes les antennes, actives et désactivées, triées par nom.
+ *
+ * Réservée à l'écran d'administration : sans elle, une antenne désactivée
+ * disparaîtrait de l'interface **sans retour possible**, et il faudrait la clé de
+ * service pour la réactiver. Une fiche membre archivée, elle, reste consultable.
+ */
+export async function listerToutesAntennes(): Promise<Antenne[]> {
+  const supabase = await clientServeur()
+  const { data, error } = await supabase
+    .from('antennes')
+    .select('id, nom, pays, actif')
+    .order('actif', { ascending: false })
+    .order('nom')
+
+  if (error) {
+    throw new Error(`Lecture des antennes impossible : ${error.message}`)
+  }
+  return (data ?? []) as Antenne[]
 }
 
 /** Antennes actives, triées par nom. */
@@ -446,6 +491,48 @@ describe('normaliserFicheMembre', () => {
     })
     expect(fiche.domaineEtude).toBe('Informatique')
   })
+
+  it("efface le domaine d'étude quand la situation est absente", () => {
+    const fiche = normaliserFicheMembre({ ...minimal, domaineEtude: 'Informatique' })
+    expect(fiche.domaineEtude).toBeNull()
+  })
+})
+
+// Ces tests couvrent le chemin réellement emprunté en production. Les données
+// viennent d'un formulaire HTML : `FormData` ne rend que des chaînes, jamais des
+// nombres. Sans eux, la conversion pourrait être cassée ou supprimée sans que la
+// suite s'en aperçoive, et la fonction serait juste sous test et fausse en vrai.
+describe('normaliserFicheMembre — valeurs telles que les rend un formulaire', () => {
+  it('accepte un report initial donné sous forme de chaîne', () => {
+    expect(normaliserFicheMembre({ ...minimal, reportInitialAel: '5' }).reportInitialAel).toBe(5)
+  })
+
+  it('traite un report initial vidé par l’utilisateur comme zéro', () => {
+    expect(normaliserFicheMembre({ ...minimal, reportInitialAel: '' }).reportInitialAel).toBe(0)
+  })
+
+  it('refuse un report initial non numérique', () => {
+    expect(() => normaliserFicheMembre({ ...minimal, reportInitialAel: 'abc' })).toThrow(
+      FicheMembreInvalideError,
+    )
+  })
+
+  it('refuse un report initial décimal donné sous forme de chaîne', () => {
+    expect(() => normaliserFicheMembre({ ...minimal, reportInitialAel: '2.5' })).toThrow(
+      FicheMembreInvalideError,
+    )
+  })
+
+  it('traite un champ optionnel absent comme non renseigné', () => {
+    expect(normaliserFicheMembre({ ...minimal, ville: null }).ville).toBeNull()
+    expect(normaliserFicheMembre({ ...minimal, ville: undefined }).ville).toBeNull()
+  })
+
+  it('refuse un champ texte reçu sous une forme inattendue plutôt que de le perdre', () => {
+    expect(() => normaliserFicheMembre({ ...minimal, ville: 42 })).toThrow(
+      FicheMembreInvalideError,
+    )
+  })
 })
 ```
 
@@ -496,7 +583,14 @@ function texteObligatoire(valeur: unknown, champ: string): string {
 }
 
 function texteOptionnel(valeur: unknown): string | null {
-  const nettoye = typeof valeur === 'string' ? valeur.trim() : ''
+  // Absent et vide sont légitimes ; toute autre forme est une anomalie qu'il vaut
+  // mieux signaler que ramener silencieusement à `null`. Un `antenneId` avalé sans
+  // bruit détacherait un membre de son antenne sans que personne ne le voie.
+  if (valeur === null || valeur === undefined) return null
+  if (typeof valeur !== 'string') {
+    throw new FicheMembreInvalideError('un champ texte a reçu une valeur inattendue')
+  }
+  const nettoye = valeur.trim()
   return nettoye.length === 0 ? null : nettoye
 }
 
@@ -543,7 +637,7 @@ export function normaliserFicheMembre(brut: Record<string, unknown>): FicheMembr
 - [ ] **Step 4 : Lancer les tests et vérifier qu'ils passent**
 
 Run : `npm test`
-Expected : PASS, 30 tests réussis (15 hérités de la phase 0 et 15 nouveaux).
+Expected : PASS, 37 tests réussis (15 hérités de la phase 0 et 22 nouveaux).
 
 - [ ] **Step 5 : Commit**
 
@@ -584,7 +678,10 @@ create table public.membres (
   email_contact text,
   ville text,
   pays text,
-  antenne_id uuid references public.antennes (id) on delete set null,
+  -- `restrict` et non `set null` : supprimer une antenne à laquelle des membres sont
+  -- rattachés doit échouer bruyamment, pas les détacher en silence. La voie prévue
+  -- est la désactivation (`actif = false`), qui préserve l'information.
+  antenne_id uuid references public.antennes (id) on delete restrict,
   situation public.situation_membre,
   domaine_etude text,
   faiseur_de_disciple_id uuid references public.membres (id) on delete set null,
@@ -749,15 +846,31 @@ export async function listerMembres(filtres?: {
 
   const recherche = filtres?.recherche?.trim()
   if (recherche) {
-    // Échapper les caractères que PostgREST interprète dans un motif `ilike`.
-    const motif = `%${recherche.replace(/[%_,()]/g, '')}%`
-    requete = requete.or(`nom.ilike.${motif},prenom.ilike.${motif},ville.ilike.${motif}`)
+    // PostgREST réserve `, . : * ( )` dans la valeur d'un filtre. Plutôt que de
+    // retenir une liste de caractères à retirer — qui sera incomplète le jour où
+    // elle changera — on entoure la valeur de guillemets, forme dans laquelle
+    // PostgREST accepte tout, en n'échappant que ce que les guillemets exigent.
+    // Sans cela, chercher « St. Etienne » casse la requête, et comme l'erreur
+    // était ignorée, l'écran annonçait « aucun membre » pour une recherche valide.
+    const terme = recherche
+      .replace(/[\\"]/g, '\$&') // échapper l'antislash et le guillemet
+      .replace(/[%_]/g, '') // neutraliser les jokers de `ilike`
+    if (terme.length > 0) {
+      const motif = `"%${terme}%"`
+      requete = requete.or(`nom.ilike.${motif},prenom.ilike.${motif},ville.ilike.${motif}`)
+    }
   }
   if (filtres?.antenneId) {
     requete = requete.eq('antenne_id', filtres.antenneId)
   }
 
-  const { data } = await requete
+  const { data, error } = await requete
+  if (error) {
+    // Un échec ne doit pas être indistinguable d'un résultat vide : annoncer
+    // « aucun membre » alors que la requête a échoué est un mensonge silencieux.
+    throw new Error(`Lecture des membres impossible : ${error.message}`)
+  }
+
   return (data ?? []).map((l) => ({
     id: l.id as string,
     nom: l.nom as string,
@@ -768,7 +881,14 @@ export async function listerMembres(filtres?: {
   }))
 }
 
-/** Fiche complète, ou `null` si elle n'existe pas ou n'est pas visible par l'appelant. */
+/**
+ * Fiche complète, ou `null` si elle n'existe pas ou n'est pas visible par l'appelant.
+ *
+ * Contrairement à `listerMembres`, cette fonction ne filtre **pas** sur l'état : un
+ * administrateur doit pouvoir ouvrir une fiche archivée depuis un lien direct. Ce
+ * n'est pas un oubli, et la sécurité au niveau des lignes reste seule juge de ce qui
+ * est visible.
+ */
 export async function membreParId(id: string): Promise<MembreDetail | null> {
   const supabase = await clientServeur()
   const { data } = await supabase.from('membres').select(COLONNES_DETAIL).eq('id', id).maybeSingle()
@@ -794,7 +914,7 @@ export async function membreParId(id: string): Promise<MembreDetail | null> {
 
 - [ ] **Step 2 : Vérifier**
 
-Run : `npx tsc --noEmit`, `npm run lint`, `npm test` (30 tests).
+Run : `npx tsc --noEmit`, `npm run lint`, `npm test` (37 tests).
 Expected : les trois passent.
 
 - [ ] **Step 3 : Commit**
@@ -924,8 +1044,15 @@ export async function modifierMembre(
     }
   }
 
-  const { error } = await clientAdmin().from('membres').update(colonnes).eq('id', id)
-  if (error) {
+  // `.select('id')` n'est pas décoratif : sans lui, une mise à jour qui ne touche
+  // aucune ligne — identifiant inexistant ou forgé — ne renvoie **aucune erreur**,
+  // et l'application annoncerait « enregistré » alors que rien ne l'a été.
+  const { data, error } = await clientAdmin()
+    .from('membres')
+    .update(colonnes)
+    .eq('id', id)
+    .select('id')
+  if (error || !data || data.length === 0) {
     return { erreur: MESSAGE_ECHEC_ENREGISTREMENT }
   }
 
@@ -942,7 +1069,19 @@ export async function archiverMembre(donnees: FormData): Promise<void> {
     redirect('/membres')
   }
 
-  await clientAdmin().from('membres').update({ etat: 'archive' }).eq('id', id)
+  // Même exigence que pour la modification : une mise à jour sans effet ne renvoie
+  // pas d'erreur. Cette action n'a pas de canal de retour vers l'écran, alors plutôt
+  // que de rediriger comme si tout allait bien, on lève — un archivage qui n'archive
+  // rien doit se voir.
+  const { data, error } = await clientAdmin()
+    .from('membres')
+    .update({ etat: 'archive' })
+    .eq('id', id)
+    .select('id')
+  if (error || !data || data.length === 0) {
+    throw new Error("La fiche n'a pas pu être archivée : aucune fiche ne correspond.")
+  }
+
   revalidatePath('/membres')
   redirect('/membres')
 }
@@ -967,7 +1106,38 @@ git commit -m "feat: creer, modifier et archiver une fiche membre"
 
 **Files:**
 - Create: `src/app/membres/page.tsx`
+- Create: `src/app/error.tsx`
 - Modify: `src/app/tableau-de-bord/page.tsx` (lien vers l'annuaire)
+
+**Écran d'erreur, à créer en premier.** Sans lui, la moindre exception affiche l'écran
+générique de Next.js, en anglais, dans une application entièrement française. Créer
+`src/app/error.tsx` :
+
+```tsx
+'use client'
+
+export default function Erreur({ reset }: { error: Error; reset: () => void }) {
+  return (
+    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-4 px-6">
+      <h1 className="text-xl font-semibold">Une erreur est survenue</h1>
+      <p className="text-sm text-neutral-600">
+        L&apos;opération n&apos;a pas pu aboutir. Réessayez ; si le problème persiste,
+        signalez-le à un administrateur.
+      </p>
+      <button
+        type="button"
+        onClick={reset}
+        className="self-start rounded-md bg-neutral-900 px-4 py-2 font-medium text-white"
+      >
+        Réessayer
+      </button>
+    </main>
+  )
+}
+```
+
+Le détail technique de l'erreur n'est volontairement pas affiché : il n'aide pas la
+personne devant l'écran et peut révéler la structure interne de l'application.
 
 **Interfaces:**
 - Consumes: `exigerProfilActif` (Task 1), `listerMembres` (Task 5), `listerAntennes` (Task 2)
@@ -997,8 +1167,15 @@ export default async function PageAnnuaire({
 }) {
   const profil = await exigerProfilActif()
   const parametres = await searchParams
+  // Le filtre vient de l'adresse, donc du client. Une valeur qui n'est pas un
+  // identifiant ferait échouer la requête sur une colonne `uuid` — un signet périmé
+  // suffit. On l'ignore plutôt que de faire tomber l'écran.
+  const antenneFiltre = /^[0-9a-f-]{36}$/i.test(parametres.antenne ?? '')
+    ? parametres.antenne
+    : undefined
+
   const [membres, antennes, roles] = await Promise.all([
-    listerMembres({ recherche: parametres.recherche, antenneId: parametres.antenne }),
+    listerMembres({ recherche: parametres.recherche, antenneId: antenneFiltre }),
     listerAntennes(),
     rolesDuProfil(profil.id),
   ])
@@ -1034,7 +1211,7 @@ export default async function PageAnnuaire({
         />
         <select
           name="antenne"
-          defaultValue={parametres.antenne ?? ''}
+          defaultValue={antenneFiltre ?? ''}
           aria-label="Antenne"
           className="rounded-md border border-neutral-300 px-3 py-2"
         >
@@ -1124,7 +1301,7 @@ Créer `src/app/membres/formulaire-membre.tsx` :
 ```tsx
 'use client'
 
-import { useActionState } from 'react'
+import { useActionState, useState } from 'react'
 import type { Antenne } from '@/lib/donnees/antennes'
 import type { MembreDetail } from '@/lib/donnees/membres'
 import type { EtatFormulaireMembre } from './actions'
@@ -1140,6 +1317,23 @@ type Props = {
 
 export function FormulaireMembre({ action, antennes, membre, libelleBouton }: Props) {
   const [etat, envoyer, enCours] = useActionState(action, etatInitial)
+  const [situation, setSituation] = useState<string>(membre?.situation ?? '')
+
+  // L'antenne actuelle du membre doit figurer dans la liste même si elle a été
+  // désactivée depuis. Sans cela, sa valeur n'existerait pas parmi les options : le
+  // navigateur retomberait sur « Non rattaché » et le simple fait d'enregistrer une
+  // autre modification détacherait le membre de son antenne, sans que personne ne
+  // l'ait demandé ni vu.
+  const optionsAntennes: Array<{ id: string; nom: string; inactive: boolean }> = [
+    ...antennes.map((a) => ({ id: a.id, nom: a.nom, inactive: false })),
+  ]
+  if (membre?.antenneId && !antennes.some((a) => a.id === membre.antenneId)) {
+    optionsAntennes.push({
+      id: membre.antenneId,
+      nom: membre.antenneNom ?? 'Antenne inconnue',
+      inactive: true,
+    })
+  }
 
   return (
     <form action={envoyer} className="flex flex-col gap-4">
@@ -1147,7 +1341,7 @@ export function FormulaireMembre({ action, antennes, membre, libelleBouton }: Pr
 
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">Prénom</span>
+          <span className="text-sm font-medium">Prénom (obligatoire)</span>
           <input
             name="prenom"
             defaultValue={membre?.prenom ?? ''}
@@ -1156,7 +1350,7 @@ export function FormulaireMembre({ action, antennes, membre, libelleBouton }: Pr
           />
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">Nom</span>
+          <span className="text-sm font-medium">Nom (obligatoire)</span>
           <input
             name="nom"
             defaultValue={membre?.nom ?? ''}
@@ -1206,9 +1400,10 @@ export function FormulaireMembre({ action, antennes, membre, libelleBouton }: Pr
             className="rounded-md border border-neutral-300 px-3 py-2"
           >
             <option value="">Non rattaché</option>
-            {antennes.map((antenne) => (
+            {optionsAntennes.map((antenne) => (
               <option key={antenne.id} value={antenne.id}>
                 {antenne.nom}
+                {antenne.inactive ? ' (désactivée)' : ''}
               </option>
             ))}
           </select>
@@ -1217,7 +1412,8 @@ export function FormulaireMembre({ action, antennes, membre, libelleBouton }: Pr
           <span className="text-sm font-medium">Situation</span>
           <select
             name="situation"
-            defaultValue={membre?.situation ?? ''}
+            value={situation}
+            onChange={(evenement) => setSituation(evenement.target.value)}
             className="rounded-md border border-neutral-300 px-3 py-2"
           >
             <option value="">Non renseignée</option>
@@ -1226,17 +1422,22 @@ export function FormulaireMembre({ action, antennes, membre, libelleBouton }: Pr
             <option value="autre">Autre</option>
           </select>
         </label>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">Domaine d&apos;étude</span>
-          <input
-            name="domaineEtude"
-            defaultValue={membre?.domaineEtude ?? ''}
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          />
-          <span className="text-xs text-neutral-500">
-            Conservé uniquement si la situation est « Étudiant ».
-          </span>
-        </label>
+        {/*
+          Le champ n'existe que pour un étudiant, au lieu d'être saisissable puis
+          effacé en silence à l'enregistrement. Empêcher vaut mieux qu'avertir :
+          un texte d'aide sous un champ ne se lit pas au moment où l'on bascule
+          la situation, et la saisie disparaîtrait sans que personne ne le voie.
+        */}
+        {situation === 'etudiant' ? (
+          <label className="flex flex-col gap-1.5">
+            <span className="text-sm font-medium">Domaine d&apos;étude</span>
+            <input
+              name="domaineEtude"
+              defaultValue={membre?.domaineEtude ?? ''}
+              className="rounded-md border border-neutral-300 px-3 py-2"
+            />
+          </label>
+        ) : null}
         <label className="flex flex-col gap-1.5">
           <span className="text-sm font-medium">AEL déjà suivis</span>
           <input
@@ -1324,8 +1525,41 @@ git commit -m "feat: ajouter le formulaire de creation d'une fiche membre"
 ### Task 9 : Fiche membre et modification
 
 **Files:**
+- Create: `src/app/membres/[id]/bouton-archiver.tsx`
 - Create: `src/app/membres/[id]/page.tsx`
 - Create: `src/app/membres/[id]/modifier/page.tsx`
+
+**Bouton d'archivage, à créer en premier.** L'archivage retire quelqu'un de l'annuaire d'un
+seul clic. Rien n'est détruit, mais un clic accidentel — sur mobile surtout — mérite une
+confirmation, et celle-ci doit dire ce qui se passe **réellement** plutôt qu'agiter un
+avertissement vague. Créer `src/app/membres/[id]/bouton-archiver.tsx` :
+
+```tsx
+'use client'
+
+export function BoutonArchiver({ nomComplet }: { nomComplet: string }) {
+  return (
+    <button
+      type="submit"
+      onClick={(evenement) => {
+        const confirme = window.confirm(
+          `Archiver la fiche de ${nomComplet} ?
+
+` +
+            "Elle disparaîtra de l'annuaire, mais rien n'est supprimé : " +
+            'la fiche et son historique restent consultables.',
+        )
+        if (!confirme) {
+          evenement.preventDefault()
+        }
+      }}
+      className="text-sm text-red-600 underline underline-offset-4"
+    >
+      Archiver
+    </button>
+  )
+}
+```
 
 **Interfaces:**
 - Consumes: `membreParId` (Task 5), `modifierMembre` et `archiverMembre` (Task 6),
@@ -1343,6 +1577,7 @@ import { membreParId } from '@/lib/donnees/membres'
 import { rolesDuProfil } from '@/lib/donnees/profils'
 import { exigerProfilActif } from '@/lib/securite/garde'
 import { archiverMembre } from '../actions'
+import { BoutonArchiver } from './bouton-archiver'
 
 const LIBELLE_SITUATION: Record<string, string> = {
   etudiant: 'Étudiant',
@@ -1379,20 +1614,38 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
       </Link>
 
       <header className="mt-4 mb-8 flex flex-wrap items-baseline justify-between gap-4">
-        <h1 className="text-2xl font-semibold">
-          {membre.prenom} {membre.nom}
-        </h1>
+        <div>
+          <h1 className="text-2xl font-semibold">
+            {membre.prenom} {membre.nom}
+          </h1>
+          {/*
+            L'état vit en base et n'était affiché nulle part : une fiche archivée
+            était indiscernable d'une fiche active, et un administrateur arrivant
+            par un lien périmé pouvait la modifier en croyant suivre un membre actif.
+          */}
+          {membre.etat !== 'actif' ? (
+            <p className="mt-1 text-sm text-amber-700">
+              {membre.etat === 'archive'
+                ? 'Fiche archivée — elle ne figure plus dans l’annuaire.'
+                : 'Fiche en attente de validation.'}
+            </p>
+          ) : null}
+        </div>
         {estAdmin ? (
           <div className="flex items-center gap-4">
             <Link href={`/membres/${membre.id}/modifier`} className="text-sm underline underline-offset-4">
               Modifier
             </Link>
-            <form action={archiverMembre}>
-              <input type="hidden" name="id" value={membre.id} />
-              <button type="submit" className="text-sm text-red-600 underline underline-offset-4">
-                Archiver
-              </button>
-            </form>
+            {/*
+              Pas de bouton d'archivage sur une fiche déjà archivée : l'action
+              n'aurait aucun effet, et la proposer laisserait croire le contraire.
+            */}
+            {membre.etat === 'actif' ? (
+              <form action={archiverMembre}>
+                <input type="hidden" name="id" value={membre.id} />
+                <BoutonArchiver nomComplet={`${membre.prenom} ${membre.nom}`} />
+              </form>
+            ) : null}
           </div>
         ) : null}
       </header>
@@ -1464,7 +1717,16 @@ Run : `npm run dev`, puis dérouler :
 2. cliquer « Modifier », changer la ville, enregistrer → retour sur la fiche, ville à jour ;
 3. mettre la situation à « Étudiant » et renseigner un domaine d'étude → il apparaît sur la fiche ;
 4. repasser la situation à « Travailleur » → le domaine d'étude disparaît de la fiche ;
-5. cliquer « Archiver » → retour à l'annuaire, la fiche n'y figure plus.
+5. cliquer « Archiver » → une confirmation s'affiche ; la refuser ne change rien, l'accepter
+   ramène à l'annuaire où la fiche ne figure plus. Rouvrir ensuite la fiche par son adresse
+   directe : le bandeau « Fiche archivée » doit apparaître et le bouton « Archiver » avoir
+   disparu ;
+6. **le cas de l'antenne désactivée** : rattacher un membre à une antenne, désactiver
+   cette antenne depuis `/antennes` (écran créé à la Task 10 — si elle n'existe pas encore,
+   passer `actif` à faux directement avec la clé de service), puis rouvrir le formulaire de
+   modification de ce membre. L'antenne doit apparaître dans la liste, suivie de
+   « (désactivée) », et rester sélectionnée. Enregistrer sans y toucher : **le membre doit
+   conserver son antenne**. C'est le piège que ce formulaire est conçu pour éviter.
 
 Rapporter ce qui est réellement observé à chaque étape.
 
@@ -1482,7 +1744,43 @@ git commit -m "feat: consulter et modifier une fiche membre"
 **Files:**
 - Create: `src/app/antennes/actions.ts`
 - Create: `src/app/antennes/formulaire-antenne.tsx`
+- Create: `src/app/antennes/bouton-bascule-antenne.tsx`
 - Create: `src/app/antennes/page.tsx`
+
+**Bouton de bascule, à créer avant l'écran.** Désactiver une antenne la retire de tous les
+formulaires : cela mérite une confirmation, comme l'archivage d'un membre. Le message dit ce
+qui se passe réellement, sans dramatiser. Créer `src/app/antennes/bouton-bascule-antenne.tsx` :
+
+```tsx
+'use client'
+
+export function BoutonBasculeAntenne({ nom, desactiver }: { nom: string; desactiver: boolean }) {
+  return (
+    <button
+      type="submit"
+      onClick={(evenement) => {
+        const message = desactiver
+          ? `Désactiver l'antenne « ${nom} » ?
+
+` +
+            "Elle n'apparaîtra plus dans les formulaires, mais les membres qui y sont " +
+            'rattachés le restent, et vous pourrez la réactiver.'
+          : `Réactiver l'antenne « ${nom} » ?`
+        if (!window.confirm(message)) {
+          evenement.preventDefault()
+        }
+      }}
+      className={
+        desactiver
+          ? 'text-sm text-red-600 underline underline-offset-4'
+          : 'text-sm underline underline-offset-4'
+      }
+    >
+      {desactiver ? 'Désactiver' : 'Réactiver'}
+    </button>
+  )
+}
+```
 
 **Interfaces:**
 - Consumes: `exigerAdministrateur` (Task 1), `listerAntennes` (Task 2), `clientAdmin` (phase 0)
@@ -1533,9 +1831,37 @@ export async function desactiverAntenne(donnees: FormData): Promise<void> {
   if (typeof id !== 'string' || id.length === 0) return
 
   // Désactivation et non suppression : les membres déjà rattachés doivent conserver
-  // leur historique. La contrainte `on delete set null` protégerait les données, mais
-  // effacerait l'information.
-  await clientAdmin().from('antennes').update({ actif: false }).eq('id', id)
+  // leur historique. La contrainte `on delete restrict` refuserait d'ailleurs la
+  // suppression d'une antenne encore utilisée.
+  await basculerAntenne(id, false)
+}
+
+/** Remet une antenne en service. Sans elle, une désactivation serait sans retour. */
+export async function reactiverAntenne(donnees: FormData): Promise<void> {
+  await exigerAdministrateur()
+
+  const id = donnees.get('id')
+  if (typeof id !== 'string' || id.length === 0) return
+
+  await basculerAntenne(id, true)
+}
+
+async function basculerAntenne(id: string, actif: boolean): Promise<void> {
+  // `.select('id')` et la vérification qui suit ne sont pas décoratifs : une mise à
+  // jour qui ne touche aucune ligne ne renvoie **aucune erreur**. Sans ce contrôle,
+  // un identifiant invalide, une écriture refusée ou une antenne déjà dans cet état
+  // produiraient tous le même résultat visible — rien ne change, et le bouton a l'air
+  // d'avoir fonctionné. Même exigence que pour l'archivage d'un membre.
+  const { data, error } = await clientAdmin()
+    .from('antennes')
+    .update({ actif })
+    .eq('id', id)
+    .select('id')
+
+  if (error || !data || data.length === 0) {
+    throw new Error("L'antenne n'a pas pu être mise à jour : aucune antenne ne correspond.")
+  }
+
   revalidatePath('/antennes')
   revalidatePath('/membres')
 }
@@ -1602,14 +1928,17 @@ Créer `src/app/antennes/page.tsx` :
 
 ```tsx
 import Link from 'next/link'
-import { listerAntennes } from '@/lib/donnees/antennes'
+import { listerToutesAntennes } from '@/lib/donnees/antennes'
 import { exigerAdministrateur } from '@/lib/securite/garde'
-import { desactiverAntenne } from './actions'
+import { desactiverAntenne, reactiverAntenne } from './actions'
+import { BoutonBasculeAntenne } from './bouton-bascule-antenne'
 import { FormulaireAntenne } from './formulaire-antenne'
 
 export default async function PageAntennes() {
   await exigerAdministrateur()
-  const antennes = await listerAntennes()
+  const antennes = await listerToutesAntennes()
+  const actives = antennes.filter((a) => a.actif)
+  const inactives = antennes.filter((a) => !a.actif)
 
   return (
     <main className="mx-auto max-w-2xl px-6 py-10">
@@ -1619,20 +1948,47 @@ export default async function PageAntennes() {
       <h1 className="mt-4 mb-8 text-2xl font-semibold">Antennes</h1>
 
       <ul className="mb-10 divide-y divide-neutral-200">
-        {antennes.map((antenne) => (
+        {actives.map((antenne) => (
           <li key={antenne.id} className="flex items-center justify-between gap-4 py-3">
             <span>
               {antenne.nom} <span className="text-sm text-neutral-500">· {antenne.pays}</span>
             </span>
             <form action={desactiverAntenne}>
               <input type="hidden" name="id" value={antenne.id} />
-              <button type="submit" className="text-sm text-red-600 underline underline-offset-4">
-                Désactiver
-              </button>
+              <BoutonBasculeAntenne nom={antenne.nom} desactiver />
             </form>
           </li>
         ))}
       </ul>
+
+      {/*
+        Les antennes désactivées restent visibles ici, et réactivables. Sans cette
+        section, désactiver une antenne par erreur serait sans retour depuis
+        l'interface : elle disparaîtrait de partout et seule la clé de service
+        permettrait de la rétablir.
+      */}
+      {inactives.length > 0 ? (
+        <section className="mb-10">
+          <h2 className="mb-2 text-lg font-medium">Antennes désactivées</h2>
+          <p className="mb-4 text-sm text-neutral-500">
+            Elles n&apos;apparaissent plus dans les formulaires, mais les membres qui y étaient
+            rattachés le restent.
+          </p>
+          <ul className="divide-y divide-neutral-200">
+            {inactives.map((antenne) => (
+              <li key={antenne.id} className="flex items-center justify-between gap-4 py-3">
+                <span className="text-neutral-500">
+                  {antenne.nom} <span className="text-sm">· {antenne.pays}</span>
+                </span>
+                <form action={reactiverAntenne}>
+                  <input type="hidden" name="id" value={antenne.id} />
+                  <BoutonBasculeAntenne nom={antenne.nom} desactiver={false} />
+                </form>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <h2 className="mb-4 text-lg font-medium">Ajouter une antenne</h2>
       <FormulaireAntenne />
@@ -1847,15 +2203,35 @@ describe('écriture refusée par défaut', () => {
 })
 
 describe('compte désactivé', () => {
+  // Ces deux tests sont la seule preuve d'exécution de `prive.est_actif()`. La fonction
+  // est `SECURITY DEFINER` — elle échappe volontairement à la RLS — et vérifier sa
+  // signature ne prouve rien de sa logique. Ici on la met réellement à l'épreuve, sur
+  // les deux tables dont les politiques en dépendent.
   it('un compte désactivé ne lit plus les membres', async () => {
     await admin.from('profils').update({ actif: false }).eq('id', idSimple)
     try {
       const { data } = await clientSimple.from('membres').select('id').eq('id', idMembreActif)
-      // `prive.est_actif()` renvoie faux : la politique ne laisse plus passer aucune ligne.
       expect(data).toEqual([])
     } finally {
       await admin.from('profils').update({ actif: true }).eq('id', idSimple)
     }
+  })
+
+  it('un compte désactivé ne lit plus les antennes', async () => {
+    await admin.from('profils').update({ actif: false }).eq('id', idSimple)
+    try {
+      const { data } = await clientSimple.from('antennes').select('id')
+      expect(data).toEqual([])
+    } finally {
+      await admin.from('profils').update({ actif: true }).eq('id', idSimple)
+    }
+  })
+
+  it('un compte réactivé lit de nouveau les membres', async () => {
+    // Contrôle positif : sans lui, les deux tests ci-dessus passeraient aussi si la
+    // lecture était cassée pour une raison sans rapport avec `actif`.
+    const { data } = await clientSimple.from('membres').select('id').eq('id', idMembreActif)
+    expect(data).toHaveLength(1)
   })
 })
 ```
@@ -1863,7 +2239,7 @@ describe('compte désactivé', () => {
 - [ ] **Step 2 : Lancer les tests**
 
 Run : `npm run test:rls`
-Expected : 20 tests passent — 10 hérités de la phase 0 et 10 nouveaux.
+Expected : 22 tests passent — 10 hérités de la phase 0 et 12 nouveaux.
 
 **Si un test échoue, la faille est réelle : corrigez la migration, jamais le test.** En
 particulier, si `expect(error!.code).toBe('42501')` échoue, relevez le code réellement obtenu et
@@ -2003,8 +2379,19 @@ test('une fiche archivée disparaît de l’annuaire', async ({ page }) => {
   await page.getByText(`Jérôme ${NOM_MEMBRE}`).click()
   await expect(page.getByRole('heading', { name: `Jérôme ${NOM_MEMBRE}` })).toBeVisible()
 
+  // On retient le message du dialogue au lieu de simplement l'accepter : sans cette
+  // assertion, le test resterait vert si la confirmation venait à disparaître du
+  // bouton, et rien ne protégerait plus contre un archivage en un seul clic.
+  let messageConfirmation: string | null = null
+  page.once('dialog', (dialogue) => {
+    messageConfirmation = dialogue.message()
+    return dialogue.accept()
+  })
+
   await page.getByRole('button', { name: 'Archiver' }).click()
-  await expect(page).toHaveURL(/\/membres/)
+  await expect(page).toHaveURL(/\/membres$/)
+  expect(messageConfirmation).toContain('Archiver la fiche')
+  expect(messageConfirmation).toContain("rien n'est supprimé")
   await expect(page.getByText(`Jérôme ${NOM_MEMBRE}`)).toHaveCount(0)
 })
 ```
@@ -2039,8 +2426,8 @@ git commit -m "test: couvrir le parcours annuaire de bout en bout"
 
 - [ ] **Step 1 : Vérifier l'ensemble des suites**
 
-Run, dans l'ordre : `npx tsc --noEmit`, `npm run lint`, `npm test` (30 tests),
-`npm run test:rls` (20 tests), `npm run test:e2e` (6 tests), `npm run build`.
+Run, dans l'ordre : `npx tsc --noEmit`, `npm run lint`, `npm test` (37 tests),
+`npm run test:rls` (22 tests), `npm run test:e2e` (6 tests), `npm run build`.
 Expected : les six passent.
 
 - [ ] **Step 2 : Compléter le README**
@@ -2077,8 +2464,8 @@ git commit -m "chore: documenter et deployer la phase 1a"
 
 ## Critères d'achèvement de la phase 1a
 
-- [ ] `npm test` passe — 30 tests, dont 15 sur la validation des fiches
-- [ ] `npm run test:rls` passe — 20 tests, dont 10 sur les membres et les antennes
+- [ ] `npm test` passe — 37 tests, dont 22 sur la validation des fiches
+- [ ] `npm run test:rls` passe — 22 tests, dont 12 sur les membres et les antennes
 - [ ] `npm run test:e2e` passe — 6 tests
 - [ ] `npm run build` passe sans erreur
 - [ ] La requête sur `pg_policies` ne renvoie **que** des politiques `SELECT`
