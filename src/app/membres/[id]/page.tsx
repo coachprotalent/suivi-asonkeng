@@ -4,6 +4,7 @@ import { membreParId } from '@/lib/donnees/membres'
 import { rolesDuProfil } from '@/lib/donnees/profils'
 import { exigerProfilActif } from '@/lib/securite/garde'
 import { archiverMembre } from '../actions'
+import { BoutonArchiver } from './bouton-archiver'
 
 const LIBELLE_SITUATION: Record<string, string> = {
   etudiant: 'Étudiant',
@@ -40,20 +41,38 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
       </Link>
 
       <header className="mt-4 mb-8 flex flex-wrap items-baseline justify-between gap-4">
-        <h1 className="text-2xl font-semibold">
-          {membre.prenom} {membre.nom}
-        </h1>
+        <div>
+          <h1 className="text-2xl font-semibold">
+            {membre.prenom} {membre.nom}
+          </h1>
+          {/*
+            L'état vit en base et n'était affiché nulle part : une fiche archivée
+            était indiscernable d'une fiche active, et un administrateur arrivant
+            par un lien périmé pouvait la modifier en croyant suivre un membre actif.
+          */}
+          {membre.etat !== 'actif' ? (
+            <p className="mt-1 text-sm text-amber-700">
+              {membre.etat === 'archive'
+                ? 'Fiche archivée — elle ne figure plus dans l’annuaire.'
+                : 'Fiche en attente de validation.'}
+            </p>
+          ) : null}
+        </div>
         {estAdmin ? (
           <div className="flex items-center gap-4">
             <Link href={`/membres/${membre.id}/modifier`} className="text-sm underline underline-offset-4">
               Modifier
             </Link>
-            <form action={archiverMembre}>
-              <input type="hidden" name="id" value={membre.id} />
-              <button type="submit" className="text-sm text-red-600 underline underline-offset-4">
-                Archiver
-              </button>
-            </form>
+            {/*
+              Pas de bouton d'archivage sur une fiche déjà archivée : l'action
+              n'aurait aucun effet, et la proposer laisserait croire le contraire.
+            */}
+            {membre.etat === 'actif' ? (
+              <form action={archiverMembre}>
+                <input type="hidden" name="id" value={membre.id} />
+                <BoutonArchiver nomComplet={`${membre.prenom} ${membre.nom}`} />
+              </form>
+            ) : null}
           </div>
         ) : null}
       </header>
