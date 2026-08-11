@@ -2320,7 +2320,7 @@ describe('compte désactivé', () => {
 - [ ] **Step 2 : Lancer les tests**
 
 Run : `npm run test:rls`
-Expected : rapporte le **compte réel** — il devrait passer de 22 à 34 tests (12 nouveaux).
+Expected : rapporte le **compte réel** — il devrait passer de 22 à 38 tests (16 nouveaux).
 
 **Si un test échoue, la faille est réelle : corrige la migration, jamais le test.** Si une
 assertion sur `42501` échoue, relève le code obtenu, arrête-toi et renvoie DONE_WITH_CONCERNS.
@@ -2558,7 +2558,7 @@ git commit -m "test: couvrir l'attribution des statuts de bout en bout"
 - [ ] **Step 1 : Vérifier l'ensemble des suites**
 
 Run, dans l'ordre : `npx tsc --noEmit`, `npm run lint`, `npm test` (54 tests),
-`npm run test:rls` (34 tests), `npm run test:e2e` (11 tests), `npm run build`.
+`npm run test:rls` (38 tests), `npm run test:e2e` (11 tests), `npm run build`.
 Expected : les six passent. Rapporte les comptes réels.
 
 - [ ] **Step 2 : Compléter le README**
@@ -2596,7 +2596,7 @@ git commit -m "chore: documenter et deployer la phase 1b"
 ## Critères d'achèvement de la phase 1b
 
 - [ ] `npm test` passe — 54 tests
-- [ ] `npm run test:rls` passe — 34 tests, dont le contrôle positif du compte réactivé
+- [ ] `npm run test:rls` passe — 38 tests, dont le contrôle positif du compte réactivé
 - [ ] `npm run test:e2e` passe — 11 tests, dont la preuve par mutation du garde d'attribution
 - [ ] `npm run build` passe sans erreur
 - [ ] Aucune politique RLS d'écriture n'existe sur aucune table
