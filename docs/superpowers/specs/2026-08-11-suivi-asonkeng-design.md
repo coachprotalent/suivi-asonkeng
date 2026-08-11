@@ -110,8 +110,14 @@ Nommage en français, `snake_case`, clés primaires `uuid`, horodatages `timesta
 | `membre_id` | uuid NULL → `membres` UNIQUE | Lien optionnel, posable et retirable par l'admin |
 | `est_racine` | boolean NOT NULL DEFAULT false | |
 | `actif` | boolean NOT NULL DEFAULT true | |
-| `doit_changer_mdp` | boolean NOT NULL DEFAULT false | Positionné après une réinitialisation admin |
 | `cree_le` | timestamptz NOT NULL | |
+
+Le drapeau **« doit changer son mot de passe »** ne vit pas dans cette table mais dans
+`auth.users.app_metadata.doit_changer_mdp`. Raison : le middleware doit le vérifier à chaque
+navigation ; dans `app_metadata`, il voyage dans le JWT déjà présent dans le cookie de session
+et se lit sans aucune requête, alors qu'une colonne imposerait un aller-retour réseau par page.
+Il est positionné par l'API admin lors d'une réinitialisation et effacé lorsque l'utilisateur a
+choisi son nouveau mot de passe.
 
 **`roles_profil`** — rôles cumulables.
 
