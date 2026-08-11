@@ -1,6 +1,13 @@
 import { createClient } from '@supabase/supabase-js'
 import { expect, test } from '@playwright/test'
 
+// État partagé par les tests : ils modifient et lisent la même fiche membre, et
+// l'ordre choisi ci-dessous fait partie du scénario (éviction, cumul, etc.). Le
+// mode série verrouille cet ordre — sans lui, une seule option comme `retries`
+// pourrait un jour réexécuter un test isolément et le faire échouer sur un état
+// qu'il ne prépare pas lui-même.
+test.describe.configure({ mode: 'serial' })
+
 const IDENT_ADMIN = 'test.e2e.statuts.admin'
 const IDENT_SIMPLE = 'test.e2e.statuts.simple'
 // Tirés à chaque exécution : jamais de mot de passe littéral dans un dépôt public.
@@ -107,6 +114,27 @@ function statutsActuels(page: import('@playwright/test').Page) {
   return page.locator('section', { has: page.getByRole('heading', { name: 'Statuts actuels', exact: true }) })
 }
 
+// Le client Supabase, faute de types `Database` générés, déclare un embed
+// plusieurs-vers-un comme un tableau alors que PostgREST renvoie un objet au
+// runtime (même contournement que `Imbrique<T>`/`premier<T>` dans
+// `src/lib/donnees/statuts.ts`, qui est `server-only` et donc inimportable ici).
+// Sans lui, `(l.statuts as { libelle: string }).libelle` compile en mentant sur
+// la forme réelle : si l'embed était un jour un tableau, `.libelle` vaudrait
+// `undefined`, et une assertion négative (`not.toContain`) ne verrait jamais la
+// différence entre « la valeur cherchée est absente » et « je regarde du vide ».
+type Imbrique<T> = T | T[] | null | undefined
+function premier<T>(valeur: Imbrique<T>): T | null {
+  if (valeur === null || valeur === undefined) return null
+  return Array.isArray(valeur) ? (valeur[0] ?? null) : valeur
+}
+function libelleNonVide(embed: Imbrique<{ libelle: unknown }>): string {
+  const statut = premier(embed)
+  if (!statut || typeof statut.libelle !== 'string' || statut.libelle.length === 0) {
+    throw new Error('Jointure statuts inattendue : libellé absent, vide, ou de forme imprévue.')
+  }
+  return statut.libelle
+}
+
 test("attribuer un second statut du meme groupe evince le premier", async ({ page }) => {
   await seConnecter(page, IDENT_ADMIN, MDP_ADMIN)
   await page.goto(`/membres/${idMembre}/statuts`)
@@ -154,9 +182,12 @@ test("une date d'acquisition dans le futur est refusee", async ({ page }) => {
 
   // Évolution non répertoriée dans le contexte de tâche : le champ porte désormais
   // `max={aujourd'hui}` (voir formulaire-statut.tsx) — une première défense, côté
-  // client. On la vérifie d'abord pour elle-même : le navigateur doit refuser
-  // nativement une date au-delà de `max` (`validity.rangeOverflow`), avant même
-  // qu'une requête ne parte.
+  // client. Ce qu'on vérifie ici, précisément : le navigateur déclare la valeur
+  // invalide pour la contrainte `max` (`validity.rangeOverflow` et `valid`). On
+  // n'observe pas directement l'annulation de la soumission dans ce bloc — c'est
+  // la validation native standard des navigateurs pour `<input type="date"
+  // max="...">`, qui empêche l'événement submit de partir tant que la contrainte
+  // est violée.
   const validite = await dateInput.evaluate((el: HTMLInputElement) => ({
     rangeOverflow: el.validity.rangeOverflow,
     valid: el.validity.valid,
@@ -164,34 +195,34 @@ test("une date d'acquisition dans le futur est refusee", async ({ page }) => {
   expect(validite.rangeOverflow).toBe(true)
   expect(validite.valid).toBe(false)
 
-  // Cette validation native intercepte le clic — la soumission est annulée avant
-  // que `attribuerStatut` ne s'exécute — donc aucune alerte n'apparaît jamais,
-  // quelle que soit la règle serveur : ce n'est pas un défaut du produit, c'est
-  // une seconde défense (client et serveur) qui, laissée en place, empêcherait ce
-  // test d'atteindre la règle serveur qu'il vise. On retire l'attribut pour
-  // soumettre quand même et éprouver cette seconde défense séparément : la règle
-  // serveur reste testée sans affaiblir l'assertion attendue.
+  // Cette première défense, laissée en place, empêcherait ce test d'atteindre la
+  // règle serveur qu'il vise : aucune alerte n'apparaîtrait jamais, quelle que
+  // soit cette règle. On retire l'attribut pour soumettre quand même et éprouver
+  // la seconde défense (serveur) séparément : la règle serveur reste testée sans
+  // affaiblir l'assertion attendue.
   await dateInput.evaluate((el: HTMLInputElement) => el.removeAttribute('max'))
   await page.getByRole('button', { name: 'Attribuer ce statut' }).click()
 
   await expect(page.locator(ALERTE)).toContainText('ne peut pas être dans le futur')
 
-  const { data } = await admin
+  const { data, error } = await admin
     .from('membre_statuts')
     .select('statut_id, statuts(libelle)')
     .eq('membre_id', idMembre)
-  const libelles = (data ?? []).map((l) => (l.statuts as { libelle: string }).libelle)
+  if (error) throw new Error(`lecture des statuts impossible : ${error.message}`)
+  const libelles = (data ?? []).map((l) => libelleNonVide(l.statuts as Imbrique<{ libelle: unknown }>))
   expect(libelles).not.toContain('Baptisé du Saint-Esprit')
 })
 
-// --- Requête forgée contre les Server Actions -------------------------------
+// --- Requêtes forgées contre les Server Actions ------------------------------
 //
-// Le test précédent prouve que l'écran cache le formulaire et le bouton à un
-// non-administrateur. Il ne prouve pas que l'action serveur elle-même refuse
-// l'écriture : ces écritures passent par `clientAdmin()`, la clé de service, qui
-// contourne entièrement la RLS. La seule protection réelle est donc
-// `exigerAdministrateur()` dans `actions.ts` — un masquage d'interface qui
-// resterait vert même si cette ligne disparaissait ne protégerait rien.
+// Le test de masquage d'interface (plus bas) prouve que l'écran cache le
+// formulaire et le bouton à un non-administrateur. Il ne prouve pas que l'action
+// serveur elle-même refuse l'écriture : ces écritures passent par
+// `clientAdmin()`, la clé de service, qui contourne entièrement la RLS. La seule
+// protection réelle est donc `exigerAdministrateur()` dans `actions.ts` — un
+// masquage d'interface qui resterait vert même si cette ligne disparaissait ne
+// protégerait rien (constaté par preuve de mutation, voir le rapport de tâche).
 //
 // Pour l'éprouver, on reproduit ce qu'un formulaire HTML ordinaire envoie sans
 // JavaScript : des champs cachés qui référencent l'action serveur. Le formulaire
@@ -202,8 +233,16 @@ test("une date d'acquisition dans le futur est refusee", async ({ page }) => {
 // cas, ce sont des références déterministes à la fonction serveur pour cette
 // version du code — pas un secret lié à la session — donc quiconque a vu la
 // page une seule fois (ici : un administrateur) peut les rejouer tels quels
-// depuis une session différente. C'est exactement le scénario contre lequel
-// `exigerAdministrateur()` existe.
+// depuis une session différente.
+//
+// Un refus obtenu parce que la requête forgée est mal formée (encodage
+// `$ACTION_*` différent, vérification d'origine durcie, formulaire remanié)
+// serait indiscernable, dans ces seules assertions, d'un refus obtenu par le
+// garde — les deux rendraient le test vert pour toujours. Deux filets contre ce
+// risque : `verifierCaptureAction` lève si aucun champ `$ACTION*` n'a été
+// capturé, et le test canari plus bas prouve, avec exactement le même
+// mécanisme, qu'une session administrateur réussit — si le mécanisme lui-même
+// casse un jour, c'est ce canari qui tombe, pas les tests de refus.
 function decoderEntitesHtml(valeur: string): string {
   return valeur
     .replace(/&quot;/g, '"')
@@ -223,104 +262,135 @@ function extraireChampsCaches(formHtml: string): Record<string, string> {
   return champs
 }
 
-const URL_BASE = 'http://localhost:3000'
+/** Lève si la capture n'a trouvé aucun champ `$ACTION*` : mieux vaut un échec
+ * bruyant ici qu'un test qui, silencieusement, ne teste plus rien. */
+function verifierCaptureAction(champs: Record<string, string>): void {
+  const trouve = Object.keys(champs).some((nom) => nom.startsWith('$ACTION'))
+  if (!trouve) {
+    throw new Error(
+      `Capture invalide : aucun champ « $ACTION* » parmi ${JSON.stringify(Object.keys(champs))}. ` +
+        "L'encodage des Server Actions a peut-être changé — ce test ne peut plus prouver ce qu'il prétend.",
+    )
+  }
+}
+
+async function statutParLibelle(libelle: string): Promise<string> {
+  const { data, error } = await admin.from('statuts').select('id').eq('libelle', libelle).single()
+  if (error || !data) throw new Error(`statut « ${libelle} » introuvable : ${error?.message}`)
+  return data.id as string
+}
+
+async function compterMembreStatut(statutId: string): Promise<number> {
+  const { data, error } = await admin
+    .from('membre_statuts')
+    .select('statut_id')
+    .eq('membre_id', idMembre)
+    .eq('statut_id', statutId)
+  if (error) throw new Error(`lecture de membre_statuts impossible : ${error.message}`)
+  return (data ?? []).length
+}
 
 test("un compte non administrateur ne peut pas attribuer de statut par une requete forgee", async ({
   page,
   browser,
+  baseURL,
 }) => {
+  // Cible dédiée à ce test, distincte de celle du test de retrait forgé
+  // ci-dessous : les deux tests écrivent réellement en base (ou tentent de le
+  // faire) sur le même membre, et un statut partagé les couplerait — si l'un
+  // laissait une ligne derrière lui, l'autre échouerait sur sa propre
+  // précondition plutôt que sur l'assertion de sécurité qu'il vise.
+  const idStatutCible = await statutParLibelle('Sert dans une commission')
+  expect(await compterMembreStatut(idStatutCible)).toBe(0)
+
   await seConnecter(page, IDENT_ADMIN, MDP_ADMIN)
   await page.goto(`/membres/${idMembre}/statuts`)
   const formulaireAttribution = page
     .locator('form')
     .filter({ has: page.getByRole('button', { name: 'Attribuer ce statut' }) })
   const champs = extraireChampsCaches(await formulaireAttribution.evaluate((el) => el.outerHTML))
-
-  const { data: statutCible } = await admin
-    .from('statuts')
-    .select('id')
-    .eq('libelle', 'Sert dans une commission')
-    .single()
+  verifierCaptureAction(champs)
 
   // Session non-administrateur distincte : ce compte n'a jamais vu ce formulaire
   // (l'écran ne le lui rend pas), il ne fait que rejouer les champs capturés
   // ci-dessus sous sa propre identité authentifiée.
-  const contexteSimple = await browser.newContext()
-  const pageSimple = await contexteSimple.newPage()
-  await seConnecter(pageSimple, IDENT_SIMPLE, MDP_SIMPLE)
+  const contexteSimple = await browser.newContext({ baseURL })
+  try {
+    const pageSimple = await contexteSimple.newPage()
+    await seConnecter(pageSimple, IDENT_SIMPLE, MDP_SIMPLE)
 
-  await pageSimple.request.post(`${URL_BASE}/membres/${idMembre}/statuts`, {
-    multipart: { ...champs, statutId: statutCible!.id },
-  })
+    await pageSimple.request.post(`/membres/${idMembre}/statuts`, {
+      multipart: { ...champs, statutId: idStatutCible },
+    })
 
-  // Seule assertion qui compte : aucune ligne n'a été créée, quel qu'ait été le
-  // code HTTP ou la redirection renvoyés.
-  const { data } = await admin
-    .from('membre_statuts')
-    .select('statut_id')
-    .eq('membre_id', idMembre)
-    .eq('statut_id', statutCible!.id)
-  expect(data).toHaveLength(0)
-
-  await contexteSimple.close()
+    // Seule assertion qui compte : aucune ligne n'a été créée, quel qu'ait été le
+    // code HTTP ou la redirection renvoyés.
+    expect(await compterMembreStatut(idStatutCible)).toBe(0)
+  } finally {
+    await contexteSimple.close()
+  }
 })
 
 test("un compte non administrateur ne peut pas retirer un statut par une requete forgee", async ({
   page,
   browser,
+  baseURL,
 }) => {
-  // « Sert dans une commission » (groupe non exclusif « Engagements ») plutôt que
-  // « Repenti » : ce dernier partage son groupe exclusif avec « Non-croyant », que
-  // le premier test du fichier laisse déjà porté par ce membre. Un insert direct
-  // (hors RPC `attribuer_statut`, donc sans l'éviction gérée par celle-ci) sur un
-  // statut du même groupe exclusif est rejeté par la contrainte d'exclusivité —
-  // silencieusement, faute de vérifier l'erreur ci-dessous — ce qui invaliderait
-  // la précondition du test sans le signaler. Un statut non exclusif élimine ce
-  // couplage à l'ordre d'exécution des autres tests du fichier.
-  const { data: statutCible, error: erreurLecture } = await admin
-    .from('statuts')
-    .select('id')
-    .eq('libelle', 'Sert dans une commission')
-    .single()
-  if (erreurLecture || !statutCible) throw new Error(`statut introuvable : ${erreurLecture?.message}`)
+  // « Baptisé du Saint-Esprit » (groupe non exclusif « Engagements »), distinct
+  // de la cible du test d'attribution forgée ci-dessus et de « Repenti » (groupe
+  // exclusif « Cheminement » partagé avec « Non-croyant », déjà porté par ce
+  // membre depuis le premier test du fichier — un insert direct dessus, hors RPC
+  // `attribuer_statut`, entrerait en conflit avec la contrainte d'exclusivité).
+  const idStatutCible = await statutParLibelle('Baptisé du Saint-Esprit')
+  expect(await compterMembreStatut(idStatutCible)).toBe(0)
   const { error: erreurInsertion } = await admin
     .from('membre_statuts')
-    .insert({ membre_id: idMembre, statut_id: statutCible.id })
+    .insert({ membre_id: idMembre, statut_id: idStatutCible })
   if (erreurInsertion) throw new Error(`préparation du test impossible : ${erreurInsertion.message}`)
 
-  await seConnecter(page, IDENT_ADMIN, MDP_ADMIN)
-  await page.goto(`/membres/${idMembre}/statuts`)
-  // Le membre porte déjà d'autres statuts à ce stade (Non-croyant, Baptisé d'eau) :
-  // plusieurs formulaires de retrait coexistent. On cible précisément celui de
-  // « Sert dans une commission » par la ligne qui le contient, pas `.first()` —
-  // sans quoi la requête forgée pourrait viser un autre statut que celui vérifié
-  // ci-dessous, et le test ne prouverait rien sur le bon champ.
-  const formulaireRetrait = page
-    .locator('li')
-    .filter({ hasText: 'Sert dans une commission' })
-    .locator('form')
-  const champs = extraireChampsCaches(await formulaireRetrait.evaluate((el) => el.outerHTML))
+  try {
+    await seConnecter(page, IDENT_ADMIN, MDP_ADMIN)
+    await page.goto(`/membres/${idMembre}/statuts`)
+    // Le membre porte déjà d'autres statuts à ce stade (Non-croyant, Baptisé
+    // d'eau) : plusieurs formulaires de retrait coexistent. On cible précisément
+    // celui de « Baptisé du Saint-Esprit » par la ligne qui le contient, pas
+    // `.first()` — sans quoi la requête forgée pourrait viser un autre statut que
+    // celui vérifié ci-dessous, et le test ne prouverait rien sur le bon champ.
+    const formulaireRetrait = page
+      .locator('li')
+      .filter({ hasText: 'Baptisé du Saint-Esprit' })
+      .locator('form')
+    const champs = extraireChampsCaches(await formulaireRetrait.evaluate((el) => el.outerHTML))
+    verifierCaptureAction(champs)
 
-  const contexteSimple = await browser.newContext()
-  const pageSimple = await contexteSimple.newPage()
-  await seConnecter(pageSimple, IDENT_SIMPLE, MDP_SIMPLE)
+    const contexteSimple = await browser.newContext({ baseURL })
+    try {
+      const pageSimple = await contexteSimple.newPage()
+      await seConnecter(pageSimple, IDENT_SIMPLE, MDP_SIMPLE)
 
-  await pageSimple.request.post(`${URL_BASE}/membres/${idMembre}/statuts`, { multipart: champs })
+      await pageSimple.request.post(`/membres/${idMembre}/statuts`, { multipart: champs })
 
-  // Le statut doit toujours être là : ni supprimé, ni son absence masquée par un
-  // succès idempotent qui n'aurait jamais dû s'appliquer à ce compte.
-  const { data } = await admin
-    .from('membre_statuts')
-    .select('statut_id')
-    .eq('membre_id', idMembre)
-    .eq('statut_id', statutCible.id)
-  expect(data).toHaveLength(1)
-
-  await contexteSimple.close()
-  await admin.from('membre_statuts').delete().eq('membre_id', idMembre).eq('statut_id', statutCible.id)
+      // Le statut doit toujours être là : ni supprimé, ni son absence masquée par
+      // un succès idempotent qui n'aurait jamais dû s'appliquer à ce compte.
+      expect(await compterMembreStatut(idStatutCible)).toBe(1)
+    } finally {
+      await contexteSimple.close()
+    }
+  } finally {
+    // À l'abri d'un échec d'assertion ci-dessus : sans ce `finally`, un test qui
+    // tombe laisserait le statut derrière lui pour le suivant.
+    await admin.from('membre_statuts').delete().eq('membre_id', idMembre).eq('statut_id', idStatutCible)
+  }
 })
 
-test("un compte non administrateur ne peut pas attribuer de statut", async ({ page }) => {
+test('masquage d\'interface : un compte non administrateur ne voit ni formulaire ni bouton de retrait', async ({
+  page,
+}) => {
+  // Nommé précisément d'après ce qu'il vérifie : l'absence des éléments dans le
+  // DOM, pas l'autorisation de l'action serveur. La preuve par mutation a montré
+  // que ce test reste vert même sans `exigerAdministrateur()` dans `actions.ts` —
+  // ce sont les deux tests de requête forgée ci-dessus qui protègent la
+  // barrière serveur ; celui-ci protège seulement l'écran.
   await seConnecter(page, IDENT_SIMPLE, MDP_SIMPLE)
   await page.goto(`/membres/${idMembre}/statuts`)
 
@@ -331,4 +401,39 @@ test("un compte non administrateur ne peut pas attribuer de statut", async ({ pa
   // Mais il n'a ni formulaire d'attribution, ni bouton de retrait.
   await expect(page.getByRole('button', { name: 'Attribuer ce statut' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Retirer' })).toHaveCount(0)
+})
+
+test('canari : la meme requete forgee reussit depuis une session administrateur', async ({ page }) => {
+  // Contrôle positif, exigé en revue : si les deux tests de refus ci-dessus
+  // passaient un jour parce que la requête forgée est mal formée (encodage
+  // `$ACTION_*` changé, vérification d'origine durcie, formulaire remanié) et
+  // non parce que le garde refuse, ce serait indiscernable sans ce test. Ici,
+  // exactement le même mécanisme de capture et de rejeu est utilisé, mais depuis
+  // une session administrateur, et l'écriture doit réussir. S'il casse, c'est le
+  // mécanisme de forge qui est en cause, pas la sécurité — personne ne pourra
+  // confondre les deux.
+  const idStatutCible = await statutParLibelle('Sert dans une commission')
+  expect(await compterMembreStatut(idStatutCible)).toBe(0)
+
+  try {
+    await seConnecter(page, IDENT_ADMIN, MDP_ADMIN)
+    await page.goto(`/membres/${idMembre}/statuts`)
+    const formulaireAttribution = page
+      .locator('form')
+      .filter({ has: page.getByRole('button', { name: 'Attribuer ce statut' }) })
+    const champs = extraireChampsCaches(await formulaireAttribution.evaluate((el) => el.outerHTML))
+    verifierCaptureAction(champs)
+
+    // Même session (déjà administrateur), même mécanisme de requête brute — seule
+    // l'identité change par rapport aux deux tests de refus ci-dessus. `page`
+    // vient du fixture par défaut : `page.request` suit déjà `baseURL` sans
+    // qu'on ait à le répéter.
+    await page.request.post(`/membres/${idMembre}/statuts`, {
+      multipart: { ...champs, statutId: idStatutCible },
+    })
+
+    expect(await compterMembreStatut(idStatutCible)).toBe(1)
+  } finally {
+    await admin.from('membre_statuts').delete().eq('membre_id', idMembre).eq('statut_id', idStatutCible)
+  }
 })
