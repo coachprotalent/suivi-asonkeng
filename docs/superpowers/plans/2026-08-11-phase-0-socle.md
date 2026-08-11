@@ -22,10 +22,14 @@ Supabase Auth.
 
 Ces contraintes s'appliquent implicitement à **toutes** les tâches.
 
-- **Versions exactes** : `next@16.3.0`, `react@19.2.8`, `typescript@7.0.2`,
+- **Versions exactes** : `next@16.3.0`, `react@19.2.8`, `typescript@6.0.3`,
   `@supabase/supabase-js@2.112.3`, `@supabase/ssr@0.12.4`, `vitest@4.1.10`,
   `tailwindcss@4.3.3`, `@playwright/test@1.62.1`, `tsx@4.23.12`, `zod@4.4.3`.
   Node 24.15.0, npm 11.12.1, CLI Supabase 2.113.0 via `npx supabase`.
+  **TypeScript est volontairement en 6.0.3 et non en 7.x** : `typescript-eslint`, embarqué par
+  `eslint-config-next`, déclare le pair `typescript >=4.8.4 <6.1.0` et refuse de démarrer sous
+  TS 7 — `npm run lint` échoue alors intégralement. Ne pas « mettre à jour » vers TS 7 tant que
+  typescript-eslint ne l'annonce pas comme supporté.
 - **Langue** : tout le code, les noms de tables, colonnes, fonctions, routes et messages
   d'interface sont en **français**. Identifiants SQL en `snake_case` minuscule.
 - **Un seul projet Supabase** sert au développement et à la production (décision utilisateur).
