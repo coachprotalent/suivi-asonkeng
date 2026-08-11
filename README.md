@@ -1,36 +1,44 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Suivi Asonkeng
 
-## Getting Started
+Application de suivi des jeunes croyants de l'équipe Asonkeng.
 
-First, run the development server:
+- Spécification : `docs/superpowers/specs/2026-08-11-suivi-asonkeng-design.md`
+- Plans d'implémentation : `docs/superpowers/plans/`
+
+## Démarrer
 
 ```bash
+npm install
+cp .env.local.example .env.local   # puis renseigner les valeurs
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Commandes
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Commande | Effet |
+|---|---|
+| `npm run dev` | Serveur de développement sur http://localhost:3000 |
+| `npm test` | Tests unitaires du domaine (rapides, sans base) |
+| `npm run test:rls` | Tests des politiques RLS contre le projet Supabase |
+| `npm run test:e2e` | Parcours de bout en bout (Playwright) |
+| `npm run amorcer:racine` | Crée le compte administrateur racine (idempotent) |
+| `npx supabase db push` | Applique les migrations en attente |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Déploiement
 
-## Learn More
+L'application est déployée sur Vercel (projet `asonkeng/suivi-asonkeng`). Trois variables
+d'environnement doivent être renseignées sur Vercel, pour les environnements `production` et
+`preview` :
 
-To learn more about Next.js, take a look at the following resources:
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY` — **jamais** avec le préfixe `NEXT_PUBLIC_`, sous peine de
+  l'exposer au navigateur de n'importe quel visiteur.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Les autres variables de `.env.local` (jeton d'accès Supabase, identifiants du compte racine) ne
+servent qu'aux scripts locaux et ne doivent pas être transférées sur Vercel.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Attention
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Un **seul** projet Supabase sert au développement et à la production. Les migrations sont
+strictement additives. **Ne jamais exécuter `supabase db reset`.**
