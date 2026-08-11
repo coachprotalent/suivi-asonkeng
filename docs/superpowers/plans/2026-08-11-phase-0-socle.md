@@ -1851,7 +1851,10 @@ export default defineConfig({
   webServer: {
     command: 'npm run dev',
     url: 'http://localhost:3000/connexion',
-    reuseExistingServer: true,
+    // Réutiliser un serveur déjà lancé fait courir le risque de tester du code
+    // périmé, laissé par une session précédente. On l'accepte en local, où c'est
+    // un confort, jamais en intégration continue.
+    reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },
 })
@@ -1886,7 +1889,17 @@ const admin = createClient(
 
 async function supprimerCompte() {
   const { data } = await admin.from('profils').select('id').eq('identifiant', IDENTIFIANT).maybeSingle()
-  if (data) await admin.auth.admin.deleteUser(data.id)
+  if (data) {
+    await admin.auth.admin.deleteUser(data.id)
+    return
+  }
+
+  // Rattrapage par email. Sans lui, un compte d'authentification créé mais privé de
+  // fiche profil resterait introuvable — et la création suivante échouerait pour
+  // toujours sur « adresse déjà enregistrée », bloquant la suite entière.
+  const { data: comptes } = await admin.auth.admin.listUsers()
+  const orphelin = comptes?.users.find((u) => u.email === EMAIL)
+  if (orphelin) await admin.auth.admin.deleteUser(orphelin.id)
 }
 
 test.beforeAll(async () => {
@@ -1898,9 +1911,18 @@ test.beforeAll(async () => {
     app_metadata: { doit_changer_mdp: true },
   })
   if (error || !data.user) throw new Error(error?.message)
-  await admin
+
+  // Cette insertion doit être vérifiée. Si elle échoue en silence, le compte
+  // d'authentification survit sans fiche profil : le nettoyage le cherchant par
+  // `profils`, il devient introuvable, et toutes les exécutions suivantes échouent
+  // définitivement sur « adresse déjà enregistrée ».
+  const { error: erreurProfil } = await admin
     .from('profils')
     .insert({ id: data.user.id, identifiant: IDENTIFIANT, nom_affichage: 'Compte de test E2E' })
+  if (erreurProfil) {
+    await admin.auth.admin.deleteUser(data.user.id)
+    throw new Error(`insertion du profil de test impossible : ${erreurProfil.message}`)
+  }
 })
 
 test.afterAll(supprimerCompte)
