@@ -1154,6 +1154,22 @@ type Props = {
 export function FormulaireMembre({ action, antennes, membre, libelleBouton }: Props) {
   const [etat, envoyer, enCours] = useActionState(action, etatInitial)
 
+  // L'antenne actuelle du membre doit figurer dans la liste même si elle a été
+  // désactivée depuis. Sans cela, sa valeur n'existerait pas parmi les options : le
+  // navigateur retomberait sur « Non rattaché » et le simple fait d'enregistrer une
+  // autre modification détacherait le membre de son antenne, sans que personne ne
+  // l'ait demandé ni vu.
+  const optionsAntennes: Array<{ id: string; nom: string; inactive: boolean }> = [
+    ...antennes.map((a) => ({ id: a.id, nom: a.nom, inactive: false })),
+  ]
+  if (membre?.antenneId && !antennes.some((a) => a.id === membre.antenneId)) {
+    optionsAntennes.push({
+      id: membre.antenneId,
+      nom: membre.antenneNom ?? 'Antenne inconnue',
+      inactive: true,
+    })
+  }
+
   return (
     <form action={envoyer} className="flex flex-col gap-4">
       {membre ? <input type="hidden" name="id" value={membre.id} /> : null}
@@ -1219,9 +1235,10 @@ export function FormulaireMembre({ action, antennes, membre, libelleBouton }: Pr
             className="rounded-md border border-neutral-300 px-3 py-2"
           >
             <option value="">Non rattaché</option>
-            {antennes.map((antenne) => (
+            {optionsAntennes.map((antenne) => (
               <option key={antenne.id} value={antenne.id}>
                 {antenne.nom}
+                {antenne.inactive ? ' (désactivée)' : ''}
               </option>
             ))}
           </select>
@@ -1477,7 +1494,13 @@ Run : `npm run dev`, puis dérouler :
 2. cliquer « Modifier », changer la ville, enregistrer → retour sur la fiche, ville à jour ;
 3. mettre la situation à « Étudiant » et renseigner un domaine d'étude → il apparaît sur la fiche ;
 4. repasser la situation à « Travailleur » → le domaine d'étude disparaît de la fiche ;
-5. cliquer « Archiver » → retour à l'annuaire, la fiche n'y figure plus.
+5. cliquer « Archiver » → retour à l'annuaire, la fiche n'y figure plus ;
+6. **le cas de l'antenne désactivée** : rattacher un membre à une antenne, désactiver
+   cette antenne depuis `/antennes` (écran créé à la Task 10 — si elle n'existe pas encore,
+   passer `actif` à faux directement avec la clé de service), puis rouvrir le formulaire de
+   modification de ce membre. L'antenne doit apparaître dans la liste, suivie de
+   « (désactivée) », et rester sélectionnée. Enregistrer sans y toucher : **le membre doit
+   conserver son antenne**. C'est le piège que ce formulaire est conçu pour éviter.
 
 Rapporter ce qui est réellement observé à chaque étape.
 
