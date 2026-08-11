@@ -101,10 +101,18 @@ test('une fiche archivée disparaît de l’annuaire', async ({ page }) => {
   await page.getByText(`Jérôme ${NOM_MEMBRE}`).click()
   await expect(page.getByRole('heading', { name: `Jérôme ${NOM_MEMBRE}` })).toBeVisible()
 
-  // Le bouton « Archiver » ouvre une confirmation via window.confirm : Playwright
-  // refuse les dialogues natifs par défaut, il faut donc l'accepter explicitement.
-  page.once('dialog', (dialog) => dialog.accept())
+  // On retient le message du dialogue au lieu de simplement l'accepter : sans cette
+  // assertion, le test resterait vert si la confirmation venait à disparaître du
+  // bouton, et rien ne protégerait plus contre un archivage en un seul clic.
+  let messageConfirmation: string | null = null
+  page.once('dialog', (dialogue) => {
+    messageConfirmation = dialogue.message()
+    return dialogue.accept()
+  })
+
   await page.getByRole('button', { name: 'Archiver' }).click()
-  await expect(page).toHaveURL(/\/membres/)
+  await expect(page).toHaveURL(/\/membres$/)
+  expect(messageConfirmation).toContain('Archiver la fiche')
+  expect(messageConfirmation).toContain("rien n'est supprimé")
   await expect(page.getByText(`Jérôme ${NOM_MEMBRE}`)).toHaveCount(0)
 })
