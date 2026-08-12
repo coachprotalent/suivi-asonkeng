@@ -19,11 +19,13 @@ export type MembreDetail = MembreListe & {
   domaineEtude: string | null
   reportInitialAel: number
   etat: EtatMembre
+  dirigeantId: string | null
+  dirigeantForce: boolean
 }
 
 const COLONNES_LISTE = 'id, nom, prenom, ville, situation, antennes(nom)'
 const COLONNES_DETAIL =
-  'id, nom, prenom, ville, situation, telephone, email_contact, pays, antenne_id, domaine_etude, report_initial_ael, etat, antennes(nom)'
+  'id, nom, prenom, ville, situation, telephone, email_contact, pays, antenne_id, domaine_etude, report_initial_ael, etat, dirigeant_id, dirigeant_force, antennes(nom)'
 
 type LigneAntenne = { nom: string } | { nom: string }[] | null
 
@@ -138,6 +140,8 @@ export async function membreParId(id: string): Promise<MembreDetail | null> {
     domaineEtude: data.domaine_etude as string | null,
     reportInitialAel: data.report_initial_ael as number,
     etat: data.etat as EtatMembre,
+    dirigeantId: data.dirigeant_id as string | null,
+    dirigeantForce: data.dirigeant_force as boolean,
   }
 }
 
@@ -192,4 +196,22 @@ export async function rechercherMembres(
     nom: l.nom as string,
     prenom: l.prenom as string,
   }))
+}
+
+/** Le strict nécessaire pour afficher un membre choisi dans un sélecteur. */
+export async function membreBrefParId(id: string): Promise<MembreBref | null> {
+  const supabase = await clientServeur()
+  const { data, error } = await supabase
+    .from('membres')
+    .select('id, nom, prenom')
+    .eq('id', id)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Lecture du membre impossible : ${error.message}`)
+  }
+  if (!data) {
+    return null
+  }
+  return { id: data.id as string, nom: data.nom as string, prenom: data.prenom as string }
 }
