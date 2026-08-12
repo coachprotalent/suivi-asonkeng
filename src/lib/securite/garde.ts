@@ -77,8 +77,13 @@ export async function aAutoriteSur(membreId: string): Promise<boolean> {
 /**
  * Réserve une action aux comptes ayant autorité sur ce membre (spec §5.1).
  *
- * C'est la SEULE protection des écritures de statuts : elles passent par la clé de
- * service, qui contourne la RLS. Toute écriture concernant un membre passe par ici.
+ * C'est la SEULE protection des écritures de STATUTS : `attribuerStatut` et
+ * `retirerStatut` (src/app/membres/[id]/statuts/actions.ts) sont les deux seuls
+ * appelants, et ces écritures passent par la clé de service, qui contourne la RLS.
+ * Les autres écritures concernant un membre — `creerMembre`, `modifierMembre`,
+ * `archiverMembre`, `desarchiverMembre`, `definirArbre` — ne passent PAS par ici :
+ * elles restent réservées aux administrateurs par leur propre garde,
+ * `exigerAdministrateur`.
  */
 export async function exigerAutoriteSur(membreId: string): Promise<Profil> {
   const { profil, autorise } = await deciderAutorite(membreId)
