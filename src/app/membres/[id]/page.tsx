@@ -15,9 +15,16 @@ const LIBELLE_SITUATION: Record<string, string> = {
   autre: 'Autre',
 }
 
-export default async function PageFicheMembre({ params }: { params: Promise<{ id: string }> }) {
+export default async function PageFicheMembre({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>
+  searchParams: Promise<{ archivageRefuse?: string }>
+}) {
   const profil = await exigerProfilActif()
   const { id } = await params
+  const { archivageRefuse } = await searchParams
   const membre = await membreParId(id)
   if (!membre) {
     notFound()
@@ -125,6 +132,14 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
           ) : null}
         </div>
       </header>
+
+      {archivageRefuse ? (
+        <p role="alert" className="mb-6 rounded-md bg-amber-50 p-3 text-sm text-amber-800">
+          Cette fiche ne peut pas être archivée : {archivageRefuse} en dépendent encore comme
+          faiseur de disciple. Rattachez ces personnes à quelqu&apos;un d&apos;autre, puis
+          recommencez.
+        </p>
+      ) : null}
 
       <dl className="divide-y divide-neutral-200">
         {lignes.map(([intitule, valeur]) => (

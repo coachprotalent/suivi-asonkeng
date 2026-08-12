@@ -285,3 +285,40 @@ describe("parcours de l'arbre", () => {
     expect(data?.[2].prenom).toBe('Test')
   })
 })
+
+describe("archivage d'un faiseur de disciple", () => {
+  it('refuse tant que des disciples actifs subsistent', async () => {
+    const { error } = await admin.from('membres').update({ etat: 'archive' }).eq('id', idEnfant)
+    expect(error).not.toBeNull()
+    expect(error?.details).toBe('disciples_a_reaffecter')
+  })
+
+  // CONTRÔLE POSITIF : sans lui, le refus ci-dessus serait satisfait par un déclencheur
+  // qui refuse TOUT archivage.
+  it('laisse archiver un membre sans disciple actif', async () => {
+    const idFeuille = await creerMembre('feuille', idRacine)
+    const { error } = await admin.from('membres').update({ etat: 'archive' }).eq('id', idFeuille)
+    expect(error).toBeNull()
+  })
+
+  it('laisse archiver une fois les disciples réaffectés', async () => {
+    const idParent = await creerMembre('parent-a-vider', null)
+    const idDisciple = await creerMembre('disciple-a-deplacer', idParent)
+
+    const { error: erreurBloquee } = await admin
+      .from('membres')
+      .update({ etat: 'archive' })
+      .eq('id', idParent)
+    expect(erreurBloquee).not.toBeNull()
+
+    await admin.rpc('definir_arbre', {
+      p_membre: idDisciple,
+      p_faiseur_de_disciple: idRacine,
+      p_dirigeant: null,
+      p_dirigeant_force: false,
+    })
+
+    const { error } = await admin.from('membres').update({ etat: 'archive' }).eq('id', idParent)
+    expect(error).toBeNull()
+  })
+})

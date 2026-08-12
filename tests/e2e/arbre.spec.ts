@@ -233,3 +233,21 @@ test('la filiation est visible de tous, le lien de rattachement des seuls admini
     await supprimerCompte(identifiant)
   }
 })
+
+test("archiver un faiseur de disciple est refusé, et la liste des disciples est nommée", async ({
+  page,
+}) => {
+  await seConnecter(page)
+  await page.goto(`/membres/${idEnfant}`)
+
+  page.once('dialog', (dialogue) => dialogue.accept())
+  await page.getByRole('button', { name: 'Archiver' }).click()
+
+  const alerte = page.locator(ALERTE)
+  await expect(alerte).toContainText('ne peut pas être archivée')
+  // Le §7 exige que les personnes concernées soient NOMMÉES.
+  await expect(alerte).toContainText(`${PREFIXE}-petit-enfant`)
+
+  const { data } = await admin.from('membres').select('etat').eq('id', idEnfant).single()
+  expect(data?.etat).toBe('actif')
+})

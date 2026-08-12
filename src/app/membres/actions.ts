@@ -3,9 +3,12 @@
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { FicheMembreInvalideError, normaliserFicheMembre, type EtatMembre } from '@/lib/domaine/membre'
+import { disciplesDe } from '@/lib/donnees/arbre'
 import { exigerAdministrateur } from '@/lib/securite/garde'
 import { clientAdmin } from '@/lib/supabase/admin'
 import { MESSAGE_ECHEC_ENREGISTREMENT } from './messages'
+
+const DETAIL_DISCIPLES_A_REAFFECTER = 'disciples_a_reaffecter'
 
 export type EtatFormulaireMembre = { erreur: string | null }
 
@@ -121,7 +124,13 @@ async function changerEtatMembre(id: string, etat: EtatMembre): Promise<void> {
     .update({ etat })
     .eq('id', id)
     .select('id')
-  if (error || !data || data.length === 0) {
+  if (error) {
+    // Relayer l'objet d'origine : `details` porte le marqueur du déclencheur (par
+    // exemple `disciples_a_reaffecter`), et le remplacer par un `Error` neuf le
+    // perdrait — l'appelant ne pourrait plus distinguer un refus métier d'une panne.
+    throw error
+  }
+  if (!data || data.length === 0) {
     throw new Error("La fiche n'a pas pu être mise à jour : aucune fiche ne correspond.")
   }
 }
@@ -134,7 +143,36 @@ export async function archiverMembre(donnees: FormData): Promise<void> {
     redirect('/membres')
   }
 
-  await changerEtatMembre(id, 'archive')
+  // Contrôle EN AMONT, pour pouvoir nommer les personnes concernées. Le déclencheur
+  // reste la barrière : ce contrôle explique, il ne protège pas. Deux archivages
+  // concurrents, ou une réaffectation validée entre-temps, passeraient ici et seraient
+  // arrêtés là — c'est le partage voulu.
+  const disciples = await disciplesDe(id)
+  if (disciples.length > 0) {
+    const noms = disciples.map((d) => `${d.prenom} ${d.nom}`).join(', ')
+    redirect(`/membres/${id}?archivageRefuse=${encodeURIComponent(noms)}`)
+  }
+
+  try {
+    await changerEtatMembre(id, 'archive')
+  } catch (erreur) {
+    const details = (erreur as { details?: string | null })?.details
+    if (details !== DETAIL_DISCIPLES_A_REAFFECTER) {
+      // Pas le refus métier attendu : une autre panne (fiche disparue entre-temps,
+      // erreur de connexion...). La déguiser en « des disciples encore actifs »
+      // mentirait à l'administrateur ; elle doit remonter comme une erreur réelle,
+      // vers la page d'erreur générique de l'application (src/app/error.tsx).
+      console.error('archiverMembre : échec inattendu', { id, erreur })
+      throw erreur
+    }
+    // Filet : le déclencheur a refusé alors que le contrôle amont laissait passer
+    // (archivage concurrent, ou réaffectation validée entre les deux lectures
+    // ci-dessus). Le contrôle amont ne peut plus nommer les disciples ici — ils ont
+    // été réaffectés ou l'archivage concurrent a déjà eu lieu — d'où un message
+    // moins précis mais honnête.
+    console.error('archiverMembre : archivage refusé par le déclencheur', { id, erreur })
+    redirect(`/membres/${id}?archivageRefuse=${encodeURIComponent('des disciples encore actifs')}`)
+  }
 
   revalidatePath('/membres')
   redirect('/membres')
