@@ -1,6 +1,7 @@
 import Link from 'next/link'
+import { redirect } from 'next/navigation'
 import { listerAntennes } from '@/lib/donnees/antennes'
-import { listerMembres } from '@/lib/donnees/membres'
+import { listerMembres, TAILLE_PAGE_ANNUAIRE } from '@/lib/donnees/membres'
 import { rolesDuProfil } from '@/lib/donnees/profils'
 import { exigerProfilActif } from '@/lib/securite/garde'
 
@@ -13,7 +14,7 @@ const LIBELLE_SITUATION: Record<string, string> = {
 export default async function PageAnnuaire({
   searchParams,
 }: {
-  searchParams: Promise<{ recherche?: string; antenne?: string }>
+  searchParams: Promise<{ recherche?: string; antenne?: string; page?: string }>
 }) {
   const profil = await exigerProfilActif()
   const parametres = await searchParams
@@ -25,12 +26,41 @@ export default async function PageAnnuaire({
     ? parametres.antenne
     : undefined
 
-  const [membres, antennes, roles] = await Promise.all([
-    listerMembres({ recherche: parametres.recherche, antenneId: antenneFiltre }),
+  // Même prudence que pour le filtre d'antenne : la valeur vient de l'adresse, donc du
+  // client. Une page non numérique ou négative est ramenée à 1 plutôt que de faire
+  // tomber l'écran.
+  const pageDemandee = Number.parseInt(parametres.page ?? '1', 10)
+  const page = Number.isFinite(pageDemandee) && pageDemandee > 0 ? pageDemandee : 1
+
+  const [{ membres, total }, antennes, roles] = await Promise.all([
+    listerMembres({ recherche: parametres.recherche, antenneId: antenneFiltre, page }),
     listerAntennes(),
     rolesDuProfil(profil.id),
   ])
   const estAdmin = roles.includes('administrateur')
+  const pages = Math.max(1, Math.ceil(total / TAILLE_PAGE_ANNUAIRE))
+
+  function lienPage(numero: number): string {
+    const params = new URLSearchParams()
+    if (parametres.recherche) params.set('recherche', parametres.recherche)
+    if (antenneFiltre) params.set('antenne', antenneFiltre)
+    params.set('page', String(numero))
+    return `/membres?${params.toString()}`
+  }
+
+  // Une adresse pointant au-delà de la dernière page réelle est un signet périmé
+  // (ou un résultat qui a rétréci depuis) : sans ce garde, l'en-tête affichait
+  // « N membres · page 99 sur 2 » pendant que le corps affirmait qu'aucun membre
+  // ne correspond — deux vérités contradictoires sur le même écran. On corrige
+  // l'adresse vers la dernière page réelle plutôt que de laisser tenir ce mensonge.
+  // Pas de boucle possible : `pages` vaut toujours au moins 1, et la cible de la
+  // redirection est `pages` lui-même, donc la page rechargée aura page === pages,
+  // qui ne redéclenche pas la condition `page > pages`.
+  // Hors de tout `try` : `redirect()` lève une exception de contrôle Next.js que
+  // ce fichier ne doit pas intercepter (aucun `try` ici de toute façon — vérifié).
+  if (page > pages) {
+    redirect(lienPage(pages))
+  }
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-10">
@@ -41,7 +71,8 @@ export default async function PageAnnuaire({
         <div>
           <h1 className="text-2xl font-semibold">Annuaire</h1>
           <p className="text-sm text-neutral-500">
-            {membres.length} membre{membres.length > 1 ? 's' : ''}
+            {total} membre{total > 1 ? 's' : ''}
+            {pages > 1 ? ` · page ${page} sur ${pages}` : ''}
           </p>
         </div>
         {estAdmin ? (
@@ -101,6 +132,25 @@ export default async function PageAnnuaire({
           ))}
         </ul>
       )}
+
+      {pages > 1 ? (
+        <nav aria-label="Pagination" className="mt-8 flex items-center justify-between gap-4">
+          {page > 1 ? (
+            <Link href={lienPage(page - 1)} className="text-sm underline underline-offset-4">
+              Page précédente
+            </Link>
+          ) : (
+            <span />
+          )}
+          {page < pages ? (
+            <Link href={lienPage(page + 1)} className="text-sm underline underline-offset-4">
+              Page suivante
+            </Link>
+          ) : (
+            <span />
+          )}
+        </nav>
+      ) : null}
     </main>
   )
 }

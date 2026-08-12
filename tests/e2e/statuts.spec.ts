@@ -267,9 +267,10 @@ test('les champs du formulaire portent des noms accessibles propres', async ({ p
 // formulaire et le bouton à un non-administrateur. Il ne prouve pas que l'action
 // serveur elle-même refuse l'écriture : ces écritures passent par
 // `clientAdmin()`, la clé de service, qui contourne entièrement la RLS. La seule
-// protection réelle est donc `exigerAdministrateur()` dans `actions.ts` — un
-// masquage d'interface qui resterait vert même si cette ligne disparaissait ne
-// protégerait rien (constaté par preuve de mutation, voir le rapport de tâche).
+// protection réelle est donc `exigerAutoriteSur()` dans `actions.ts` (Task 11 —
+// avant elle, `exigerAdministrateur()`) — un masquage d'interface qui resterait
+// vert même si ce garde disparaissait ne protégerait rien (constaté par preuve
+// de mutation, voir le rapport de tâche).
 //
 // Pour l'éprouver, on reproduit ce qu'un formulaire HTML ordinaire envoie sans
 // JavaScript : des champs cachés qui référencent l'action serveur. Le formulaire
@@ -337,7 +338,7 @@ async function compterMembreStatut(statutId: string): Promise<number> {
   return (data ?? []).length
 }
 
-test("un compte non administrateur ne peut pas attribuer de statut par une requete forgee", async ({
+test("un compte sans autorité ne peut pas attribuer de statut par une requete forgee", async ({
   page,
   browser,
   baseURL,
@@ -378,7 +379,7 @@ test("un compte non administrateur ne peut pas attribuer de statut par une reque
   }
 })
 
-test("un compte non administrateur ne peut pas retirer un statut par une requete forgee", async ({
+test("un compte sans autorité ne peut pas retirer un statut par une requete forgee", async ({
   page,
   browser,
   baseURL,
@@ -430,14 +431,15 @@ test("un compte non administrateur ne peut pas retirer un statut par une requete
   }
 })
 
-test('masquage d\'interface : un compte non administrateur ne voit ni formulaire ni bouton de retrait', async ({
+test('masquage d\'interface : un compte sans autorité ne voit ni formulaire ni bouton de retrait', async ({
   page,
 }) => {
   // Nommé précisément d'après ce qu'il vérifie : l'absence des éléments dans le
   // DOM, pas l'autorisation de l'action serveur. La preuve par mutation a montré
-  // que ce test reste vert même sans `exigerAdministrateur()` dans `actions.ts` —
-  // ce sont les deux tests de requête forgée ci-dessus qui protègent la
-  // barrière serveur ; celui-ci protège seulement l'écran.
+  // que ce test reste vert même sans `exigerAutoriteSur()` dans `actions.ts`
+  // (avant la Task 11, `exigerAdministrateur()`) — ce sont les deux tests de
+  // requête forgée ci-dessus qui protègent la barrière serveur ; celui-ci
+  // protège seulement l'écran.
   await seConnecter(page, IDENT_SIMPLE, MDP_SIMPLE)
   await page.goto(`/membres/${idMembre}/statuts`)
 

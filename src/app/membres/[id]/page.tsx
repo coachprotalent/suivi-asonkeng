@@ -1,10 +1,11 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { membreParId } from '@/lib/donnees/membres'
+import { disciplesDe } from '@/lib/donnees/arbre'
+import { membreBrefParId, membreParId } from '@/lib/donnees/membres'
 import { rolesDuProfil } from '@/lib/donnees/profils'
 import { statutsDuMembre } from '@/lib/donnees/statuts'
 import { formaterDateSeule } from '@/lib/format/date'
-import { exigerProfilActif } from '@/lib/securite/garde'
+import { aAutoriteSur, exigerProfilActif } from '@/lib/securite/garde'
 import { archiverMembre, desarchiverMembre } from '../actions'
 import { BoutonArchiver } from './bouton-archiver'
 
@@ -14,17 +15,30 @@ const LIBELLE_SITUATION: Record<string, string> = {
   autre: 'Autre',
 }
 
-export default async function PageFicheMembre({ params }: { params: Promise<{ id: string }> }) {
+export default async function PageFicheMembre({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>
+  searchParams: Promise<{ archivageRefuse?: string; desarchivageRefuse?: string }>
+}) {
   const profil = await exigerProfilActif()
   const { id } = await params
+  const { archivageRefuse, desarchivageRefuse } = await searchParams
   const membre = await membreParId(id)
   if (!membre) {
     notFound()
   }
 
-  const [roles, statuts] = await Promise.all([
+  const [roles, statuts, disciples, faiseur, dirigeant, peutEcrireStatuts] = await Promise.all([
     rolesDuProfil(profil.id),
     statutsDuMembre(membre.id),
+    disciplesDe(membre.id),
+    membre.faiseurDeDiscipleId
+      ? membreBrefParId(membre.faiseurDeDiscipleId)
+      : Promise.resolve(null),
+    membre.dirigeantId ? membreBrefParId(membre.dirigeantId) : Promise.resolve(null),
+    aAutoriteSur(membre.id),
   ])
   const estAdmin = roles.includes('administrateur')
 
@@ -38,6 +52,33 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
     ['Contact', membre.emailContact],
     ['AEL déjà suivis', String(membre.reportInitialAel)],
   ]
+
+  const nomOuTiret = (bref: { prenom: string; nom: string } | null) =>
+    bref ? `${bref.prenom} ${bref.nom}` : null
+
+  // `membreBrefParId` passe sous RLS : si l'identifiant existe mais que la lecture
+  // rend `null`, ce n'est pas « personne » — c'est une fiche que la politique cache à
+  // ce compte (typiquement archivée, vue par un compte ordinaire). Confondre les deux
+  // cas afficherait « — » là où un administrateur voit un nom sur la même fiche,
+  // exactement l'inverse de D20 (la filiation est visible de tout compte actif).
+  // Le `—` du tableau reste réservé au cas où l'identifiant lui-même est `null`.
+  const libelleFiliation = (id: string | null, bref: { prenom: string; nom: string } | null) => {
+    if (!id) return null
+    return nomOuTiret(bref) ?? 'Fiche non consultable'
+  }
+
+  lignes.push(['Faiseur de disciple', libelleFiliation(membre.faiseurDeDiscipleId, faiseur)])
+  const nomDirigeant = libelleFiliation(membre.dirigeantId, dirigeant)
+  lignes.push([
+    'Dirigeant',
+    // `dirigeant_force` atteste seulement que la valeur n'a pas été saisie à la main —
+    // rien de plus. « Calculé » affirmerait que c'est ce que le calcul rendrait
+    // maintenant, ce que le commit 907bcf7 a jugé faux et corrigé sur l'écran de
+    // rattachement (un dirigeant « calculé » peut devenir périmé sans réécriture).
+    // On ne republie pas ce mensonge ici : l'absence de mention n'affirme rien, ce que
+    // le booléen soutient réellement.
+    nomDirigeant ? `${nomDirigeant}${membre.dirigeantForce ? ' (défini manuellement)' : ''}` : null,
+  ])
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
@@ -93,6 +134,22 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
         </div>
       </header>
 
+      {archivageRefuse ? (
+        <p role="alert" className="mb-6 rounded-md bg-amber-50 p-3 text-sm text-amber-800">
+          Cette fiche ne peut pas être archivée : {archivageRefuse} en dépendent encore comme
+          faiseur de disciple. Rattachez ces personnes à quelqu&apos;un d&apos;autre, puis
+          recommencez.
+        </p>
+      ) : null}
+
+      {desarchivageRefuse ? (
+        <p role="alert" className="mb-6 rounded-md bg-amber-50 p-3 text-sm text-amber-800">
+          Cette fiche ne peut pas être rétablie : {desarchivageRefuse} est archivé. Rattachez
+          cette fiche à un faiseur de disciple actif, ou rétablissez d&apos;abord{' '}
+          {desarchivageRefuse}, puis recommencez.
+        </p>
+      ) : null}
+
       <dl className="divide-y divide-neutral-200">
         {lignes.map(([intitule, valeur]) => (
           <div key={intitule} className="flex justify-between gap-4 py-3">
@@ -106,13 +163,14 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
         <div className="mb-3 flex items-baseline justify-between gap-4">
           <h2 className="text-lg font-medium">Statuts</h2>
           {/*
-            « Gérer » promettrait un pouvoir que ce rôle n'a pas : un non-administrateur
-            atteint le même écran mais n'y trouve ni formulaire d'attribution ni bouton de
-            retrait, seulement la consultation et le journal — c'est ce dernier qui décrit
-            le mieux ce que l'écran lui apporte de plus que cette fiche.
+            « Gérer » promettrait un pouvoir que ce compte n'a pas : sans autorité sur
+            ce membre, il atteint le même écran mais n'y trouve ni formulaire
+            d'attribution ni bouton de retrait, seulement la consultation et le
+            journal — c'est ce dernier qui décrit le mieux ce que l'écran lui apporte
+            de plus que cette fiche.
           */}
           <Link href={`/membres/${membre.id}/statuts`} className="text-sm underline underline-offset-4">
-            {estAdmin ? 'Gérer' : 'Journal'}
+            {peutEcrireStatuts ? 'Gérer' : 'Journal'}
           </Link>
         </div>
         {statuts.length === 0 ? (
@@ -128,6 +186,39 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
                 {statut.dateAcquisition ? (
                   <span className="text-neutral-500"> · {formaterDateSeule(statut.dateAcquisition)}</span>
                 ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="mt-8">
+        <div className="mb-3 flex items-baseline justify-between gap-4">
+          <h2 className="text-lg font-medium">Disciples actifs</h2>
+          {estAdmin ? (
+            <Link
+              href={`/membres/${membre.id}/arbre`}
+              className="text-sm underline underline-offset-4"
+            >
+              Rattacher
+            </Link>
+          ) : null}
+        </div>
+        {/*
+          `disciplesDe` ne rend que les disciples encore ACTIFS (voir arbre.ts) : un
+          membre peut avoir eu des disciples, tous archivés depuis, et se retrouver ici
+          avec une liste vide. Sans qualificatif, « Aucun disciple rattaché » lirait
+          comme « n'en a jamais eu », ce que la donnée ne dit pas.
+        */}
+        {disciples.length === 0 ? (
+          <p className="text-sm text-neutral-600">Aucun disciple actif rattaché.</p>
+        ) : (
+          <ul className="divide-y divide-neutral-200">
+            {disciples.map((disciple) => (
+              <li key={disciple.id}>
+                <Link href={`/membres/${disciple.id}`} className="block py-2 text-sm">
+                  {disciple.prenom} {disciple.nom}
+                </Link>
               </li>
             ))}
           </ul>

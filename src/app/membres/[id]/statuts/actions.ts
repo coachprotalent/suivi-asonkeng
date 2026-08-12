@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { normaliserDateAcquisition, normaliserNote, StatutInvalideError } from '@/lib/domaine/statut'
-import { exigerAdministrateur } from '@/lib/securite/garde'
+import { exigerAutoriteSur } from '@/lib/securite/garde'
 import { clientAdmin } from '@/lib/supabase/admin'
 import {
   MESSAGE_ECHEC_STATUT,
@@ -32,8 +32,6 @@ export async function attribuerStatut(
   _etat: EtatStatut,
   donnees: FormData,
 ): Promise<EtatStatut> {
-  const profil = await exigerAdministrateur()
-
   const membreId = texteObligatoire(donnees, 'membreId')
   const statutId = texteObligatoire(donnees, 'statutId')
   if (!membreId || !statutId) {
@@ -46,6 +44,16 @@ export async function attribuerStatut(
     })
     return { erreur: MESSAGE_ECHEC_STATUT }
   }
+
+  // Le garde vient APRÈS la lecture de `membreId` parce qu'il en dépend — l'un des
+  // rares cas du projet où il n'est pas la toute première instruction (comme
+  // `changerMotDePasse`, src/app/changer-mot-de-passe/actions.ts, qui l'appelle
+  // après une validation, une lecture d'utilisateur et deux redirections). Ce qui
+  // précède ici ne touche ni la base ni aucun état persistant : il dépaquète le
+  // formulaire, et journalise (console.error) si des champs manquent — une trace
+  // serveur éphémère, pas une écriture. Aucun effet sur un état persistant n'est
+  // possible avant le contrôle.
+  const profil = await exigerAutoriteSur(membreId)
 
   let dateAcquisition: string | null
   let note: string | null
@@ -135,8 +143,6 @@ function normaliserMotifSansLever(brut: unknown, membreId: string, statutId: str
 }
 
 export async function retirerStatut(donnees: FormData): Promise<void> {
-  const profil = await exigerAdministrateur()
-
   const membreId = texteObligatoire(donnees, 'membreId')
   const statutId = texteObligatoire(donnees, 'statutId')
   if (!membreId || !statutId) {
@@ -149,6 +155,16 @@ export async function retirerStatut(donnees: FormData): Promise<void> {
     })
     throw new Error("Le statut n'a pas pu être retiré : identifiants manquants.")
   }
+
+  // Le garde vient APRÈS la lecture de `membreId` parce qu'il en dépend — l'un des
+  // rares cas du projet où il n'est pas la toute première instruction (comme
+  // `changerMotDePasse`, src/app/changer-mot-de-passe/actions.ts, qui l'appelle
+  // après une validation, une lecture d'utilisateur et deux redirections). Ce qui
+  // précède ici ne touche ni la base ni aucun état persistant : il dépaquète le
+  // formulaire, et journalise (console.error) si des champs manquent — une trace
+  // serveur éphémère, pas une écriture. Aucun effet sur un état persistant n'est
+  // possible avant le contrôle.
+  const profil = await exigerAutoriteSur(membreId)
 
   const motif = normaliserMotifSansLever(donnees.get('motif'), membreId, statutId)
 
