@@ -20,11 +20,11 @@ export default async function PageFicheMembre({
   searchParams,
 }: {
   params: Promise<{ id: string }>
-  searchParams: Promise<{ archivageRefuse?: string }>
+  searchParams: Promise<{ archivageRefuse?: string; desarchivageRefuse?: string }>
 }) {
   const profil = await exigerProfilActif()
   const { id } = await params
-  const { archivageRefuse } = await searchParams
+  const { archivageRefuse, desarchivageRefuse } = await searchParams
   const membre = await membreParId(id)
   if (!membre) {
     notFound()
@@ -139,6 +139,14 @@ export default async function PageFicheMembre({
           Cette fiche ne peut pas être archivée : {archivageRefuse} en dépendent encore comme
           faiseur de disciple. Rattachez ces personnes à quelqu&apos;un d&apos;autre, puis
           recommencez.
+        </p>
+      ) : null}
+
+      {desarchivageRefuse ? (
+        <p role="alert" className="mb-6 rounded-md bg-amber-50 p-3 text-sm text-amber-800">
+          Cette fiche ne peut pas être rétablie : {desarchivageRefuse} est archivé. Rattachez
+          cette fiche à un faiseur de disciple actif, ou rétablissez d&apos;abord{' '}
+          {desarchivageRefuse}, puis recommencez.
         </p>
       ) : null}
 

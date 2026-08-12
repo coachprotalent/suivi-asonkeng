@@ -284,6 +284,14 @@ describe("parcours de l'arbre", () => {
     expect(data?.[2].nom).toBe(`${PREFIXE}-racine`)
     expect(data?.[2].prenom).toBe('Test')
   })
+
+  // `chemin_arbre` n'avait aucun test de ce genre, alors que sa fonction sœur
+  // `ancetres_membre` (ci-dessus) en a un — même modèle.
+  it('refuse son exécution à un compte authentifié ordinaire', async () => {
+    const { error } = await clientSimple.rpc('chemin_arbre', { p_membre: idPetitEnfant })
+    expect(error).not.toBeNull()
+    expect(error?.code).toBe('42501')
+  })
 })
 
 describe("archivage d'un faiseur de disciple", () => {
@@ -311,14 +319,71 @@ describe("archivage d'un faiseur de disciple", () => {
       .eq('id', idParent)
     expect(erreurBloquee).not.toBeNull()
 
-    await admin.rpc('definir_arbre', {
+    // Réaffectation : précondition des deux lignes qui suivent. Un échec silencieux
+    // ici invaliderait cette précondition sans que rien ne le signale, et ferait
+    // échouer l'assertion suivante pour une raison sans rapport avec ce qu'elle
+    // prétend vérifier — exactement le défaut corrigé plus haut dans ce fichier
+    // (« refuse un dirigeant inconnu... »), réintroduit ici avant d'être fermé.
+    const { error: erreurReaffectation } = await admin.rpc('definir_arbre', {
       p_membre: idDisciple,
       p_faiseur_de_disciple: idRacine,
       p_dirigeant: null,
       p_dirigeant_force: false,
     })
+    expect(erreurReaffectation).toBeNull()
 
     const { error } = await admin.from('membres').update({ etat: 'archive' }).eq('id', idParent)
     expect(error).toBeNull()
+  })
+})
+
+describe("désarchivage d'un membre dont le faiseur de disciple est archivé", () => {
+  it('refuse de rétablir un membre quand son faiseur de disciple est archivé', async () => {
+    const idFaiseur = await creerMembre('faiseur-a-archiver', null)
+    const idDisciple = await creerMembre('disciple-a-retablir', idFaiseur)
+
+    // D archivé (autorisé, pas de disciple actif), puis M archivé (autorisé : le
+    // contrôle ne compte que les disciples actifs, et D ne l'est plus) — exactement
+    // le contournement décrit par 20260814140000.
+    const { error: erreurArchivageDisciple } = await admin
+      .from('membres')
+      .update({ etat: 'archive' })
+      .eq('id', idDisciple)
+    expect(erreurArchivageDisciple).toBeNull()
+
+    const { error: erreurArchivageFaiseur } = await admin
+      .from('membres')
+      .update({ etat: 'archive' })
+      .eq('id', idFaiseur)
+    expect(erreurArchivageFaiseur).toBeNull()
+
+    const { error } = await admin.from('membres').update({ etat: 'actif' }).eq('id', idDisciple)
+    expect(error).not.toBeNull()
+    expect(error?.details).toBe('faiseur_de_disciple_archive')
+
+    // Et la fiche est restée archivée : un refus qui aurait quand même écrit serait
+    // le pire des cas.
+    const { data } = await admin.from('membres').select('etat').eq('id', idDisciple).single()
+    expect(data?.etat).toBe('archive')
+  })
+
+  // CONTRÔLE POSITIF : sans lui, le refus ci-dessus serait satisfait par un
+  // déclencheur qui refuse tout rétablissement, quel que soit l'état du faiseur de
+  // disciple.
+  it('laisse rétablir un membre dont le faiseur de disciple est actif', async () => {
+    const idFaiseur = await creerMembre('faiseur-actif', null)
+    const idDisciple = await creerMembre('disciple-legitime', idFaiseur)
+
+    const { error: erreurArchivage } = await admin
+      .from('membres')
+      .update({ etat: 'archive' })
+      .eq('id', idDisciple)
+    expect(erreurArchivage).toBeNull()
+
+    const { error } = await admin.from('membres').update({ etat: 'actif' }).eq('id', idDisciple)
+    expect(error).toBeNull()
+
+    const { data } = await admin.from('membres').select('etat').eq('id', idDisciple).single()
+    expect(data?.etat).toBe('actif')
   })
 })

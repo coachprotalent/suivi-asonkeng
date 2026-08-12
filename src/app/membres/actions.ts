@@ -4,11 +4,13 @@ import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { FicheMembreInvalideError, normaliserFicheMembre, type EtatMembre } from '@/lib/domaine/membre'
 import { disciplesDe } from '@/lib/donnees/arbre'
+import { membreParId } from '@/lib/donnees/membres'
 import { exigerAdministrateur } from '@/lib/securite/garde'
 import { clientAdmin } from '@/lib/supabase/admin'
 import { MESSAGE_ECHEC_ENREGISTREMENT } from './messages'
 
 const DETAIL_DISCIPLES_A_REAFFECTER = 'disciples_a_reaffecter'
+const DETAIL_FAISEUR_DE_DISCIPLE_ARCHIVE = 'faiseur_de_disciple_archive'
 
 export type EtatFormulaireMembre = { erreur: string | null }
 
@@ -191,6 +193,40 @@ export async function desarchiverMembre(donnees: FormData): Promise<void> {
     redirect('/membres')
   }
 
-  await changerEtatMembre(id, 'actif')
+  // Contrôle EN AMONT, pour pouvoir nommer le faiseur de disciple concerné — même
+  // partage que dans archiverMembre : ce contrôle explique, le déclencheur
+  // (20260814140000) reste la barrière. Un archivage concurrent du faiseur de
+  // disciple, entre cette lecture et l'écriture ci-dessous, passerait ici et serait
+  // arrêté par le déclencheur, avec un message moins précis mais honnête (voir le
+  // `catch` plus bas).
+  const membre = await membreParId(id)
+  if (membre?.faiseurDeDiscipleId) {
+    const faiseur = await membreParId(membre.faiseurDeDiscipleId)
+    if (faiseur?.etat === 'archive') {
+      redirect(
+        `/membres/${id}?desarchivageRefuse=${encodeURIComponent(`${faiseur.prenom} ${faiseur.nom}`)}`,
+      )
+    }
+  }
+
+  try {
+    await changerEtatMembre(id, 'actif')
+  } catch (erreur) {
+    const details = (erreur as { details?: string | null })?.details
+    if (details !== DETAIL_FAISEUR_DE_DISCIPLE_ARCHIVE) {
+      // Pas le refus métier attendu : une autre panne. La déguiser en « faiseur de
+      // disciple archivé » mentirait à l'administrateur ; elle doit remonter comme
+      // une erreur réelle, vers la page d'erreur générique (src/app/error.tsx).
+      console.error('desarchiverMembre : échec inattendu', { id, erreur })
+      throw erreur
+    }
+    // Filet : le déclencheur a refusé alors que le contrôle amont laissait passer
+    // (le faiseur de disciple a été archivé entre les deux lectures ci-dessus, ou
+    // directement en base). Le contrôle amont ne peut plus nommer le faiseur ici,
+    // d'où un message moins précis mais honnête.
+    console.error('desarchiverMembre : rétablissement refusé par le déclencheur', { id, erreur })
+    redirect(`/membres/${id}?desarchivageRefuse=${encodeURIComponent('son faiseur de disciple')}`)
+  }
+
   redirect(`/membres/${id}`)
 }
