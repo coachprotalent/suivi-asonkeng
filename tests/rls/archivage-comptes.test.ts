@@ -146,7 +146,12 @@ describe('archivage désactive le compte lié (D24)', () => {
     expect(data?.actif).toBe(false)
   })
 
-  it("ne touche pas à un compte déjà désactivé, et n'échoue pas non plus", async () => {
+  // Le nom ne promet PAS « ne touche pas » : l'assertion (actif faux avant et après) est
+  // satisfaite aussi bien par « n'a rien écrit » que par « a réécrit false sur false » —
+  // il n'existe pas de colonne d'horodatage sur `profils` pour distinguer les deux. Ce
+  // que ce test prouve réellement : archiver une fiche dont le compte est DÉJÀ inactif
+  // n'échoue pas (silencieusement ou bruyamment) et ne réactive rien par erreur.
+  it("n'échoue pas quand le compte lié est déjà désactivé", async () => {
     const { error } = await admin.from('membres').update({ etat: 'archive' }).eq('id', idMembreDejaInactif)
     expect(error).toBeNull()
 

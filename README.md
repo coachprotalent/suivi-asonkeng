@@ -186,7 +186,12 @@ administrateurs :
   l'archivage est refusé (marqueur `dernier_administrateur`, le même que la protection ci-dessous —
   c'est le même fait, découvert par une autre porte) : le désactiver laisserait l'application sans
   administrateur, sans moyen d'en recréer un. Un contrôle amont dans `archiverMembre` nomme la
-  cause avant d'écrire ; le déclencheur reste la barrière. Le bouton « Archiver » avertit avant
+  cause avant d'écrire ; le déclencheur reste la barrière — et la rattrape intégralement si ce
+  contrôle amont régressait : `archiverMembre` fait correspondre le marqueur `dernier_administrateur`
+  levé par le déclencheur au MÊME message que le contrôle amont, donc une défaillance de ce dernier
+  ne rouvrirait aucune brèche, elle ferait seulement perdre le nom de la cause au profit du même
+  refus (détail : `compteLieEstDernierAdministrateurActif`, `src/lib/donnees/comptes.ts`). Le
+  bouton « Archiver » avertit avant
   qu'on clique, dès que la fiche porte un compte lié actif, plutôt que de surprendre après coup.
   `/comptes` affiche toujours l'état de la fiche liée à chaque compte (« Fiche archivée ») — utile
   pour le cas résiduel d'un compte réactivé séparément sans que sa fiche le soit.

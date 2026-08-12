@@ -129,6 +129,22 @@ export async function etatCompteLie(membreId: string): Promise<boolean | null> {
  * passé `exigerAdministrateur`, et la politique `profils_lecture` laisse un
  * administrateur voir TOUS les profils et rôles — le même univers que compte
  * `prive.compter_administrateurs_actifs`, jamais exposée à l'API.
+ *
+ * COUVERTURE DE TEST : la branche qui rend `true` (« c'est bien le dernier
+ * administrateur ») n'est exercée par aucun test dans cet environnement — même limite
+ * arithmétique que le reste (compte racine réel, administrateur actif intouchable, voir
+ * README). Mais l'inoffensivité de ce trou ne tient PAS qu'à cette impossibilité de
+ * test : si cette fonction régressait au point de toujours rendre `false` (bug, code
+ * mort, mauvais refactor), le comportement final resterait IDENTIQUE pour
+ * l'utilisateur. `archiverMembre` (src/app/membres/actions.ts) fait correspondre le
+ * marqueur `dernier_administrateur` levé par le déclencheur — `catch` sur l'échec de
+ * `changerEtatMembre` — au MÊME `redirect(...archivageRefuseAdministrateur=1)` et donc
+ * au même message affiché que ce contrôle amont. Le déclencheur, verrouillé et seul
+ * décisif, rattrape intégralement toute défaillance de cette fonction : elle n'est
+ * qu'une amélioration du message affiché (nommer la cause avant d'écrire), jamais la
+ * dernière ligne de défense. Une régression ici ne rouvrirait donc PAS de brèche de
+ * sécurité — elle ferait seulement perdre le message précis au profit du même refus,
+ * un instant plus tard.
  */
 export async function compteLieEstDernierAdministrateurActif(membreId: string): Promise<boolean> {
   const compte = await compteLieBrut(membreId)
