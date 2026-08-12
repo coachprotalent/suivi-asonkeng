@@ -68,8 +68,24 @@ export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: b
   // 14 (voir le commentaire de `soumettre` ci-dessus). Même remède : on appelle
   // l'action directement depuis un `useTransition`, avec `try`/`catch`, pour intercepter
   // le rejet ici plutôt que de le laisser remonter au périmètre d'erreur générique.
+  // Confirmation UNIQUEMENT sur sa propre ligne (`estMoi`), motif de
+  // `BoutonArchiver` (`src/app/membres/[id]/bouton-archiver.tsx`) : passer la main
+  // reste une action légitime pour n'importe quel compte, et aucun bouton n'est
+  // verrouillé. Mais la protection du dernier administrateur (spec §7) est livrée
+  // SANS PREUVE dans cet environnement (voir README) — c'est la seule chose qui
+  // se tient entre un clic mal ciblé sur sa propre ligne et une application sans
+  // administrateur, sans moyen d'en recréer un depuis l'interface.
   function soumettreRoles(evenement: FormEvent<HTMLFormElement>) {
     evenement.preventDefault()
+    if (
+      estMoi &&
+      !window.confirm(
+        'Modifier vos propres rôles ?\n\n' +
+          'Si vous retirez votre rôle administrateur, vous perdrez ce pouvoir immédiatement.',
+      )
+    ) {
+      return
+    }
     const donnees = new FormData(evenement.currentTarget)
     setErreurRoles(null)
     demarrerRoles(async () => {
@@ -83,6 +99,18 @@ export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: b
 
   function soumettreActivation(evenement: FormEvent<HTMLFormElement>) {
     evenement.preventDefault()
+    if (
+      estMoi &&
+      !window.confirm(
+        compte.actif
+          ? 'Désactiver votre propre compte ?\n\n' +
+            "Vous serez déconnecté et ne pourrez plus vous reconnecter tant qu'un autre " +
+            'administrateur ne vous aura pas réactivé.'
+          : 'Réactiver votre propre compte ?',
+      )
+    ) {
+      return
+    }
     const donnees = new FormData(evenement.currentTarget)
     setErreurActivation(null)
     demarrerActivation(async () => {
@@ -119,6 +147,19 @@ export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: b
           ? compte.roles.map((role) => LIBELLE_ROLE[role] ?? role).join(', ')
           : 'Utilisateur'}
       </p>
+
+      {/*
+        Archiver une fiche ne révoque PAS l'autorité du compte qui lui est liée
+        (voir README, section « Attention ») : ce compte, s'il reste actif, garde
+        tout pouvoir sur les statuts de ses subordonnés. Le signaler ici est le seul
+        moyen pour un administrateur de le repérer — désactiver le compte reste un
+        geste séparé, à faire soi-même plus bas.
+      */}
+      {compte.membreId && compte.membreEtat && compte.membreEtat !== 'actif' ? (
+        <p role="alert" className="mt-1 text-sm text-amber-700">
+          {compte.membreEtat === 'archive' ? 'Fiche archivée' : 'Fiche en attente de validation'}
+        </p>
+      ) : null}
 
       {compte.estRacine ? (
         // Une contrainte CHECK sur `profils` interdit cette liaison (spec D11) : le

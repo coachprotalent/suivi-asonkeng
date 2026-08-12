@@ -1,4 +1,5 @@
 import 'server-only'
+import type { EtatMembre } from '@/lib/domaine/membre'
 import { clientServeur } from '@/lib/supabase/serveur'
 import type { RoleApp } from './profils'
 
@@ -8,16 +9,29 @@ export type CompteListe = {
   nomAffichage: string
   membreId: string | null
   membreNom: string | null
+  // Archiver une fiche ne révoque PAS l'autorité du compte qui lui est liée (spec §7,
+  // décision utilisateur hors périmètre de cette phase) : un dirigeant ou un faiseur
+  // de disciple archivé garde tout pouvoir sur ses subordonnés tant que son compte
+  // reste actif. Ce champ existe pour qu'un administrateur puisse au moins LE VOIR sur
+  // `/comptes` — voir `ligne-compte.tsx`.
+  membreEtat: EtatMembre | null
   estRacine: boolean
   actif: boolean
   roles: RoleApp[]
 }
 
-type LigneMembre = { nom: string; prenom: string } | { nom: string; prenom: string }[] | null
+type LigneMembre =
+  | { nom: string; prenom: string; etat: EtatMembre }
+  | { nom: string; prenom: string; etat: EtatMembre }[]
+  | null
+
+function membreDeLaLigne(valeur: LigneMembre): { nom: string; prenom: string; etat: EtatMembre } | null {
+  if (!valeur) return null
+  return Array.isArray(valeur) ? (valeur[0] ?? null) : valeur
+}
 
 function nomMembre(valeur: LigneMembre): string | null {
-  if (!valeur) return null
-  const membre = Array.isArray(valeur) ? valeur[0] : valeur
+  const membre = membreDeLaLigne(valeur)
   return membre ? `${membre.prenom} ${membre.nom}` : null
 }
 
@@ -40,7 +54,7 @@ export async function listerComptes(): Promise<CompteListe[]> {
     // relationship was found for 'profils' and 'membres' » — observé au rejeu contre la
     // vraie base, pas déduit du schéma.
     .select(
-      'id, identifiant, nom_affichage, membre_id, est_racine, actif, membres!profils_membre_id_fkey(nom, prenom), roles_profil(role)',
+      'id, identifiant, nom_affichage, membre_id, est_racine, actif, membres!profils_membre_id_fkey(nom, prenom, etat), roles_profil(role)',
     )
     .order('identifiant')
 
@@ -56,6 +70,7 @@ export async function listerComptes(): Promise<CompteListe[]> {
     nomAffichage: ligne.nom_affichage as string,
     membreId: ligne.membre_id as string | null,
     membreNom: nomMembre(ligne.membres as LigneMembre),
+    membreEtat: membreDeLaLigne(ligne.membres as LigneMembre)?.etat ?? null,
     estRacine: ligne.est_racine as boolean,
     actif: ligne.actif as boolean,
     roles: ((ligne.roles_profil ?? []) as Array<{ role: RoleApp }>).map((r) => r.role),
