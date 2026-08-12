@@ -60,25 +60,40 @@ export function motifRecherche(recherche: string | undefined): string | null {
   return `"%${terme}%"`
 }
 
+/** Nombre de fiches rendues par page de l'annuaire. Voir D21 et §6.2 du design de la
+ *  phase 1c : on pagine plutôt que d'indexer, le poids de la page étant le vrai coût
+ *  à cette échelle, pas la requête. */
+export const TAILLE_PAGE_ANNUAIRE = 50
+
+export type PageMembres = { membres: MembreListe[]; total: number }
+
 /**
- * Membres visibles par le compte appelant, triés par nom puis prénom.
- * La RLS décide de ce qui est visible ; ce module ne refait pas ce filtrage.
+ * Membres visibles par le compte appelant, triés par nom puis prénom, une page à la
+ * fois. La RLS décide de ce qui est visible ; ce module ne refait pas ce filtrage.
  */
 export async function listerMembres(filtres?: {
   recherche?: string
   antenneId?: string
-}): Promise<MembreListe[]> {
+  page?: number
+}): Promise<PageMembres> {
   const supabase = await clientServeur()
+  const page = Math.max(1, filtres?.page ?? 1)
+  const debut = (page - 1) * TAILLE_PAGE_ANNUAIRE
+
   // `etat = 'actif'` explicitement, et pas seulement via la RLS : la politique laisse
   // un administrateur voir aussi les fiches archivées, or l'annuaire est la liste des
   // membres en cours de suivi. Sans ce filtre, archiver une fiche ne la ferait pas
   // disparaître pour un administrateur — exactement l'inverse de ce qu'il attend.
   let requete = supabase
     .from('membres')
-    .select(COLONNES_LISTE)
+    // `count: 'exact'` : le nombre total doit rester juste, sinon la pagination annonce
+    // des pages qui n'existent pas. C'est un COUNT complet à chaque requête, assumé —
+    // il porte sur une table indexée par `etat` et reste très bon marché à cette échelle.
+    .select(COLONNES_LISTE, { count: 'exact' })
     .eq('etat', 'actif')
     .order('nom')
     .order('prenom')
+    .range(debut, debut + TAILLE_PAGE_ANNUAIRE - 1)
 
   const motif = motifRecherche(filtres?.recherche)
   if (motif) {
@@ -88,20 +103,29 @@ export async function listerMembres(filtres?: {
     requete = requete.eq('antenne_id', filtres.antenneId)
   }
 
-  const { data, error } = await requete
+  const { data, error, count } = await requete
   if (error) {
     // Un échec ne doit pas être indistinguable d'un résultat vide : annoncer
     // « aucun membre » alors que la requête a échoué est un mensonge silencieux.
     throw new Error(`Lecture des membres impossible : ${error.message}`)
   }
-  return (data ?? []).map((l) => ({
-    id: l.id as string,
-    nom: l.nom as string,
-    prenom: l.prenom as string,
-    ville: l.ville as string | null,
-    situation: l.situation as SituationMembre | null,
-    antenneNom: nomAntenne(l.antennes as LigneAntenne),
-  }))
+  // `count` peut être `null` si PostgREST ne l'a pas renvoyé. Retomber sur la longueur
+  // de la page serait un mensonge : l'écran annoncerait « 50 membres » pour une base
+  // qui en compte mille, et la pagination s'arrêterait à la première page.
+  if (count === null) {
+    throw new Error('Comptage des membres absent de la réponse PostgREST.')
+  }
+  return {
+    membres: (data ?? []).map((l) => ({
+      id: l.id as string,
+      nom: l.nom as string,
+      prenom: l.prenom as string,
+      ville: l.ville as string | null,
+      situation: l.situation as SituationMembre | null,
+      antenneNom: nomAntenne(l.antennes as LigneAntenne),
+    })),
+    total: count,
+  }
 }
 
 /**

@@ -184,6 +184,48 @@ test('une fiche archivée disparaît de l’annuaire', async ({ page }) => {
   await expect(page.getByText(`Jérôme ${NOM_MEMBRE}`)).toHaveCount(0)
 })
 
+test("l'annuaire pagine au-delà d'une page", async ({ page }) => {
+  const PREFIXE_PAGINATION = `ZZPagination-${crypto.randomUUID().slice(0, 8)}`
+  const lignes = Array.from({ length: 51 }, (_, i) => ({
+    nom: `${PREFIXE_PAGINATION}-${String(i).padStart(3, '0')}`,
+    prenom: 'Test',
+  }))
+  const { error: erreurInsertion } = await admin.from('membres').insert(lignes)
+  // Vérifier l'insertion : une précondition qui échoue en silence rendrait ce test
+  // vert pour de mauvaises raisons (défaut réel de la Task 10 de la 1b).
+  expect(erreurInsertion).toBeNull()
+
+  try {
+    await seConnecter(page)
+    await page.goto(`/membres?recherche=${PREFIXE_PAGINATION}`)
+
+    await expect(page.getByRole('link', { name: /Test ZZPagination/ })).toHaveCount(50)
+    await expect(page.getByRole('link', { name: 'Page suivante' })).toHaveCount(1)
+
+    await page.getByRole('link', { name: 'Page suivante' }).click()
+    await expect(page).toHaveURL(/page=2/)
+    await expect(page.getByRole('link', { name: /Test ZZPagination/ })).toHaveCount(1)
+    await expect(page.getByRole('link', { name: 'Page précédente' })).toHaveCount(1)
+
+    // Le formulaire de filtre n'a pas de champ « page » caché : le soumettre depuis la
+    // page 2 doit donc revenir à la page 1, plutôt que de garder une page qui n'a
+    // peut-être plus de sens pour le nouveau résultat filtré. On vérifie le fait, pas
+    // seulement l'intention : soumettre le même terme depuis la page 2 doit retomber
+    // sur la première page (50 résultats), sans `page=` dans l'adresse.
+    await page.getByLabel('Rechercher').fill(PREFIXE_PAGINATION)
+    await page.getByRole('button', { name: 'Filtrer' }).click()
+    await expect(page).not.toHaveURL(/page=/)
+    await expect(page.getByRole('link', { name: /Test ZZPagination/ })).toHaveCount(50)
+  } finally {
+    const { error: erreurSuppression, count } = await admin
+      .from('membres')
+      .delete({ count: 'exact' })
+      .like('nom', `${PREFIXE_PAGINATION}-%`)
+    expect(erreurSuppression).toBeNull()
+    expect(count).toBe(51)
+  }
+})
+
 test("un compte non administrateur ne peut pas atteindre la création", async ({ page }) => {
   await page.goto('/connexion')
   await page.getByLabel('Identifiant').fill(IDENTIFIANT_SIMPLE)
