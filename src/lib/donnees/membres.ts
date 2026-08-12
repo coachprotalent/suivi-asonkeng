@@ -68,6 +68,39 @@ export const TAILLE_PAGE_ANNUAIRE = 50
 export type PageMembres = { membres: MembreListe[]; total: number }
 
 /**
+ * Compte les membres actifs visibles par l'appelant, filtres identiques à
+ * `listerMembres` mais sans `range` : sert de filet quand PostgREST refuse la
+ * requête paginée elle-même (voir `PGRST103` plus bas), cas où son `count` normal
+ * n'arrive jamais.
+ */
+async function compterMembresActifs(
+  supabase: Awaited<ReturnType<typeof clientServeur>>,
+  filtres?: { recherche?: string; antenneId?: string },
+): Promise<number> {
+  let requete = supabase
+    .from('membres')
+    .select('id', { count: 'exact', head: true })
+    .eq('etat', 'actif')
+
+  const motif = motifRecherche(filtres?.recherche)
+  if (motif) {
+    requete = requete.or(`nom.ilike.${motif},prenom.ilike.${motif},ville.ilike.${motif}`)
+  }
+  if (filtres?.antenneId) {
+    requete = requete.eq('antenne_id', filtres.antenneId)
+  }
+
+  const { count, error } = await requete
+  if (error) {
+    throw new Error(`Comptage des membres impossible : ${error.message}`)
+  }
+  if (count === null) {
+    throw new Error('Comptage des membres absent de la réponse PostgREST.')
+  }
+  return count
+}
+
+/**
  * Membres visibles par le compte appelant, triés par nom puis prénom, une page à la
  * fois. La RLS décide de ce qui est visible ; ce module ne refait pas ce filtrage.
  */
@@ -105,6 +138,17 @@ export async function listerMembres(filtres?: {
 
   const { data, error, count } = await requete
   if (error) {
+    // `PGRST103` : le `range` demandé dépasse le nombre réel de lignes (page hors
+    // bornes — signet périmé, ou résultat qui a rétréci depuis). PostgREST refuse
+    // alors la requête entière, y compris son `count`, avec une erreur 416 : on ne
+    // peut pas distinguer « page hors bornes » d'une vraie panne sans un second
+    // appel. On récupère donc le total réel par un comptage sans `range`, pour que
+    // l'appelant (`src/app/membres/page.tsx`) puisse rediriger vers la dernière
+    // page réelle au lieu de faire tomber l'écran sur une erreur générique.
+    if (error.code === 'PGRST103') {
+      const total = await compterMembresActifs(supabase, filtres)
+      return { membres: [], total }
+    }
     // Un échec ne doit pas être indistinguable d'un résultat vide : annoncer
     // « aucun membre » alors que la requête a échoué est un mensonge silencieux.
     throw new Error(`Lecture des membres impossible : ${error.message}`)

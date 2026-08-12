@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { redirect } from 'next/navigation'
 import { listerAntennes } from '@/lib/donnees/antennes'
 import { listerMembres, TAILLE_PAGE_ANNUAIRE } from '@/lib/donnees/membres'
 import { rolesDuProfil } from '@/lib/donnees/profils'
@@ -45,6 +46,20 @@ export default async function PageAnnuaire({
     if (antenneFiltre) params.set('antenne', antenneFiltre)
     params.set('page', String(numero))
     return `/membres?${params.toString()}`
+  }
+
+  // Une adresse pointant au-delà de la dernière page réelle est un signet périmé
+  // (ou un résultat qui a rétréci depuis) : sans ce garde, l'en-tête affichait
+  // « N membres · page 99 sur 2 » pendant que le corps affirmait qu'aucun membre
+  // ne correspond — deux vérités contradictoires sur le même écran. On corrige
+  // l'adresse vers la dernière page réelle plutôt que de laisser tenir ce mensonge.
+  // Pas de boucle possible : `pages` vaut toujours au moins 1, et la cible de la
+  // redirection est `pages` lui-même, donc la page rechargée aura page === pages,
+  // qui ne redéclenche pas la condition `page > pages`.
+  // Hors de tout `try` : `redirect()` lève une exception de contrôle Next.js que
+  // ce fichier ne doit pas intercepter (aucun `try` ici de toute façon — vérifié).
+  if (page > pages) {
+    redirect(lienPage(pages))
   }
 
   return (

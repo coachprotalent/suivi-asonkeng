@@ -216,6 +216,15 @@ test("l'annuaire pagine au-delà d'une page", async ({ page }) => {
     await page.getByRole('button', { name: 'Filtrer' }).click()
     await expect(page).not.toHaveURL(/page=/)
     await expect(page.getByRole('link', { name: /Test ZZPagination/ })).toHaveCount(50)
+
+    // Une adresse pointant au-delà de la dernière page réelle (signet périmé, résultat
+    // qui a rétréci) doit se corriger vers la dernière page réelle, pas afficher un
+    // écran qui se contredit lui-même — l'en-tête annonçant « 51 membres » pendant que
+    // le corps affirmerait qu'aucun membre ne correspond. Ce jeu n'a que 2 pages ;
+    // page=99 doit donc retomber sur la page 2, avec son unique résultat affiché.
+    await page.goto(`/membres?recherche=${PREFIXE_PAGINATION}&page=99`)
+    await expect(page).toHaveURL(/page=2/)
+    await expect(page.getByRole('link', { name: /Test ZZPagination/ })).toHaveCount(1)
   } finally {
     const { error: erreurSuppression, count } = await admin
       .from('membres')
