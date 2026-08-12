@@ -54,8 +54,15 @@ la contrainte d'unicité (`antennes_nom_key`) si ces antennes existent déjà. I
 l'amorçage du catalogue des statuts dans `20260813100000_statuts.sql` : il insère 2 groupes et 5
 statuts sans condition, et échouera pour la même raison (`groupes_statut_nom_key`,
 `statuts_libelle_unique_par_groupe`) si une restauration les retrouve déjà présents. Les
-migrations de la phase 1c (`20260814100000` à `20260814130000`) ne créent aucun amorçage : rien
-à ajouter sur ce point pour elles.
+migrations de la phase 1c (`20260814100000` à `20260814140000`) ne créent aucun amorçage de
+données : rien à ajouter sur ce point pour elles.
+
+**Les déclencheurs posés par la phase 1c ne sont pas non plus idempotents.** Chacun est créé par
+un simple `create trigger`, sans `drop trigger if exists` en amont (contrairement à
+`durcir_statuts`, qui emploie la forme gardée). Une restauration qui retrouverait ces
+déclencheurs déjà en place — parce qu'une migration antérieure a laissé la table dans cet état —
+échouerait de la même façon que les deux amorçages ci-dessus, sur une erreur d'objet déjà
+existant.
 
 **Les suites de tests écrivent dans la base de production.** Conséquence directe de la décision
 « un seul projet Supabase » ci-dessus. Les preuves par mutation (fonctions et déclencheurs)
@@ -77,8 +84,12 @@ retiré directement de la fonction en base, la suite RLS rejouée à l'identique
 verts, mêmes 2 neutralisés) — preuve que rien, aujourd'hui, ne détecterait la disparition de cette
 protection. Les deux tests concernés sont désactivés par une condition **calculée à l'exécution**
 (`ADMINS_REELS_ACTIFS`, mesurée en tête de fichier), pas par un booléen figé : ils se réactiveront
-d'eux-mêmes sur une base sans administrateur réel actif. Limite documentée et acceptée par
-décision explicite de l'utilisateur (détail : `task-12-report.md`).
+d'eux-mêmes sur une base sans administrateur réel actif. **Cette condition repose sur une
+heuristique de préfixe (`identifiant.startsWith('test.')`), pas sur une garantie structurelle** :
+c'est une convention de nommage suivie par ce dépôt, que rien en base n'impose ni ne vérifie — un
+compte de test dont l'identifiant ne commencerait pas par `test.` serait compté comme un
+administrateur réel, et pourrait à lui seul empêcher indéfiniment la réactivation. Limite
+documentée et acceptée par décision explicite de l'utilisateur (détail : `task-12-report.md`).
 
 ## Phase 1a : le registre des membres
 
@@ -137,12 +148,23 @@ administrateurs :
   sérialisée par un verrou consultatif (`pg_advisory_xact_lock`), pour qu'un rattachement
   concurrent ne puisse pas se glisser entre la vérification et l'écriture ; et un déclencheur
   `before insert or update` (`membres_anti_cycle`) qui refuse toute écriture directe fermant un
-  cycle, y compris hors de la passerelle. Le chemin fautif remonté par `prive.est_ancetre` est
-  affiché à l'administrateur.
-- **Archivage bloqué pour un faiseur de disciple actif** — un membre encore faiseur de disciple
-  d'au moins une personne active ne peut pas être archivé ; l'écran nomme les personnes
-  concernées. Barrière posée deux fois : un contrôle en amont dans l'action d'archivage, et un
-  déclencheur `membres_archivage_faiseur_de_disciple` qui protège aussi une écriture directe.
+  cycle, y compris hors de la passerelle. Le chemin fautif remonté par `public.chemin_arbre` est
+  affiché à l'administrateur (`prive.est_ancetre` ne rend qu'un booléen ; c'est `chemin_arbre` qui
+  porte les noms).
+- **Archivage bloqué pour un faiseur de disciple actif, dans les deux sens** — un membre encore
+  faiseur de disciple d'au moins une personne active ne peut pas être archivé ; l'écran nomme les
+  personnes concernées. Barrière posée deux fois : un contrôle en amont dans l'action d'archivage,
+  et un déclencheur `membres_archivage_faiseur_de_disciple` qui protège aussi une écriture
+  directe. Réciproquement, un membre dont le faiseur de disciple est archivé ne peut pas être
+  rétabli tant que celui-ci le reste — même schéma à deux barrières
+  (`membres_desarchivage_faiseur_actif`), sans quoi archiver le disciple puis son faiseur de
+  disciple, puis rétablir seulement le disciple, recréait l'état que l'archivage interdit.
+  **Ce que l'archivage d'une fiche ne fait PAS** : il ne révoque aucune autorité. Un compte lié à
+  une fiche archivée en tant que dirigeant ou faiseur de disciple garde tout pouvoir sur les
+  statuts de ses subordonnés tant que le compte lui-même reste actif — décision produit distincte,
+  volontairement non tranchée par cette phase. `/comptes` affiche désormais l'état de la fiche
+  liée à chaque compte (« Fiche archivée ») pour qu'un administrateur puisse repérer ce cas ;
+  désactiver le compte reste un geste séparé, à faire soi-même sur cet écran.
 - **Portée d'autorité** (`exigerAutoriteSur`, `src/lib/securite/garde.ts`) — la modification des
   statuts n'est plus réservée aux administrateurs. Un utilisateur possède l'autorité sur un membre
   dont il est un ancêtre dans l'arbre des faiseurs de disciple, ou dont il est le dirigeant
