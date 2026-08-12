@@ -46,8 +46,9 @@ pendant l'implémentation sans validation.
 | D13 | Les événements acceptent des participants externes, convertibles en membres | Les séminaires sont un canal d'entrée dans l'équipe |
 | D14 | Les AEL sont récurrents, pré-générés depuis un calendrier par antenne | Mardi, mercredi, samedi par défaut ; le samedi se déplace au dimanche en changeant la date |
 | D15 | L'arborescence est une liste d'adjacence parcourue par CTE récursive | Une table de fermeture ne se justifie pas à l'échelle d'une équipe |
-| D16 | La participation à un événement est visible de tous, les trois désirs de l'admin seul | La fiche membre doit afficher ses séminaires assistés (D2), mais un désir exprimé est une confidence |
+| D16 | La participation à un événement est visible de tous, les trois désirs des seuls administrateurs **et modérateurs** (amendée par D23) | La fiche membre doit afficher ses séminaires assistés (D2), mais un désir exprimé est une confidence : le cercle reste étroit, il n'est simplement plus limité aux administrateurs |
 | D22 | Le modérateur gère aussi le calendrier AEL récurrent | Amendement du 2026-08-12 : il tient déjà les séances que ce calendrier engendre. Voir la note sous la matrice du §5.2. **À appliquer au plan de la phase 3.** |
+| D23 | Le modérateur crée un événement, saisit **et voit** les trois désirs | Amendement du 2026-08-12. La saisie était seule demandée ; la consultation suit nécessairement — on ne saisit pas dans un champ qu'on ne peut pas relire, ni corriger une valeur qu'on ne voit pas. D16 et la RLS du §5.3 sont amendées en conséquence. **À appliquer au plan de la phase 4.** |
 
 > **D17 à D21** sont posées dans `2026-08-12-phase-1c-design.md` et ne sont pas recopiées
 > ici. D18 y **amende D15** ci-dessus : l'équipe vise un millier de membres ou plus, et non
@@ -308,14 +309,14 @@ Cette règle est implémentée par une fonction unique `peutModifier(profil, mem
 |---|:--:|:--:|:--:|
 | Consulter l'annuaire complet (membres actifs) | ✅ | ✅ | ✅ |
 | Voir les séminaires assistés sur une fiche membre | ✅ | ✅ | ✅ |
-| Voir les trois désirs exprimés lors d'un événement | ❌ | ❌ | ✅ |
+| Voir les trois désirs exprimés lors d'un événement | ❌ | ✅ | ✅ |
 | Modifier son propre profil et son mot de passe | ✅ | ✅ | ✅ |
 | Modifier les statuts d'un membre dans sa portée d'autorité | ✅ | ✅ | ✅ |
 | Demander l'ajout d'une personne suivie | ✅ | ✅ | ✅ |
 | Créer et tenir une séance AEL, pointer les présences | ❌ | ✅ | ✅ |
 | Modifier l'arbre (faiseur de disciple, dirigeant) | ❌ | ❌ | ✅ |
 | Créer statuts, groupes, antennes, types d'événement | ❌ | ❌ | ✅ |
-| Créer un événement et saisir les trois désirs | ❌ | ❌ | ✅ |
+| Créer un événement et saisir les trois désirs | ❌ | ✅ | ✅ |
 | Convertir un participant externe en membre | ❌ | ❌ | ✅ |
 | Valider ou rejeter une demande de suivi | ❌ | ❌ | ✅ |
 | Générer un token, créer un compte, lier un compte à une fiche | ❌ | ❌ | ✅ |
@@ -329,6 +330,15 @@ Cette règle est implémentée par une fonction unique `peutModifier(profil, mem
 > engendre ces séances, et en réserver le réglage à un administrateur obligerait la
 > personne qui anime à demander une intervention pour déplacer une date. Sans effet sur
 > les phases 0 à 1c, qui ne livrent aucun AEL — **à appliquer au plan de la phase 3.**
+>
+> **Amendement du 2026-08-12 (D23).** La création d'un événement et la saisie des trois
+> désirs sont ouvertes au modérateur. **Conséquence assumée, tirée en même temps :** la
+> ligne « Voir les trois désirs » suit, et la RLS du §5.3 sur `participations` et
+> `participants_externes` s'ouvre au modérateur. On ne saisit pas dans un champ qu'on ne
+> peut pas relire, et une valeur invisible ne se corrige pas. Le cercle des personnes
+> voyant ces confidences s'élargit donc d'un rôle — c'est le vrai coût de cet amendement,
+> et il est dit ici plutôt que découvert à l'implémentation. Sans effet sur les phases 0
+> à 1c, qui ne livrent aucun événement — **à appliquer au plan de la phase 4.**
 
 ### 5.3 Traduction technique
 
@@ -344,7 +354,7 @@ Cette règle est implémentée par une fonction unique `peutModifier(profil, mem
 | `seances_ael`, `presences_ael`, `calendriers_ael` | Tout compte actif |
 | `evenements` | Tout compte actif — nécessaire pour afficher les séminaires assistés sur une fiche |
 | Vue `seminaires_assistes` | Tout compte actif — participation seule, sans les trois désirs |
-| `participations`, `participants_externes` | Administrateur uniquement — elles portent les trois désirs |
+| `participations`, `participants_externes` | Administrateur **ou modérateur** — elles portent les trois désirs, dont la saisie est ouverte au modérateur depuis D23. Fermé à tout autre compte |
 | `profils`, `roles_profil` | Son propre profil ; l'administrateur voit tout |
 | `notifications` | Ses propres notifications uniquement |
 | `tokens_inscription`, `demandes_membre` | Administrateur ; le demandeur voit ses propres demandes |
