@@ -68,6 +68,47 @@ export const TAILLE_PAGE_ANNUAIRE = 50
 export type PageMembres = { membres: MembreListe[]; total: number }
 
 /**
+ * Applique à `requete` les filtres communs à `listerMembres` et à son repli
+ * `compterMembresActifs` : l'état actif, la recherche textuelle et l'antenne.
+ *
+ * Centralisée à dessein, pas par style : si un futur filtre s'ajoutait à l'une
+ * des deux requêtes sans être répercuté dans l'autre, le total du repli
+ * `PGRST103` (plus bas) gonflerait, le nombre de pages calculé par l'appelant
+ * gonflerait avec lui, `page > pages` deviendrait faux, et la redirection de
+ * page hors bornes cesserait d'agir — rouvrant, par une simple divergence entre
+ * deux copies, le défaut que cette tâche vient de fermer. Même raisonnement que
+ * pour `motifRecherche`, déjà extrait plus haut pour la même raison au bénéfice
+ * du sélecteur de membre.
+ *
+ * `etat = 'actif'` explicitement, et pas seulement via la RLS : la politique
+ * laisse un administrateur voir aussi les fiches archivées, or l'annuaire est
+ * la liste des membres en cours de suivi. Sans ce filtre, archiver une fiche
+ * ne la ferait pas disparaître pour un administrateur — l'inverse de ce qu'il
+ * attend.
+ */
+// Paramètre et retour délibérément larges : les deux appelants passent un
+// constructeur de requête PostgREST à un stade différent de sa chaîne générique
+// (avec ou sans `head`, avec ou sans `range`), et le préserver précisément fait
+// exploser l'inférence de TypeScript (« Type instantiation is excessively deep »,
+// constaté à l'essai — limite connue de la composition de types génériques de
+// supabase-js). Sans conséquence sur la sûreté réelle : chaque appelant retype
+// `data` champ par champ après l'attente (`as string`, etc.), comme le reste de
+// ce fichier le fait déjà pour toutes les requêtes Supabase.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function filtrerMembresActifs(requete: any, filtres?: { recherche?: string; antenneId?: string }) {
+  let resultat = requete.eq('etat', 'actif')
+
+  const motif = motifRecherche(filtres?.recherche)
+  if (motif) {
+    resultat = resultat.or(`nom.ilike.${motif},prenom.ilike.${motif},ville.ilike.${motif}`)
+  }
+  if (filtres?.antenneId) {
+    resultat = resultat.eq('antenne_id', filtres.antenneId)
+  }
+  return resultat
+}
+
+/**
  * Compte les membres actifs visibles par l'appelant, filtres identiques à
  * `listerMembres` mais sans `range` : sert de filet quand PostgREST refuse la
  * requête paginée elle-même (voir `PGRST103` plus bas), cas où son `count` normal
@@ -77,18 +118,10 @@ async function compterMembresActifs(
   supabase: Awaited<ReturnType<typeof clientServeur>>,
   filtres?: { recherche?: string; antenneId?: string },
 ): Promise<number> {
-  let requete = supabase
-    .from('membres')
-    .select('id', { count: 'exact', head: true })
-    .eq('etat', 'actif')
-
-  const motif = motifRecherche(filtres?.recherche)
-  if (motif) {
-    requete = requete.or(`nom.ilike.${motif},prenom.ilike.${motif},ville.ilike.${motif}`)
-  }
-  if (filtres?.antenneId) {
-    requete = requete.eq('antenne_id', filtres.antenneId)
-  }
+  const requete = filtrerMembresActifs(
+    supabase.from('membres').select('id', { count: 'exact', head: true }),
+    filtres,
+  )
 
   const { count, error } = await requete
   if (error) {
@@ -113,28 +146,18 @@ export async function listerMembres(filtres?: {
   const page = Math.max(1, filtres?.page ?? 1)
   const debut = (page - 1) * TAILLE_PAGE_ANNUAIRE
 
-  // `etat = 'actif'` explicitement, et pas seulement via la RLS : la politique laisse
-  // un administrateur voir aussi les fiches archivées, or l'annuaire est la liste des
-  // membres en cours de suivi. Sans ce filtre, archiver une fiche ne la ferait pas
-  // disparaître pour un administrateur — exactement l'inverse de ce qu'il attend.
-  let requete = supabase
-    .from('membres')
-    // `count: 'exact'` : le nombre total doit rester juste, sinon la pagination annonce
-    // des pages qui n'existent pas. C'est un COUNT complet à chaque requête, assumé —
-    // il porte sur une table indexée par `etat` et reste très bon marché à cette échelle.
-    .select(COLONNES_LISTE, { count: 'exact' })
-    .eq('etat', 'actif')
-    .order('nom')
-    .order('prenom')
-    .range(debut, debut + TAILLE_PAGE_ANNUAIRE - 1)
-
-  const motif = motifRecherche(filtres?.recherche)
-  if (motif) {
-    requete = requete.or(`nom.ilike.${motif},prenom.ilike.${motif},ville.ilike.${motif}`)
-  }
-  if (filtres?.antenneId) {
-    requete = requete.eq('antenne_id', filtres.antenneId)
-  }
+  const requete = filtrerMembresActifs(
+    supabase
+      .from('membres')
+      // `count: 'exact'` : le nombre total doit rester juste, sinon la pagination annonce
+      // des pages qui n'existent pas. C'est un COUNT complet à chaque requête, assumé —
+      // il porte sur une table indexée par `etat` et reste très bon marché à cette échelle.
+      .select(COLONNES_LISTE, { count: 'exact' })
+      .order('nom')
+      .order('prenom')
+      .range(debut, debut + TAILLE_PAGE_ANNUAIRE - 1),
+    filtres,
+  )
 
   const { data, error, count } = await requete
   if (error) {
@@ -160,7 +183,8 @@ export async function listerMembres(filtres?: {
     throw new Error('Comptage des membres absent de la réponse PostgREST.')
   }
   return {
-    membres: (data ?? []).map((l) => ({
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    membres: (data ?? []).map((l: any) => ({
       id: l.id as string,
       nom: l.nom as string,
       prenom: l.prenom as string,
