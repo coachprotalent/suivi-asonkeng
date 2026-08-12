@@ -49,6 +49,7 @@ pendant l'implémentation sans validation.
 | D16 | La participation à un événement est visible de tous, les trois désirs des seuls administrateurs **et modérateurs** (amendée par D23) | La fiche membre doit afficher ses séminaires assistés (D2), mais un désir exprimé est une confidence : le cercle reste étroit, il n'est simplement plus limité aux administrateurs |
 | D22 | Le modérateur gère aussi le calendrier AEL récurrent | Amendement du 2026-08-12 : il tient déjà les séances que ce calendrier engendre. Voir la note sous la matrice du §5.2. **À appliquer au plan de la phase 3.** |
 | D23 | Le modérateur crée un événement, saisit **et voit** les trois désirs | Amendement du 2026-08-12. La saisie était seule demandée ; la consultation suit nécessairement — on ne saisit pas dans un champ qu'on ne peut pas relire, ni corriger une valeur qu'on ne voit pas. D16 et la RLS du §5.3 sont amendées en conséquence. **À appliquer au plan de la phase 4.** |
+| D24 | **Archiver une fiche désactive le compte qui lui est lié** | Amendement du 2026-08-12. Sans cela, archiver quelqu'un ne lui retirait rien : son compte restait actif et il conservait sa portée d'autorité sur les membres dont il est ancêtre ou dirigeant. L'archivage est le geste qui dit « cette personne a quitté l'équipe » ; il doit fermer l'accès. La réciproque n'est **pas** vraie — désarchiver ne réactive pas le compte, car rendre un accès est une décision délibérée qui se prend sur l'écran des comptes |
 
 > **D17 à D21** sont posées dans `2026-08-12-phase-1c-design.md` et ne sont pas recopiées
 > ici. D18 y **amende D15** ci-dessus : l'équipe vise un millier de membres ou plus, et non
@@ -440,6 +441,8 @@ clic les convertit en fiche membre, avec attribution d'un faiseur de disciple, e
 | Token expiré, déjà utilisé, ou inconnu | Refus avec un message unique et indifférencié, sans jamais révéler qu'un code existe |
 | Réassignation créant un cycle | Refusée par déclencheur base et par vérification en amont, avec affichage du chemin fautif |
 | Archivage d'un membre qui est faiseur de disciple | Bloqué tant que ses disciples n'ont pas été réaffectés ; la liste des personnes concernées est affichée |
+| Archivage d'un membre dont le compte lié est le **dernier administrateur actif** | Refusé (D24 croise la règle du dernier administrateur ci-dessous) : archiver désactiverait ce compte et laisserait l'application sans administrateur, sans moyen d'en recréer un. Le message nomme la cause et invite à donner le rôle à quelqu'un d'autre d'abord |
+| Rattachement à un faiseur de disciple **archivé** | Refusé. Le sélecteur ne propose que des membres actifs, mais la passerelle et un déclencheur le refusent aussi — sans quoi une écriture directe recréerait l'état que l'archivage interdit |
 | Désactivation d'un statut déjà attribué | Autorisée : il disparaît des nouvelles attributions mais reste visible sur les fiches existantes et dans l'historique |
 | Deux modérateurs pointant la même séance | Dernière écriture par membre gagnante — le pointage est ligne à ligne, pas un formulaire global |
 | Suppression ou rétrogradation du dernier administrateur | Refusée : au moins un compte administrateur actif doit subsister |

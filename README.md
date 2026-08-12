@@ -62,7 +62,9 @@ un simple `create trigger`, sans `drop trigger if exists` en amont (contrairemen
 `durcir_statuts`, qui emploie la forme gardée). Une restauration qui retrouverait ces
 déclencheurs déjà en place — parce qu'une migration antérieure a laissé la table dans cet état —
 échouerait de la même façon que les deux amorçages ci-dessus, sur une erreur d'objet déjà
-existant.
+existant. Les deux déclencheurs des correctifs post-1c (`membres_faiseur_de_disciple_archive`,
+migration `20260814150000`, et `membres_archivage_desactive_compte`, migration `20260814160000`)
+suivent la même convention, pour la même raison.
 
 **Les suites de tests écrivent dans la base de production.** Conséquence directe de la décision
 « un seul projet Supabase » ci-dessus. Les preuves par mutation (fonctions et déclencheurs)
@@ -90,6 +92,12 @@ c'est une convention de nommage suivie par ce dépôt, que rien en base n'impose
 compte de test dont l'identifiant ne commencerait pas par `test.` serait compté comme un
 administrateur réel, et pourrait à lui seul empêcher indéfiniment la réactivation. Limite
 documentée et acceptée par décision explicite de l'utilisateur (détail : `task-12-report.md`).
+**Même limite, même mesure, appliquée par les correctifs post-1c au refus d'archiver la fiche du
+dernier administrateur actif** (`membres_archivage_desactive_compte`, marqueur
+`dernier_administrateur`) : un troisième test neutralisé, dans `tests/rls/archivage-comptes.test.ts`,
+avec sa propre mesure `ADMINS_REELS_ACTIFS` recalculée à l'exécution — pas la même variable que
+`comptes.test.ts`, un autre fichier, la même cause racine et la même impossibilité structurelle
+tant que le compte racine reste actif.
 
 ## Phase 1a : le registre des membres
 
@@ -150,7 +158,11 @@ administrateurs :
   `before insert or update` (`membres_anti_cycle`) qui refuse toute écriture directe fermant un
   cycle, y compris hors de la passerelle. Le chemin fautif remonté par `public.chemin_arbre` est
   affiché à l'administrateur (`prive.est_ancetre` ne rend qu'un booléen ; c'est `chemin_arbre` qui
-  porte les noms).
+  porte les noms). **Correctif post-1c** : la même passerelle et un second déclencheur
+  (`membres_faiseur_de_disciple_archive`, `before insert or update of faiseur_de_disciple_id`,
+  migration `20260814150000`) refusent aussi de rattacher un membre à un faiseur de disciple
+  **archivé** — le sélecteur de l'écran ne propose que des membres actifs, mais un appel RPC forgé
+  ou une écriture directe recréerait sinon l'état que l'archivage interdit ci-dessous.
 - **Archivage bloqué pour un faiseur de disciple actif, dans les deux sens** — un membre encore
   faiseur de disciple d'au moins une personne active ne peut pas être archivé ; l'écran nomme les
   personnes concernées. Barrière posée deux fois : un contrôle en amont dans l'action d'archivage,
@@ -159,12 +171,30 @@ administrateurs :
   rétabli tant que celui-ci le reste — même schéma à deux barrières
   (`membres_desarchivage_faiseur_actif`), sans quoi archiver le disciple puis son faiseur de
   disciple, puis rétablir seulement le disciple, recréait l'état que l'archivage interdit.
-  **Ce que l'archivage d'une fiche ne fait PAS** : il ne révoque aucune autorité. Un compte lié à
-  une fiche archivée en tant que dirigeant ou faiseur de disciple garde tout pouvoir sur les
-  statuts de ses subordonnés tant que le compte lui-même reste actif — décision produit distincte,
-  volontairement non tranchée par cette phase. `/comptes` affiche désormais l'état de la fiche
-  liée à chaque compte (« Fiche archivée ») pour qu'un administrateur puisse repérer ce cas ;
-  désactiver le compte reste un geste séparé, à faire soi-même sur cet écran.
+  **D24 (correctif post-1c, migration `20260814160000`) : archiver une fiche désactive
+  automatiquement le compte de connexion ACTIF qui lui est lié.** Sans cela, archiver quelqu'un ne
+  lui retirait rien : son compte restait actif et il conservait sa portée d'autorité sur les
+  membres dont il est ancêtre ou dirigeant désigné — l'archivage est le geste qui dit « cette
+  personne a quitté l'équipe », il doit fermer l'accès. Posé dans un déclencheur
+  (`membres_archivage_desactive_compte`), sous le **même** verrou consultatif (clé `(20260814, 2)`)
+  que `definir_roles` / `definir_actif_compte`, pour que le contrôle « reste-t-il un autre
+  administrateur actif ? » — un lire-puis-écrire — se sérialise réellement avec un changement de
+  rôle concurrent. **La réciproque n'est PAS vraie : désarchiver une fiche ne réactive jamais son
+  compte** — rendre un accès est une décision délibérée, prise sur `/comptes`, où la personne
+  recevra de toute façon un mot de passe temporaire ; l'écran de la fiche le dit explicitement dans
+  la confirmation de rétablissement. Si le compte lié est le **dernier administrateur actif**,
+  l'archivage est refusé (marqueur `dernier_administrateur`, le même que la protection ci-dessous —
+  c'est le même fait, découvert par une autre porte) : le désactiver laisserait l'application sans
+  administrateur, sans moyen d'en recréer un. Un contrôle amont dans `archiverMembre` nomme la
+  cause avant d'écrire ; le déclencheur reste la barrière — et la rattrape intégralement si ce
+  contrôle amont régressait : `archiverMembre` fait correspondre le marqueur `dernier_administrateur`
+  levé par le déclencheur au MÊME message que le contrôle amont, donc une défaillance de ce dernier
+  ne rouvrirait aucune brèche, elle ferait seulement perdre le nom de la cause au profit du même
+  refus (détail : `compteLieEstDernierAdministrateurActif`, `src/lib/donnees/comptes.ts`). Le
+  bouton « Archiver » avertit avant
+  qu'on clique, dès que la fiche porte un compte lié actif, plutôt que de surprendre après coup.
+  `/comptes` affiche toujours l'état de la fiche liée à chaque compte (« Fiche archivée ») — utile
+  pour le cas résiduel d'un compte réactivé séparément sans que sa fiche le soit.
 - **Portée d'autorité** (`exigerAutoriteSur`, `src/lib/securite/garde.ts`) — la modification des
   statuts n'est plus réservée aux administrateurs. Un utilisateur possède l'autorité sur un membre
   dont il est un ancêtre dans l'arbre des faiseurs de disciple, ou dont il est le dirigeant
@@ -173,7 +203,8 @@ administrateurs :
   une fiche membre (ou le laisser sans lien), délier une fiche, activer ou désactiver un compte,
   attribuer les rôles administrateur et modérateur, réinitialiser un mot de passe temporaire. La
   dernière rétrogradation ou désactivation d'un administrateur actif est refusée par
-  `prive.compter_administrateurs_actifs` — voir la limite de test documentée plus bas.
+  `prive.compter_administrateurs_actifs`, réutilisée telle quelle par le déclencheur D24 ci-dessus
+  pour refuser l'archivage équivalent — voir la limite de test documentée plus bas.
 - **Annuaire paginé** (`/membres`) — cinquante fiches par page, pour tenir à l'échelle d'un
   millier de membres visée par la phase 1c (D18, voir la spécification maîtresse). Une adresse
   pointant au-delà de la dernière page réelle se corrige vers cette dernière page plutôt que

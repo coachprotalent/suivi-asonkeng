@@ -9,11 +9,12 @@ export type CompteListe = {
   nomAffichage: string
   membreId: string | null
   membreNom: string | null
-  // Archiver une fiche ne révoque PAS l'autorité du compte qui lui est liée (spec §7,
-  // décision utilisateur hors périmètre de cette phase) : un dirigeant ou un faiseur
-  // de disciple archivé garde tout pouvoir sur ses subordonnés tant que son compte
-  // reste actif. Ce champ existe pour qu'un administrateur puisse au moins LE VOIR sur
-  // `/comptes` — voir `ligne-compte.tsx`.
+  // Depuis D24 (migration 20260814160000), archiver une fiche désactive automatiquement
+  // le compte ACTIF qui lui est lié : ce champ n'a donc plus, dans le cas courant, à
+  // signaler un compte qui garderait tout pouvoir malgré une fiche archivée. Il reste
+  // utile pour le cas résiduel — un administrateur qui réactive ce compte séparément,
+  // sur cet écran, sans rétablir la fiche : la ligne afficherait alors « Actif » à côté
+  // d'une fiche archivée, sans que rien d'autre ne le signale. Voir `ligne-compte.tsx`.
   membreEtat: EtatMembre | null
   estRacine: boolean
   actif: boolean
@@ -75,4 +76,119 @@ export async function listerComptes(): Promise<CompteListe[]> {
     actif: ligne.actif as boolean,
     roles: ((ligne.roles_profil ?? []) as Array<{ role: RoleApp }>).map((r) => r.role),
   }))
+}
+
+/**
+ * Le compte lié à cette fiche, ou `null` si aucun. Interne : sert de base commune à
+ * `etatCompteLie` (affichage) et `compteLieEstDernierAdministrateurActif` (contrôle),
+ * juste en dessous.
+ */
+async function compteLieBrut(membreId: string): Promise<{ id: string; actif: boolean } | null> {
+  const supabase = await clientServeur()
+  const { data, error } = await supabase
+    .from('profils')
+    .select('id, actif')
+    .eq('membre_id', membreId)
+    .maybeSingle()
+  if (error) {
+    throw new Error(`Lecture du compte lié impossible : ${error.message}`)
+  }
+  return data
+}
+
+/**
+ * `true` si un compte ACTIF est lié à cette fiche, `false` si le compte lié est déjà
+ * désactivé, `null` si aucun compte n'y est lié.
+ *
+ * Sert uniquement à choisir le bon avertissement dans `BoutonArchiver` (D24,
+ * `src/app/membres/[id]/bouton-archiver.tsx`) — ce n'est PAS une décision de sécurité :
+ * le déclencheur `membres_archivage_desactive_compte` (migration 20260814160000) reste
+ * seul décisif sur ce que l'archivage fait réellement au compte.
+ */
+export async function etatCompteLie(membreId: string): Promise<boolean | null> {
+  const compte = await compteLieBrut(membreId)
+  return compte ? compte.actif : null
+}
+
+/**
+ * Vrai si le compte lié à ce membre est actif, porte le rôle administrateur, ET est le
+ * SEUL administrateur actif de l'application — c'est-à-dire si archiver cette fiche
+ * désactiverait ce compte (déclencheur `membres_archivage_desactive_compte`, migration
+ * 20260814160000) et laisserait l'application sans administrateur (spec §7, D24 croise
+ * la protection du dernier administrateur).
+ *
+ * Contrôle EN AMONT, pour produire un message qui nomme la cause avant d'écrire — même
+ * partage que `disciplesDe` pour `archiverMembre` (src/app/membres/actions.ts) : le
+ * déclencheur reste la barrière, sous le verrou consultatif (clé (20260814, 2)) que
+ * `definir_roles` / `definir_actif_compte` emploient déjà. CETTE LECTURE NE PREND PAS ce
+ * verrou — elle peut donc se tromper sous une mutation concurrente survenant entre
+ * cette lecture et l'écriture qui suit — et n'a pas à s'y soustraire : c'est le
+ * déclencheur, lui verrouillé, qui reste seul décisif.
+ *
+ * Lecture sous RLS (`clientServeur`) et non par la clé de service : l'appelant a déjà
+ * passé `exigerAdministrateur`, et la politique `profils_lecture` laisse un
+ * administrateur voir TOUS les profils et rôles — le même univers que compte
+ * `prive.compter_administrateurs_actifs`, jamais exposée à l'API.
+ *
+ * COUVERTURE DE TEST : la branche qui rend `true` (« c'est bien le dernier
+ * administrateur ») n'est exercée par aucun test dans cet environnement — même limite
+ * arithmétique que le reste (compte racine réel, administrateur actif intouchable, voir
+ * README). Mais l'inoffensivité de ce trou ne tient PAS qu'à cette impossibilité de
+ * test : si cette fonction régressait au point de toujours rendre `false` (bug, code
+ * mort, mauvais refactor), le comportement final resterait IDENTIQUE pour
+ * l'utilisateur. `archiverMembre` (src/app/membres/actions.ts) fait correspondre le
+ * marqueur `dernier_administrateur` levé par le déclencheur — `catch` sur l'échec de
+ * `changerEtatMembre` — au MÊME `redirect(...archivageRefuseAdministrateur=1)` et donc
+ * au même message affiché que ce contrôle amont. Le déclencheur, verrouillé et seul
+ * décisif, rattrape intégralement toute défaillance de cette fonction : elle n'est
+ * qu'une amélioration du message affiché (nommer la cause avant d'écrire), jamais la
+ * dernière ligne de défense. Une régression ici ne rouvrirait donc PAS de brèche de
+ * sécurité — elle ferait seulement perdre le message précis au profit du même refus,
+ * un instant plus tard.
+ */
+export async function compteLieEstDernierAdministrateurActif(membreId: string): Promise<boolean> {
+  const compte = await compteLieBrut(membreId)
+  if (!compte || !compte.actif) {
+    return false
+  }
+
+  const supabase = await clientServeur()
+
+  const { data: role, error: erreurRole } = await supabase
+    .from('roles_profil')
+    .select('profil_id')
+    .eq('profil_id', compte.id)
+    .eq('role', 'administrateur')
+    .maybeSingle()
+  if (erreurRole) {
+    throw new Error(`Lecture du rôle du compte lié impossible : ${erreurRole.message}`)
+  }
+  if (!role) {
+    return false
+  }
+
+  const { data: autresAdmins, error: erreurAutres } = await supabase
+    .from('roles_profil')
+    .select('profil_id')
+    .eq('role', 'administrateur')
+    .neq('profil_id', compte.id)
+  if (erreurAutres) {
+    throw new Error(`Lecture des autres administrateurs impossible : ${erreurAutres.message}`)
+  }
+  const idsAutres = (autresAdmins ?? []).map((l) => l.profil_id as string)
+  if (idsAutres.length === 0) {
+    return true
+  }
+
+  const { data: profilsActifs, error: erreurProfilsActifs } = await supabase
+    .from('profils')
+    .select('id')
+    .in('id', idsAutres)
+    .eq('actif', true)
+  if (erreurProfilsActifs) {
+    throw new Error(
+      `Lecture des comptes administrateurs impossible : ${erreurProfilsActifs.message}`,
+    )
+  }
+  return (profilsActifs ?? []).length === 0
 }

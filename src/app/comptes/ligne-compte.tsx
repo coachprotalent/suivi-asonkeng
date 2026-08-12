@@ -149,11 +149,13 @@ export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: b
       </p>
 
       {/*
-        Archiver une fiche ne révoque PAS l'autorité du compte qui lui est liée
-        (voir README, section « Attention ») : ce compte, s'il reste actif, garde
-        tout pouvoir sur les statuts de ses subordonnés. Le signaler ici est le seul
-        moyen pour un administrateur de le repérer — désactiver le compte reste un
-        geste séparé, à faire soi-même plus bas.
+        Depuis D24 (migration 20260814160000), archiver une fiche désactive
+        automatiquement le compte ACTIF qui lui est lié : ce cas ne se produit donc
+        plus dans le déroulement courant. Cette mention reste utile pour le cas
+        résiduel — un administrateur qui réactive ce compte séparément, plus bas sur
+        cette même ligne, SANS rétablir la fiche (D24 ne l'impose pas) — où elle
+        redeviendrait à nouveau vraie : ce compte garderait alors sa portée
+        d'autorité sur les statuts de ses subordonnés malgré une fiche archivée.
       */}
       {compte.membreId && compte.membreEtat && compte.membreEtat !== 'actif' ? (
         <p role="alert" className="mt-1 text-sm text-amber-700">
