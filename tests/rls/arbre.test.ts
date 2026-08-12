@@ -91,6 +91,12 @@ describe('déclencheur anti-cycle', () => {
       .update({ faiseur_de_disciple_id: idEnfant })
       .eq('id', idEnfant)
     expect(error).not.toBeNull()
+    // Ce cas est déjà couvert par la contrainte CHECK membres_pas_son_propre_fdd,
+    // indépendamment du déclencheur : sans cette assertion sur le marqueur, ce test
+    // resterait vert même si la branche `new.faiseur_de_disciple_id = new.id` du
+    // déclencheur disparaissait, alors que sa seule raison d'être est d'unifier le
+    // marqueur d'erreur pour cette longueur de cycle avec celui des cycles plus longs.
+    expect(error?.details).toBe('cycle_faiseur_de_disciple')
   })
 
   // CONTRÔLE POSITIF : sans lui, les deux refus ci-dessus seraient satisfaits par une
@@ -146,13 +152,17 @@ describe('passerelle definir_arbre réservée à service_role', () => {
     expect(data?.dirigeant_id).toBe(idRacine)
     expect(data?.dirigeant_force).toBe(true)
 
-    // Rétablir, les tests suivants dépendent de la forme de l'arbre.
-    await admin.rpc('definir_arbre', {
+    // Rétablir, les tests suivants dépendent de la forme de l'arbre. Vérifier
+    // l'erreur : un échec silencieux ici invaliderait leur précondition sans que
+    // rien ne le signale, et ferait échouer des tests plus tard pour une raison
+    // sans rapport avec ce qu'ils prétendent vérifier.
+    const { error: erreurRetablissement } = await admin.rpc('definir_arbre', {
       p_membre: idPetitEnfant,
       p_faiseur_de_disciple: idEnfant,
       p_dirigeant: null,
       p_dirigeant_force: false,
     })
+    expect(erreurRetablissement).toBeNull()
   })
 
   it('détache un membre quand le faiseur de disciple passé est null', async () => {
@@ -195,6 +205,17 @@ describe('passerelle definir_arbre réservée à service_role', () => {
     })
     expect(error).not.toBeNull()
     expect(error?.details).toBe('faiseur_inconnu')
+  })
+
+  it('refuse un dirigeant inconnu avec un marqueur stable', async () => {
+    const { error } = await admin.rpc('definir_arbre', {
+      p_membre: idPetitEnfant,
+      p_faiseur_de_disciple: null,
+      p_dirigeant: '00000000-0000-0000-0000-000000000000',
+      p_dirigeant_force: false,
+    })
+    expect(error).not.toBeNull()
+    expect(error?.details).toBe('dirigeant_inconnu')
   })
 
   it('refuse le cycle jusque depuis la passerelle', async () => {
