@@ -33,6 +33,31 @@ function nomAntenne(valeur: LigneAntenne): string | null {
 }
 
 /**
+ * Traduit un terme saisi en motif `ilike` accepté par PostgREST, ou `null` si le terme
+ * ne contient rien d'exploitable.
+ *
+ * PostgREST réserve `, . : * ( )` dans la valeur d'un filtre. Plutôt que de retenir une
+ * liste de caractères à retirer — qui sera incomplète le jour où elle changera — on
+ * entoure la valeur de guillemets, forme dans laquelle PostgREST accepte tout, en
+ * n'échappant que ce que les guillemets exigent. Sans cela, chercher « St. Etienne »
+ * casse la requête, et comme l'erreur était alors ignorée, l'écran annonçait « aucun
+ * membre » pour une recherche valide (défaut réel de la phase 1a).
+ *
+ * Exportée parce que le sélecteur de membre de la phase 1c s'en sert aussi : deux copies
+ * de cet échappement, ce serait deux occasions de refaire le même défaut.
+ */
+export function motifRecherche(recherche: string | undefined): string | null {
+  const terme = recherche
+    ?.trim()
+    .replace(/[\\"]/g, '\\$&') // échapper l'antislash et le guillemet
+    .replace(/[%_]/g, '') // neutraliser les jokers de `ilike`
+  if (!terme || terme.length === 0) {
+    return null
+  }
+  return `"%${terme}%"`
+}
+
+/**
  * Membres visibles par le compte appelant, triés par nom puis prénom.
  * La RLS décide de ce qui est visible ; ce module ne refait pas ce filtrage.
  */
@@ -52,21 +77,9 @@ export async function listerMembres(filtres?: {
     .order('nom')
     .order('prenom')
 
-  const recherche = filtres?.recherche?.trim()
-  if (recherche) {
-    // PostgREST réserve `, . : * ( )` dans la valeur d'un filtre. Plutôt que de
-    // retenir une liste de caractères à retirer — qui sera incomplète le jour où
-    // elle changera — on entoure la valeur de guillemets, forme dans laquelle
-    // PostgREST accepte tout, en n'échappant que ce que les guillemets exigent.
-    // Sans cela, chercher « St. Etienne » casse la requête, et comme l'erreur
-    // était ignorée, l'écran annonçait « aucun membre » pour une recherche valide.
-    const terme = recherche
-      .replace(/[\\"]/g, '\\$&') // échapper l'antislash et le guillemet
-      .replace(/[%_]/g, '') // neutraliser les jokers de `ilike`
-    if (terme.length > 0) {
-      const motif = `"%${terme}%"`
-      requete = requete.or(`nom.ilike.${motif},prenom.ilike.${motif},ville.ilike.${motif}`)
-    }
+  const motif = motifRecherche(filtres?.recherche)
+  if (motif) {
+    requete = requete.or(`nom.ilike.${motif},prenom.ilike.${motif},ville.ilike.${motif}`)
   }
   if (filtres?.antenneId) {
     requete = requete.eq('antenne_id', filtres.antenneId)
@@ -126,4 +139,57 @@ export async function membreParId(id: string): Promise<MembreDetail | null> {
     reportInitialAel: data.report_initial_ael as number,
     etat: data.etat as EtatMembre,
   }
+}
+
+export type MembreBref = { id: string; nom: string; prenom: string }
+
+/** Nombre de résultats rendus par le sélecteur. Assez pour choisir, jamais assez pour
+ *  ramener un annuaire entier dans une page — la contrainte qui a motivé D18. */
+export const LIMITE_SELECTEUR = 20
+
+/**
+ * Recherche destinée au sélecteur de membre. Distincte de `listerMembres` : elle ne rend
+ * que le strict nécessaire à un choix, elle est bornée, et elle sait s'exclure un membre
+ * — celui qu'on est en train de rattacher, qui ne peut pas être son propre faiseur de
+ * disciple.
+ *
+ * Exclure ce seul identifiant N'EST PAS la protection contre les cycles : elle ne couvre
+ * que le cycle de longueur 1. Les cycles plus longs sont refusés par le déclencheur et
+ * la passerelle (migration 20260814100000). Cette exclusion sert le confort, pas la
+ * sûreté, et ne doit jamais être lue comme telle.
+ */
+export async function rechercherMembres(
+  terme: string,
+  exclureId?: string,
+): Promise<MembreBref[]> {
+  const motif = motifRecherche(terme)
+  if (!motif) {
+    return []
+  }
+
+  const supabase = await clientServeur()
+  let requete = supabase
+    .from('membres')
+    .select('id, nom, prenom')
+    .eq('etat', 'actif')
+    .or(`nom.ilike.${motif},prenom.ilike.${motif}`)
+    .order('nom')
+    .order('prenom')
+    .limit(LIMITE_SELECTEUR)
+
+  if (exclureId) {
+    requete = requete.neq('id', exclureId)
+  }
+
+  const { data, error } = await requete
+  if (error) {
+    // Un échec ne doit pas être indistinguable d'un résultat vide : rendre une liste
+    // vide ferait croire à l'utilisateur que personne ne porte ce nom.
+    throw new Error(`Recherche de membres impossible : ${error.message}`)
+  }
+  return (data ?? []).map((l) => ({
+    id: l.id as string,
+    nom: l.nom as string,
+    prenom: l.prenom as string,
+  }))
 }
