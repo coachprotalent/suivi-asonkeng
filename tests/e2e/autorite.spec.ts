@@ -210,6 +210,18 @@ test("un compte lié hors du sous-arbre ne peut pas écrire, par requête forgé
 
     // Seule assertion qui compte : rien n'a été écrit, quel qu'ait été le code HTTP.
     expect(await compterMembreStatut(idPetitEnfant, idStatut)).toBe(0)
+
+    // Masquage d'interface, dans la même session : ce compte lit l'écran (le
+    // journal reste ouvert à tout compte actif) mais n'y voit ni formulaire
+    // d'attribution ni bouton de retrait. Cette garantie ne vivait auparavant
+    // que dans un rapport et des captures d'écran supprimées après coup — elle
+    // ne protégeait personne tant qu'aucun test permanent ne la vérifiait.
+    await autrePage.goto(`/membres/${idPetitEnfant}/statuts`)
+    await expect(autrePage.getByRole('heading', { name: /Statuts de/ })).toBeVisible()
+    await expect(autrePage.getByRole('heading', { name: 'Journal' })).toBeVisible()
+    await expect(autrePage.getByRole('heading', { name: 'Attribuer un statut' })).toHaveCount(0)
+    await expect(autrePage.getByLabel('Statut (obligatoire)')).toHaveCount(0)
+    await expect(autrePage.getByRole('button', { name: 'Retirer' })).toHaveCount(0)
   } finally {
     await contexte.close()
   }
@@ -245,6 +257,8 @@ test("un compte sans membre lié ne peut pas écrire, par requête forgée", asy
 
 test("canari : la même requête forgée réussit depuis un compte qui a l'autorité", async ({
   page,
+  browser,
+  baseURL,
 }) => {
   // Contrôle positif. Si les deux refus ci-dessus passaient un jour parce que la forge
   // est cassée — encodage `$ACTION_*` changé, formulaire remanié — et non parce que le
@@ -255,18 +269,30 @@ test("canari : la même requête forgée réussit depuis un compte qui a l'autor
   // => `verifierCaptureAction` lève, avec un message explicite, dans les TROIS tests
   // qui l'emploient. Garde régressé => un test de refus échoue sur un compteur pendant
   // que ce canari, lui, RÉUSSIT.
+  //
+  // Rejeu depuis un `browser.newContext()`, comme les deux refus ci-dessus — et non
+  // depuis le contexte de capture, dans le même `page`. Sans cet alignement, ce
+  // canari certifierait le rejeu INTRA-contexte, pas le rejeu INTER-contextes que
+  // les tests de refus exercent réellement : les deux mécanismes de rejeu pourraient
+  // diverger un jour (un durcissement lié à l'origine ou au cookie de session, par
+  // exemple) sans que ce canari le remarque.
   const idStatut = await statutParLibelle('Baptisé du Saint-Esprit')
   expect(await compterMembreStatut(idPetitEnfant, idStatut)).toBe(0)
 
-  try {
-    const champs = await capturerChampsAttribution(page, idPetitEnfant)
+  const champs = await capturerChampsAttribution(page, idPetitEnfant)
 
-    await page.request.post(`/membres/${idPetitEnfant}/statuts`, {
+  const contexte = await browser.newContext({ baseURL })
+  try {
+    const autrePage = await contexte.newPage()
+    await seConnecter(autrePage, IDENT_LIE, MDP_LIE)
+
+    await autrePage.request.post(`/membres/${idPetitEnfant}/statuts`, {
       multipart: { ...champs, statutId: idStatut },
     })
 
     expect(await compterMembreStatut(idPetitEnfant, idStatut)).toBe(1)
   } finally {
+    await contexte.close()
     await admin
       .from('membre_statuts')
       .delete()
