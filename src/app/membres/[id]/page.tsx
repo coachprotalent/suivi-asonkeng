@@ -48,12 +48,28 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
   const nomOuTiret = (bref: { prenom: string; nom: string } | null) =>
     bref ? `${bref.prenom} ${bref.nom}` : null
 
-  lignes.push(['Faiseur de disciple', nomOuTiret(faiseur)])
+  // `membreBrefParId` passe sous RLS : si l'identifiant existe mais que la lecture
+  // rend `null`, ce n'est pas « personne » — c'est une fiche que la politique cache à
+  // ce compte (typiquement archivée, vue par un compte ordinaire). Confondre les deux
+  // cas afficherait « — » là où un administrateur voit un nom sur la même fiche,
+  // exactement l'inverse de D20 (la filiation est visible de tout compte actif).
+  // Le `—` du tableau reste réservé au cas où l'identifiant lui-même est `null`.
+  const libelleFiliation = (id: string | null, bref: { prenom: string; nom: string } | null) => {
+    if (!id) return null
+    return nomOuTiret(bref) ?? 'Fiche non consultable'
+  }
+
+  lignes.push(['Faiseur de disciple', libelleFiliation(membre.faiseurDeDiscipleId, faiseur)])
+  const nomDirigeant = libelleFiliation(membre.dirigeantId, dirigeant)
   lignes.push([
     'Dirigeant',
-    dirigeant
-      ? `${nomOuTiret(dirigeant)}${membre.dirigeantForce ? ' (défini manuellement)' : ' (calculé)'}`
-      : null,
+    // `dirigeant_force` atteste seulement que la valeur n'a pas été saisie à la main —
+    // rien de plus. « Calculé » affirmerait que c'est ce que le calcul rendrait
+    // maintenant, ce que le commit 907bcf7 a jugé faux et corrigé sur l'écran de
+    // rattachement (un dirigeant « calculé » peut devenir périmé sans réécriture).
+    // On ne republie pas ce mensonge ici : l'absence de mention n'affirme rien, ce que
+    // le booléen soutient réellement.
+    nomDirigeant ? `${nomDirigeant}${membre.dirigeantForce ? ' (défini manuellement)' : ''}` : null,
   ])
 
   return (
@@ -153,7 +169,7 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
 
       <section className="mt-8">
         <div className="mb-3 flex items-baseline justify-between gap-4">
-          <h2 className="text-lg font-medium">Disciples</h2>
+          <h2 className="text-lg font-medium">Disciples actifs</h2>
           {estAdmin ? (
             <Link
               href={`/membres/${membre.id}/arbre`}
@@ -163,8 +179,14 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
             </Link>
           ) : null}
         </div>
+        {/*
+          `disciplesDe` ne rend que les disciples encore ACTIFS (voir arbre.ts) : un
+          membre peut avoir eu des disciples, tous archivés depuis, et se retrouver ici
+          avec une liste vide. Sans qualificatif, « Aucun disciple rattaché » lirait
+          comme « n'en a jamais eu », ce que la donnée ne dit pas.
+        */}
         {disciples.length === 0 ? (
-          <p className="text-sm text-neutral-600">Aucun disciple rattaché.</p>
+          <p className="text-sm text-neutral-600">Aucun disciple actif rattaché.</p>
         ) : (
           <ul className="divide-y divide-neutral-200">
             {disciples.map((disciple) => (

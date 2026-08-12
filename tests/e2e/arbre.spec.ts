@@ -192,4 +192,44 @@ test('la filiation est visible de tous, le lien de rattachement des seuls admini
   // La racine doit voir ses disciples.
   await page.goto(`/membres/${idRacine}`)
   await expect(page.getByRole('link', { name: `Test ${PREFIXE}-enfant` })).toHaveCount(1)
+
+  // Un compte ordinaire voit la même filiation (D20 : visible de tout compte actif),
+  // mais jamais le lien de rattachement — sans cette moitié négative, un écran qui
+  // cacherait tout à tout le monde passerait aussi ce test.
+  const identifiant = 'test.e2e.arbre.filiation.simple'
+  const mdp = `Test-${crypto.randomUUID()}`
+  await supprimerCompte(identifiant)
+  const { data, error } = await admin.auth.admin.createUser({
+    email: `${identifiant}@asonkeng.local`,
+    password: mdp,
+    email_confirm: true,
+  })
+  if (error || !data.user) throw new Error(error?.message)
+  const { error: erreurProfil } = await admin
+    .from('profils')
+    .insert({ id: data.user.id, identifiant, nom_affichage: 'Test filiation simple' })
+  if (erreurProfil) {
+    await admin.auth.admin.deleteUser(data.user.id)
+    throw new Error(`insertion du profil impossible : ${erreurProfil.message}`)
+  }
+
+  try {
+    // La session admin ouverte plus haut dans ce test est encore active sur `page` :
+    // le middleware redirige un compte déjà connecté loin de `/connexion` (voir
+    // `src/middleware.ts`), donc naviguer directement vers `/connexion` boucle vers
+    // `/tableau-de-bord` sans jamais montrer le formulaire. `/deconnexion` efface la
+    // session avant de rouvrir l'écran de connexion pour le compte ordinaire.
+    await page.goto('/deconnexion')
+    await expect(page).toHaveURL(/\/connexion/)
+    await page.getByLabel('Identifiant').fill(identifiant)
+    await page.getByLabel('Mot de passe', { exact: true }).fill(mdp)
+    await page.getByRole('button', { name: 'Se connecter' }).click()
+    await expect(page).toHaveURL(/\/tableau-de-bord/)
+
+    await page.goto(`/membres/${idPetitEnfant}`)
+    await expect(page.getByText('Faiseur de disciple')).toBeVisible()
+    await expect(page.getByRole('link', { name: 'Rattacher' })).toHaveCount(0)
+  } finally {
+    await supprimerCompte(identifiant)
+  }
 })
