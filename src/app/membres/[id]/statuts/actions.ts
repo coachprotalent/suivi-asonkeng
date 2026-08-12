@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { normaliserDateAcquisition, normaliserNote, StatutInvalideError } from '@/lib/domaine/statut'
-import { exigerAdministrateur } from '@/lib/securite/garde'
+import { exigerAutoriteSur } from '@/lib/securite/garde'
 import { clientAdmin } from '@/lib/supabase/admin'
 import {
   MESSAGE_ECHEC_STATUT,
@@ -32,8 +32,6 @@ export async function attribuerStatut(
   _etat: EtatStatut,
   donnees: FormData,
 ): Promise<EtatStatut> {
-  const profil = await exigerAdministrateur()
-
   const membreId = texteObligatoire(donnees, 'membreId')
   const statutId = texteObligatoire(donnees, 'statutId')
   if (!membreId || !statutId) {
@@ -46,6 +44,12 @@ export async function attribuerStatut(
     })
     return { erreur: MESSAGE_ECHEC_STATUT }
   }
+
+  // Le garde vient APRÈS la lecture de `membreId` parce qu'il en dépend — et
+  // c'est le seul cas du projet où il n'est pas la toute première instruction.
+  // Ce qui le précède ne lit RIEN et n'écrit RIEN : il ne fait que dépaqueter le
+  // formulaire. Aucun effet de bord n'est possible avant le contrôle.
+  const profil = await exigerAutoriteSur(membreId)
 
   let dateAcquisition: string | null
   let note: string | null
@@ -135,8 +139,6 @@ function normaliserMotifSansLever(brut: unknown, membreId: string, statutId: str
 }
 
 export async function retirerStatut(donnees: FormData): Promise<void> {
-  const profil = await exigerAdministrateur()
-
   const membreId = texteObligatoire(donnees, 'membreId')
   const statutId = texteObligatoire(donnees, 'statutId')
   if (!membreId || !statutId) {
@@ -149,6 +151,12 @@ export async function retirerStatut(donnees: FormData): Promise<void> {
     })
     throw new Error("Le statut n'a pas pu être retiré : identifiants manquants.")
   }
+
+  // Le garde vient APRÈS la lecture de `membreId` parce qu'il en dépend — et
+  // c'est le seul cas du projet où il n'est pas la toute première instruction.
+  // Ce qui le précède ne lit RIEN et n'écrit RIEN : il ne fait que dépaqueter le
+  // formulaire. Aucun effet de bord n'est possible avant le contrôle.
+  const profil = await exigerAutoriteSur(membreId)
 
   const motif = normaliserMotifSansLever(donnees.get('motif'), membreId, statutId)
 

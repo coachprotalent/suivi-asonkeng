@@ -1,32 +1,32 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { membreParId } from '@/lib/donnees/membres'
-import { rolesDuProfil } from '@/lib/donnees/profils'
 import { journalDuMembre, listerCatalogue, statutsDuMembre } from '@/lib/donnees/statuts'
 import { formaterDateHeure, formaterDateSeule } from '@/lib/format/date'
-import { exigerProfilActif } from '@/lib/securite/garde'
+import { aAutoriteSur, exigerProfilActif } from '@/lib/securite/garde'
 import { retirerStatut } from './actions'
 import { BoutonRetirerStatut } from './bouton-retirer-statut'
 import { FormulaireStatut } from './formulaire-statut'
 
 export default async function PageStatuts({ params }: { params: Promise<{ id: string }> }) {
-  const profil = await exigerProfilActif()
+  // Le profil n'est pas réutilisé ici : ce garde ne sert qu'à vérifier qu'un compte
+  // actif est connecté, l'écran restant lisible par tout compte actif (spec 1c, §5.1).
+  await exigerProfilActif()
   const { id } = await params
   const membre = await membreParId(id)
   if (!membre) {
     notFound()
   }
 
-  const [statuts, journal, roles] = await Promise.all([
+  const [statuts, journal, peutEcrire] = await Promise.all([
     statutsDuMembre(membre.id),
     journalDuMembre(membre.id),
-    rolesDuProfil(profil.id),
+    aAutoriteSur(membre.id),
   ])
-  const estAdmin = roles.includes('administrateur')
-  // Le catalogue ne sert qu'au formulaire d'attribution, rendu uniquement pour un
-  // administrateur : l'interroger pour tout visiteur — le cas le plus fréquent —
-  // ferait une requête inutile.
-  const groupes = estAdmin ? await listerCatalogue() : []
+  // Le catalogue ne sert qu'au formulaire d'attribution, rendu uniquement pour qui a
+  // autorité : l'interroger pour tout visiteur — le cas le plus fréquent — ferait une
+  // requête inutile.
+  const groupes = peutEcrire ? await listerCatalogue() : []
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
@@ -63,7 +63,7 @@ export default async function PageStatuts({ params }: { params: Promise<{ id: st
                   </p>
                   {statut.note ? <p className="mt-1 text-sm">{statut.note}</p> : null}
                 </div>
-                {estAdmin ? (
+                {peutEcrire ? (
                   <form action={retirerStatut} className="flex items-start gap-2">
                     <input type="hidden" name="membreId" value={membre.id} />
                     <input type="hidden" name="statutId" value={statut.statutId} />
@@ -91,7 +91,7 @@ export default async function PageStatuts({ params }: { params: Promise<{ id: st
         )}
       </section>
 
-      {estAdmin ? (
+      {peutEcrire ? (
         <section className="mb-10">
           <h2 className="mb-4 text-lg font-medium">Attribuer un statut</h2>
           <FormulaireStatut membreId={membre.id} groupes={groupes} />

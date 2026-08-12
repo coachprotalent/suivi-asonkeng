@@ -1,5 +1,5 @@
 import 'server-only'
-import type { MaillonArbre } from '@/lib/domaine/arbre'
+import type { CibleAutorite, MaillonArbre } from '@/lib/domaine/arbre'
 import { clientAdmin } from '@/lib/supabase/admin'
 import { clientServeur } from '@/lib/supabase/serveur'
 import type { MembreBref } from './membres'
@@ -33,6 +33,40 @@ export async function ancetresDeMembre(membreId: string): Promise<string[]> {
     }
     return ligne.membre_id
   })
+}
+
+/**
+ * Les éléments nécessaires à une décision d'autorité sur un membre.
+ *
+ * Lecture avec la CLÉ DE SERVICE, comme `ancetresDeMembre` et pour la même raison
+ * (design 1c, D19) : une décision d'autorité ne doit pas dépendre de ce que l'appelant
+ * a le droit de VOIR. Sous RLS, une fiche archivée est invisible d'un non-administrateur
+ * et rendrait `null` — ce qui, selon la façon dont l'appelant traite ce `null`, donnerait
+ * soit un refus inexplicable, soit pire.
+ *
+ * `null` signifie « ce membre n'existe pas », et rien d'autre. L'appelant doit le
+ * traiter comme un refus.
+ */
+export async function cibleAutorite(membreId: string): Promise<CibleAutorite | null> {
+  const { data, error } = await clientAdmin()
+    .from('membres')
+    .select('id, dirigeant_id')
+    .eq('id', membreId)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Lecture de la cible d'autorité impossible : ${error.message}`)
+  }
+  if (!data) {
+    return null
+  }
+
+  const ancetres = await ancetresDeMembre(membreId)
+  return {
+    membreId: data.id as string,
+    ancetres,
+    dirigeantId: data.dirigeant_id as string | null,
+  }
 }
 
 /** Chemin nommé d'un membre jusqu'à sa racine, membre inclus. Sert à MONTRER un cycle. */

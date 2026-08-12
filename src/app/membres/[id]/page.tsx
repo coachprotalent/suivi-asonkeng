@@ -5,7 +5,7 @@ import { membreBrefParId, membreParId } from '@/lib/donnees/membres'
 import { rolesDuProfil } from '@/lib/donnees/profils'
 import { statutsDuMembre } from '@/lib/donnees/statuts'
 import { formaterDateSeule } from '@/lib/format/date'
-import { exigerProfilActif } from '@/lib/securite/garde'
+import { aAutoriteSur, exigerProfilActif } from '@/lib/securite/garde'
 import { archiverMembre, desarchiverMembre } from '../actions'
 import { BoutonArchiver } from './bouton-archiver'
 
@@ -30,7 +30,7 @@ export default async function PageFicheMembre({
     notFound()
   }
 
-  const [roles, statuts, disciples, faiseur, dirigeant] = await Promise.all([
+  const [roles, statuts, disciples, faiseur, dirigeant, peutEcrireStatuts] = await Promise.all([
     rolesDuProfil(profil.id),
     statutsDuMembre(membre.id),
     disciplesDe(membre.id),
@@ -38,6 +38,7 @@ export default async function PageFicheMembre({
       ? membreBrefParId(membre.faiseurDeDiscipleId)
       : Promise.resolve(null),
     membre.dirigeantId ? membreBrefParId(membre.dirigeantId) : Promise.resolve(null),
+    aAutoriteSur(membre.id),
   ])
   const estAdmin = roles.includes('administrateur')
 
@@ -154,13 +155,14 @@ export default async function PageFicheMembre({
         <div className="mb-3 flex items-baseline justify-between gap-4">
           <h2 className="text-lg font-medium">Statuts</h2>
           {/*
-            « Gérer » promettrait un pouvoir que ce rôle n'a pas : un non-administrateur
-            atteint le même écran mais n'y trouve ni formulaire d'attribution ni bouton de
-            retrait, seulement la consultation et le journal — c'est ce dernier qui décrit
-            le mieux ce que l'écran lui apporte de plus que cette fiche.
+            « Gérer » promettrait un pouvoir que ce compte n'a pas : sans autorité sur
+            ce membre, il atteint le même écran mais n'y trouve ni formulaire
+            d'attribution ni bouton de retrait, seulement la consultation et le
+            journal — c'est ce dernier qui décrit le mieux ce que l'écran lui apporte
+            de plus que cette fiche.
           */}
           <Link href={`/membres/${membre.id}/statuts`} className="text-sm underline underline-offset-4">
-            {estAdmin ? 'Gérer' : 'Journal'}
+            {peutEcrireStatuts ? 'Gérer' : 'Journal'}
           </Link>
         </div>
         {statuts.length === 0 ? (
