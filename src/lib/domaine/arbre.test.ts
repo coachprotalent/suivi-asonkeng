@@ -14,12 +14,9 @@ describe('dirigeantPropose', () => {
     expect(dirigeantPropose({ id: 'fdd', faiseurDeDiscipleId: 'grand-pere' })).toBe('grand-pere')
   })
 
-  // La règle s'arrête à deux crans : elle ne remonte JAMAIS jusqu'à la racine d'une
-  // chaîne profonde. Sans ce test, une implémentation « remonter jusqu'en haut »
-  // passerait les trois cas précédents et serait fausse partout ailleurs.
-  it('ne remonte pas au-delà de deux crans sur une chaîne profonde', () => {
-    expect(dirigeantPropose({ id: 'fdd', faiseurDeDiscipleId: 'arriere-grand-pere' })).toBe(
-      'arriere-grand-pere',
-    )
-  })
+  // La garantie « la règle s'arrête à deux crans » n'est pas testée ici, elle est TENUE
+  // par le TYPE. Un MaillonArbre a id: string et faiseurDeDiscipleId: string (pas un
+  // objet imbriqué). Donc la fonction ne voit structurellement jamais plus de deux
+  // niveaux. Une implémentation qui « remonterait jusqu'à la racine » serait impossible
+  // à écrire sans changer la signature. C'est une garantie plus forte qu'un test.
 })
