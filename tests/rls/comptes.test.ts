@@ -251,4 +251,15 @@ describe('protection du dernier administrateur', () => {
     expect(error).not.toBeNull()
     expect(error?.code).toBe('42501')
   })
+
+  // `definir_actif_compte` n'avait aucun test de ce genre, alors que sa fonction
+  // sœur `definir_roles` (ci-dessus) en a un — même modèle.
+  it('refuse son exécution de definir_actif_compte à un compte authentifié ordinaire', async () => {
+    const { error } = await clientSimple.rpc('definir_actif_compte', {
+      p_profil: idSimple,
+      p_actif: false,
+    })
+    expect(error).not.toBeNull()
+    expect(error?.code).toBe('42501')
+  })
 })
