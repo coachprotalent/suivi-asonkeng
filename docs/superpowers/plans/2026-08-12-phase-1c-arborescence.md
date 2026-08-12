@@ -4380,12 +4380,16 @@ git commit -m "feat: gerer les roles, l'activation et la reinitialisation des co
 - Modifier : `README.md`
 - Modifier : `docs/superpowers/specs/2026-08-11-suivi-asonkeng-design.md`
 
-- [ ] **Étape 1 : reporter D18 dans la spécification maîtresse**
+- [ ] **Étape 1 : vérifier le renvoi D18 → D15 dans la spécification maîtresse**
 
-La décision D18 **amende** une hypothèse de la spécification maîtresse : D15 y justifie la CTE
-récursive par « l'échelle d'une équipe ». Laisser les deux documents se contredire, c'est
-garantir qu'un futur lecteur suivra le mauvais. Ajouter à la ligne D15 du §2 une mention
-renvoyant à D18 du design 1c, sans réécrire la décision elle-même — elle reste juste.
+**Déjà fait avant le lancement du plan** (commit de la spécification maîtresse) : le §2 porte
+un encadré renvoyant à D17–D21 du design 1c et disant explicitement que D18 amende D15.
+Cette étape se limite donc à **vérifier** que l'encadré est toujours là et toujours exact
+après les 15 tâches précédentes — pas à le réécrire.
+
+Y vérifier aussi la ligne **D22** (le modérateur gère le calendrier AEL récurrent, amendement
+du 2026-08-12) : elle est **hors périmètre 1c** et concerne le plan de la phase 3. Ne rien
+implémenter pour elle ici ; s'assurer seulement qu'elle n'a pas disparu.
 
 **Relire la documentation quand le monde change autour d'elle, pas seulement quand on la
 modifie.** En 1a, le README affirmait le contraire de la réalité sur le déploiement.

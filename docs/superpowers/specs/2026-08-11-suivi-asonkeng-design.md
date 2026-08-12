@@ -47,6 +47,12 @@ pendant l'implémentation sans validation.
 | D14 | Les AEL sont récurrents, pré-générés depuis un calendrier par antenne | Mardi, mercredi, samedi par défaut ; le samedi se déplace au dimanche en changeant la date |
 | D15 | L'arborescence est une liste d'adjacence parcourue par CTE récursive | Une table de fermeture ne se justifie pas à l'échelle d'une équipe |
 | D16 | La participation à un événement est visible de tous, les trois désirs de l'admin seul | La fiche membre doit afficher ses séminaires assistés (D2), mais un désir exprimé est une confidence |
+| D22 | Le modérateur gère aussi le calendrier AEL récurrent | Amendement du 2026-08-12 : il tient déjà les séances que ce calendrier engendre. Voir la note sous la matrice du §5.2. **À appliquer au plan de la phase 3.** |
+
+> **D17 à D21** sont posées dans `2026-08-12-phase-1c-design.md` et ne sont pas recopiées
+> ici. D18 y **amende D15** ci-dessus : l'équipe vise un millier de membres ou plus, et non
+> l'ordre de grandeur d'une équipe restreinte. La liste d'adjacence reste le bon choix — la
+> profondeur du parcours reste faible — mais les sélecteurs et l'annuaire en tiennent compte.
 
 **Hors périmètre, volontairement** : envoi d'emails, SMS, temps réel, exports, tableau de bord
 statistique, photos de profil. Aucun de ces éléments n'est nécessaire aux usages décrits, et
@@ -314,8 +320,15 @@ Cette règle est implémentée par une fonction unique `peutModifier(profil, mem
 | Valider ou rejeter une demande de suivi | ❌ | ❌ | ✅ |
 | Générer un token, créer un compte, lier un compte à une fiche | ❌ | ❌ | ✅ |
 | Réinitialiser le mot de passe d'autrui, attribuer les rôles | ❌ | ❌ | ✅ |
-| Gérer le calendrier AEL récurrent | ❌ | ❌ | ✅ |
+| Gérer le calendrier AEL récurrent | ❌ | ✅ | ✅ |
 | Archiver un membre | ❌ | ❌ | ✅ |
+
+> **Amendement du 2026-08-12 (D22).** La gestion du calendrier AEL récurrent, d'abord
+> réservée à l'administrateur, est ouverte au modérateur. Le modérateur tient déjà les
+> séances et pointe les présences (ligne ci-dessus) : le calendrier est précisément ce qui
+> engendre ces séances, et en réserver le réglage à un administrateur obligerait la
+> personne qui anime à demander une intervention pour déplacer une date. Sans effet sur
+> les phases 0 à 1c, qui ne livrent aucun AEL — **à appliquer au plan de la phase 3.**
 
 ### 5.3 Traduction technique
 
