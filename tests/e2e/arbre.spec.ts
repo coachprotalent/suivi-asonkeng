@@ -180,3 +180,16 @@ test("un compte non administrateur ne peut pas atteindre l'écran de rattachemen
     await supprimerCompte(identifiant)
   }
 })
+
+test('la filiation est visible de tous, le lien de rattachement des seuls administrateurs', async ({
+  page,
+}) => {
+  await seConnecter(page)
+  await page.goto(`/membres/${idPetitEnfant}`)
+  await expect(page.getByText('Faiseur de disciple')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Rattacher' })).toHaveCount(1)
+
+  // La racine doit voir ses disciples.
+  await page.goto(`/membres/${idRacine}`)
+  await expect(page.getByRole('link', { name: `Test ${PREFIXE}-enfant` })).toHaveCount(1)
+})

@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { membreParId } from '@/lib/donnees/membres'
+import { disciplesDe } from '@/lib/donnees/arbre'
+import { membreBrefParId, membreParId } from '@/lib/donnees/membres'
 import { rolesDuProfil } from '@/lib/donnees/profils'
 import { statutsDuMembre } from '@/lib/donnees/statuts'
 import { formaterDateSeule } from '@/lib/format/date'
@@ -22,9 +23,14 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
     notFound()
   }
 
-  const [roles, statuts] = await Promise.all([
+  const [roles, statuts, disciples, faiseur, dirigeant] = await Promise.all([
     rolesDuProfil(profil.id),
     statutsDuMembre(membre.id),
+    disciplesDe(membre.id),
+    membre.faiseurDeDiscipleId
+      ? membreBrefParId(membre.faiseurDeDiscipleId)
+      : Promise.resolve(null),
+    membre.dirigeantId ? membreBrefParId(membre.dirigeantId) : Promise.resolve(null),
   ])
   const estAdmin = roles.includes('administrateur')
 
@@ -38,6 +44,17 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
     ['Contact', membre.emailContact],
     ['AEL déjà suivis', String(membre.reportInitialAel)],
   ]
+
+  const nomOuTiret = (bref: { prenom: string; nom: string } | null) =>
+    bref ? `${bref.prenom} ${bref.nom}` : null
+
+  lignes.push(['Faiseur de disciple', nomOuTiret(faiseur)])
+  lignes.push([
+    'Dirigeant',
+    dirigeant
+      ? `${nomOuTiret(dirigeant)}${membre.dirigeantForce ? ' (défini manuellement)' : ' (calculé)'}`
+      : null,
+  ])
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">
@@ -128,6 +145,33 @@ export default async function PageFicheMembre({ params }: { params: Promise<{ id
                 {statut.dateAcquisition ? (
                   <span className="text-neutral-500"> · {formaterDateSeule(statut.dateAcquisition)}</span>
                 ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="mt-8">
+        <div className="mb-3 flex items-baseline justify-between gap-4">
+          <h2 className="text-lg font-medium">Disciples</h2>
+          {estAdmin ? (
+            <Link
+              href={`/membres/${membre.id}/arbre`}
+              className="text-sm underline underline-offset-4"
+            >
+              Rattacher
+            </Link>
+          ) : null}
+        </div>
+        {disciples.length === 0 ? (
+          <p className="text-sm text-neutral-600">Aucun disciple rattaché.</p>
+        ) : (
+          <ul className="divide-y divide-neutral-200">
+            {disciples.map((disciple) => (
+              <li key={disciple.id}>
+                <Link href={`/membres/${disciple.id}`} className="block py-2 text-sm">
+                  {disciple.prenom} {disciple.nom}
+                </Link>
               </li>
             ))}
           </ul>

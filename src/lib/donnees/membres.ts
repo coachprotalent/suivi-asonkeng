@@ -21,11 +21,12 @@ export type MembreDetail = MembreListe & {
   etat: EtatMembre
   dirigeantId: string | null
   dirigeantForce: boolean
+  faiseurDeDiscipleId: string | null
 }
 
 const COLONNES_LISTE = 'id, nom, prenom, ville, situation, antennes(nom)'
 const COLONNES_DETAIL =
-  'id, nom, prenom, ville, situation, telephone, email_contact, pays, antenne_id, domaine_etude, report_initial_ael, etat, dirigeant_id, dirigeant_force, antennes(nom)'
+  'id, nom, prenom, ville, situation, telephone, email_contact, pays, antenne_id, domaine_etude, report_initial_ael, etat, dirigeant_id, dirigeant_force, faiseur_de_disciple_id, antennes(nom)'
 
 type LigneAntenne = { nom: string } | { nom: string }[] | null
 
@@ -142,6 +143,7 @@ export async function membreParId(id: string): Promise<MembreDetail | null> {
     etat: data.etat as EtatMembre,
     dirigeantId: data.dirigeant_id as string | null,
     dirigeantForce: data.dirigeant_force as boolean,
+    faiseurDeDiscipleId: data.faiseur_de_disciple_id as string | null,
   }
 }
 
