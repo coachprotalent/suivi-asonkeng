@@ -65,10 +65,17 @@ export function peutModifier(contexte: ContexteAutorite, cible: CibleAutorite): 
     return false
   }
 
-  // Nul n'est son propre ancêtre : `ancetres` exclut la cible (voir
-  // `public.ancetres_membre`), donc ce cas est déjà couvert — sauf si quelqu'un
-  // désignait un membre comme son propre dirigeant, ce que les contraintes CHECK de
-  // `membres` interdisent. Les deux branches ci-dessous sont donc sûres telles quelles.
+  // Nul n'est son propre ancêtre (§5.1) : un utilisateur n'a jamais autorité sur sa
+  // propre fiche. Ce court-circuit est LOCAL et NE DÉPEND D'AUCUNE GARANTIE EXTÉRIEURE :
+  // même si `public.ancetres_membre` incluait un jour la cible dans sa propre liste
+  // d'ancêtres (bug de la requête récursive), ou si la contrainte CHECK qui interdit
+  // `dirigeant_id = id` était levée, cette fonction refuserait quand même l'autorité sur
+  // soi-même. Les contraintes de la base restent une seconde ligne de défense, pas la
+  // première : celle-ci ne dépend pas d'elles pour tenir.
+  if (cible.membreId === contexte.membreLieId) {
+    return false
+  }
+
   if (cible.dirigeantId === contexte.membreLieId) {
     return true
   }

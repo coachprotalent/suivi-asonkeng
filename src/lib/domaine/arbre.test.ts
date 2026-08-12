@@ -80,4 +80,32 @@ describe('peutModifier', () => {
       ),
     ).toBe(false)
   })
+
+  // ENTRÉE HOSTILE, pas un cas d'usage : `ancetres_membre` exclut aujourd'hui la cible
+  // de sa propre liste d'ancêtres, donc cette entrée est impossible en base actuellement.
+  // Elle est testée quand même, pour figer une défense en profondeur qui ne doit RIEN à
+  // cette garantie externe : si la requête récursive de `ancetres_membre` se mettait un
+  // jour à inclure la cible (régression du filtre de profondeur), la fonction doit
+  // continuer de refuser l'autorité sur soi-même plutôt que de basculer côté accord.
+  it("refuse même si la liste d'ancêtres contient (à tort) l'identifiant de la cible", () => {
+    expect(
+      peutModifier(
+        { membreLieId: 'cible', estAdmin: false },
+        { membreId: 'cible', ancetres: ['cible', 'parent'], dirigeantId: null },
+      ),
+    ).toBe(false)
+  })
+
+  // ENTRÉE HOSTILE, pas un cas d'usage : une contrainte CHECK interdit aujourd'hui
+  // `dirigeant_id = id` en base, donc cette entrée est impossible actuellement. Testée
+  // quand même : si cette contrainte était un jour levée, la fonction doit continuer de
+  // refuser l'autorité sur soi-même plutôt que de basculer côté accord.
+  it("refuse même si le dirigeant désigné de la cible est (à tort) elle-même", () => {
+    expect(
+      peutModifier(
+        { membreLieId: 'cible', estAdmin: false },
+        { membreId: 'cible', ancetres: [], dirigeantId: 'cible' },
+      ),
+    ).toBe(false)
+  })
 })
