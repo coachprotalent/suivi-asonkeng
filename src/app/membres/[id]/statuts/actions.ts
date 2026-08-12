@@ -45,12 +45,14 @@ export async function attribuerStatut(
     return { erreur: MESSAGE_ECHEC_STATUT }
   }
 
-  // Le garde vient APRÈS la lecture de `membreId` parce qu'il en dépend — et
-  // c'est le seul cas du projet où il n'est pas la toute première instruction.
-  // Ce qui le précède ne touche ni la base ni aucun état persistant : il dépaquète
-  // le formulaire, et journalise (console.error) si des champs manquent — une
-  // trace serveur éphémère, pas une écriture. Aucun effet sur un état persistant
-  // n'est possible avant le contrôle.
+  // Le garde vient APRÈS la lecture de `membreId` parce qu'il en dépend — l'un des
+  // rares cas du projet où il n'est pas la toute première instruction (comme
+  // `changerMotDePasse`, src/app/changer-mot-de-passe/actions.ts, qui l'appelle
+  // après une validation, une lecture d'utilisateur et deux redirections). Ce qui
+  // précède ici ne touche ni la base ni aucun état persistant : il dépaquète le
+  // formulaire, et journalise (console.error) si des champs manquent — une trace
+  // serveur éphémère, pas une écriture. Aucun effet sur un état persistant n'est
+  // possible avant le contrôle.
   const profil = await exigerAutoriteSur(membreId)
 
   let dateAcquisition: string | null
@@ -154,12 +156,14 @@ export async function retirerStatut(donnees: FormData): Promise<void> {
     throw new Error("Le statut n'a pas pu être retiré : identifiants manquants.")
   }
 
-  // Le garde vient APRÈS la lecture de `membreId` parce qu'il en dépend — et
-  // c'est le seul cas du projet où il n'est pas la toute première instruction.
-  // Ce qui le précède ne touche ni la base ni aucun état persistant : il dépaquète
-  // le formulaire, et journalise (console.error) si des champs manquent — une
-  // trace serveur éphémère, pas une écriture. Aucun effet sur un état persistant
-  // n'est possible avant le contrôle.
+  // Le garde vient APRÈS la lecture de `membreId` parce qu'il en dépend — l'un des
+  // rares cas du projet où il n'est pas la toute première instruction (comme
+  // `changerMotDePasse`, src/app/changer-mot-de-passe/actions.ts, qui l'appelle
+  // après une validation, une lecture d'utilisateur et deux redirections). Ce qui
+  // précède ici ne touche ni la base ni aucun état persistant : il dépaquète le
+  // formulaire, et journalise (console.error) si des champs manquent — une trace
+  // serveur éphémère, pas une écriture. Aucun effet sur un état persistant n'est
+  // possible avant le contrôle.
   const profil = await exigerAutoriteSur(membreId)
 
   const motif = normaliserMotifSansLever(donnees.get('motif'), membreId, statutId)

@@ -79,7 +79,12 @@ export async function cheminArbre(membreId: string): Promise<MembreBref[]> {
   return lignes.map((l) => ({ id: l.membre_id, nom: l.nom, prenom: l.prenom }))
 }
 
-/** Disciples directs d'un membre, encore actifs. Sous RLS : c'est un affichage. */
+/**
+ * Disciples directs d'un membre, encore actifs. Sous RLS — mais ce n'est plus
+ * seulement un affichage : c'est aussi le contrôle EN AMONT d'`archiverMembre`
+ * (src/app/membres/actions.ts), qui produit le refus nommé vu par l'administrateur
+ * avant même que le déclencheur n'intervienne.
+ */
 export async function disciplesDe(membreId: string): Promise<MembreBref[]> {
   const supabase = await clientServeur()
   const { data, error } = await supabase
