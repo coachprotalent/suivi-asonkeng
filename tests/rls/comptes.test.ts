@@ -114,6 +114,11 @@ describe('protection du dernier administrateur', () => {
       p_moderateur: false,
     })
     expect(error).toBeNull()
+
+    // État final, pas seulement l'absence d'erreur : un appel sans effet (bug qui
+    // ferait silencieusement un no-op) passerait aussi `expect(error).toBeNull()`.
+    const { data } = await admin.from('roles_profil').select('role').eq('profil_id', idAdminA)
+    expect(data?.map((l) => l.role)).not.toContain('administrateur')
   })
 
   // NON PROUVÉ ICI : que `definir_roles` refuse effectivement de rétrograder le
@@ -187,21 +192,54 @@ describe('protection du dernier administrateur', () => {
   it('laisse désactiver un compte ordinaire', async () => {
     const { error } = await admin.rpc('definir_actif_compte', { p_profil: idSimple, p_actif: false })
     expect(error).toBeNull()
+
+    // État final, pas seulement l'absence d'erreur : un appel sans effet passerait
+    // aussi ce contrôle si on ne vérifiait que `error`.
+    const { data } = await admin.from('profils').select('actif').eq('id', idSimple).single()
+    expect(data?.actif).toBe(false)
+
     await admin.rpc('definir_actif_compte', { p_profil: idSimple, p_actif: true })
   })
 
   it("ne refuse rien quand on retire un rôle que le compte n'a pas", async () => {
-    // Le piège de la clause `exists` : sans elle, ce cas serait refusé dès qu'il ne
-    // reste qu'un administrateur, et un compte ordinaire deviendrait immodifiable. Ce
-    // test-ci est INDÉPENDANT du nombre d'administrateurs réels : idSimple n'a jamais
-    // eu le rôle administrateur, donc la clause `exists` l'exclut du refus quel que
-    // soit `prive.compter_administrateurs_actifs`.
+    // AVERTISSEMENT DE MÊME NATURE, MÊME CAUSE RACINE que les deux tests neutralisés
+    // ci-dessus — repéré par une relecture, pas vu à la première écriture de ce
+    // fichier : CE TEST NE DISCRIMINE PAS la clause `exists`, contrairement à ce
+    // qu'affirmait la version précédente de ce commentaire.
+    //
+    // La condition complète du refus est `not p_administrateur AND exists(rôle
+    // administrateur actuel) AND compter_administrateurs_actifs(cible) = 0`. Dans cet
+    // environnement, `compter_administrateurs_actifs` n'est JAMAIS égal à 0 (voir le
+    // commentaire au-dessus de `ADMINS_REELS_ACTIFS` et le premier test neutralisé
+    // plus haut) : ce seul facteur suffit à rendre toute la conjonction fausse, AVEC
+    // OU SANS la clause `exists`. Si on supprimait cette clause, l'inversait, ou la
+    // remplaçait par `true`, ce test passerait quand même — il ne prouve donc PAS que
+    // `exists` protège idSimple ; il prouve seulement qu'aucun refus n'a lieu ici, ce
+    // qui serait vrai de toute façon dans cet environnement.
+    //
+    // La preuve par mutation (rapport, §6) ne pouvait pas révéler ce défaut : elle
+    // retire le bloc ENTIER (`exists` et comptage ensemble), donc elle ne dit rien du
+    // pouvoir discriminant de la clause `exists` prise isolément.
+    //
+    // La clause SQL elle-même reste correcte et nécessaire en production — sans elle,
+    // un compte ordinaire deviendrait immodifiable dès qu'il ne reste plus qu'un
+    // administrateur. C'est sa VÉRIFICATION qui est absente ici, pas son
+    // implémentation : même limite, même cause, que la protection du dernier
+    // administrateur elle-même (voir le premier test neutralisé plus haut).
     const { error } = await admin.rpc('definir_roles', {
       p_profil: idSimple,
       p_administrateur: false,
       p_moderateur: true,
     })
     expect(error).toBeNull()
+
+    // État final, pas seulement l'absence d'erreur — utile même si ça ne prouve pas
+    // la clause `exists` (voir avertissement ci-dessus) : un appel sans effet
+    // passerait aussi `expect(error).toBeNull()` seul.
+    const { data } = await admin.from('roles_profil').select('role').eq('profil_id', idSimple)
+    const roles = data?.map((l) => l.role) ?? []
+    expect(roles).toContain('moderateur')
+    expect(roles).not.toContain('administrateur')
   })
 
   it('refuse son exécution à un compte authentifié ordinaire', async () => {
