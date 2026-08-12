@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { disciplesDe } from '@/lib/donnees/arbre'
+import { etatCompteLie } from '@/lib/donnees/comptes'
 import { membreBrefParId, membreParId } from '@/lib/donnees/membres'
 import { rolesDuProfil } from '@/lib/donnees/profils'
 import { statutsDuMembre } from '@/lib/donnees/statuts'
@@ -20,26 +21,32 @@ export default async function PageFicheMembre({
   searchParams,
 }: {
   params: Promise<{ id: string }>
-  searchParams: Promise<{ archivageRefuse?: string; desarchivageRefuse?: string }>
+  searchParams: Promise<{
+    archivageRefuse?: string
+    archivageRefuseAdministrateur?: string
+    desarchivageRefuse?: string
+  }>
 }) {
   const profil = await exigerProfilActif()
   const { id } = await params
-  const { archivageRefuse, desarchivageRefuse } = await searchParams
+  const { archivageRefuse, archivageRefuseAdministrateur, desarchivageRefuse } = await searchParams
   const membre = await membreParId(id)
   if (!membre) {
     notFound()
   }
 
-  const [roles, statuts, disciples, faiseur, dirigeant, peutEcrireStatuts] = await Promise.all([
-    rolesDuProfil(profil.id),
-    statutsDuMembre(membre.id),
-    disciplesDe(membre.id),
-    membre.faiseurDeDiscipleId
-      ? membreBrefParId(membre.faiseurDeDiscipleId)
-      : Promise.resolve(null),
-    membre.dirigeantId ? membreBrefParId(membre.dirigeantId) : Promise.resolve(null),
-    aAutoriteSur(membre.id),
-  ])
+  const [roles, statuts, disciples, faiseur, dirigeant, peutEcrireStatuts, compteLie] =
+    await Promise.all([
+      rolesDuProfil(profil.id),
+      statutsDuMembre(membre.id),
+      disciplesDe(membre.id),
+      membre.faiseurDeDiscipleId
+        ? membreBrefParId(membre.faiseurDeDiscipleId)
+        : Promise.resolve(null),
+      membre.dirigeantId ? membreBrefParId(membre.dirigeantId) : Promise.resolve(null),
+      aAutoriteSur(membre.id),
+      etatCompteLie(membre.id),
+    ])
   const estAdmin = roles.includes('administrateur')
 
   const lignes: Array<[string, string | null]> = [
@@ -120,13 +127,21 @@ export default async function PageFicheMembre({
               {membre.etat === 'actif' ? (
                 <form action={archiverMembre}>
                   <input type="hidden" name="id" value={membre.id} />
-                  <BoutonArchiver nomComplet={`${membre.prenom} ${membre.nom}`} archiver />
+                  <BoutonArchiver
+                    nomComplet={`${membre.prenom} ${membre.nom}`}
+                    archiver
+                    compteLie={compteLie}
+                  />
                 </form>
               ) : null}
               {membre.etat === 'archive' ? (
                 <form action={desarchiverMembre}>
                   <input type="hidden" name="id" value={membre.id} />
-                  <BoutonArchiver nomComplet={`${membre.prenom} ${membre.nom}`} archiver={false} />
+                  <BoutonArchiver
+                    nomComplet={`${membre.prenom} ${membre.nom}`}
+                    archiver={false}
+                    compteLie={compteLie}
+                  />
                 </form>
               ) : null}
             </>
@@ -139,6 +154,15 @@ export default async function PageFicheMembre({
           Cette fiche ne peut pas être archivée : {archivageRefuse} en dépendent encore comme
           faiseur de disciple. Rattachez ces personnes à quelqu&apos;un d&apos;autre, puis
           recommencez.
+        </p>
+      ) : null}
+
+      {archivageRefuseAdministrateur ? (
+        <p role="alert" className="mb-6 rounded-md bg-amber-50 p-3 text-sm text-amber-800">
+          Cette fiche ne peut pas être archivée : le compte qui lui est lié est le dernier
+          administrateur actif de l&apos;application. Archiver cette fiche le désactiverait et
+          laisserait l&apos;application sans administrateur. Donnez le rôle administrateur à
+          quelqu&apos;un d&apos;autre, sur l&apos;écran des comptes, puis recommencez.
         </p>
       ) : null}
 
