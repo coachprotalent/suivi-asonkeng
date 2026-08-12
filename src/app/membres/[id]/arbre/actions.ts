@@ -10,6 +10,7 @@ import { clientAdmin } from '@/lib/supabase/admin'
 import {
   MESSAGE_DIRIGEANT_INCONNU,
   MESSAGE_ECHEC_ARBRE,
+  MESSAGE_FAISEUR_ARCHIVE,
   MESSAGE_FAISEUR_INCONNU,
   MESSAGE_MEMBRE_INCONNU,
   messageCycle,
@@ -17,12 +18,14 @@ import {
 
 export type EtatArbre = { erreur: string | null }
 
-// Marqueurs posés par `public.definir_arbre` et le déclencheur anti-cycle
-// (migration 20260814100000). On discrimine dessus, jamais sur la prose française.
+// Marqueurs posés par `public.definir_arbre` et les déclencheurs anti-cycle
+// (migration 20260814100000) et anti-faiseur-archivé (migration 20260814150000). On
+// discrimine dessus, jamais sur la prose française.
 const DETAIL_CYCLE = 'cycle_faiseur_de_disciple'
 const DETAIL_MEMBRE_INCONNU = 'membre_inconnu'
 const DETAIL_FAISEUR_INCONNU = 'faiseur_inconnu'
 const DETAIL_DIRIGEANT_INCONNU = 'dirigeant_inconnu'
+const DETAIL_FAISEUR_ARCHIVE = 'faiseur_de_disciple_archive'
 
 function champOuNull(donnees: FormData, champ: string): string | null {
   const valeur = donnees.get(champ)
@@ -97,6 +100,9 @@ export async function definirArbre(
     }
     if (error.details === DETAIL_FAISEUR_INCONNU) {
       return { erreur: MESSAGE_FAISEUR_INCONNU }
+    }
+    if (error.details === DETAIL_FAISEUR_ARCHIVE) {
+      return { erreur: MESSAGE_FAISEUR_ARCHIVE }
     }
     if (error.details === DETAIL_DIRIGEANT_INCONNU) {
       return { erreur: MESSAGE_DIRIGEANT_INCONNU }

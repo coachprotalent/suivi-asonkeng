@@ -4,6 +4,12 @@ export const MESSAGE_ECHEC_ARBRE = "Le rattachement n'a pas pu être enregistré
 export const MESSAGE_MEMBRE_INCONNU = "Cette fiche n'existe plus."
 export const MESSAGE_FAISEUR_INCONNU = "Le faiseur de disciple choisi n'existe plus."
 export const MESSAGE_DIRIGEANT_INCONNU = "Le dirigeant choisi n'existe plus."
+// Correctif post-1c : le sélecteur ne propose que des membres actifs, mais un appel
+// RPC forgé ou une écriture directe pouvait rattacher un membre actif à un faiseur de
+// disciple archivé — exactement l'état que l'archivage interdit (migration
+// 20260814150000).
+export const MESSAGE_FAISEUR_ARCHIVE =
+  "Le faiseur de disciple choisi est archivé : ce rattachement n'est pas autorisé."
 
 /**
  * Message d'un cycle refusé, avec le chemin fautif — le §7 de la spécification exige

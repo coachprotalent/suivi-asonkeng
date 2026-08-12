@@ -230,6 +230,115 @@ describe('passerelle definir_arbre réservée à service_role', () => {
   })
 })
 
+// CORRECTIF post-1c : la revue finale de la 1c a montré que `definir_arbre` ne
+// vérifiait jamais l'état du faiseur de disciple proposé, et que le déclencheur
+// anti-cycle ne contrôle que les cycles — un membre actif pouvait donc être rattaché à
+// un faiseur de disciple ARCHIVÉ, exactement l'état que l'archivage interdit
+// (migration 20260814150000).
+describe('rattachement à un faiseur de disciple archivé', () => {
+  it('refuse une écriture directe, par le déclencheur', async () => {
+    const idFaiseurArchive = await creerMembre('faiseur-archive-1', null)
+    const { error: erreurArchivage } = await admin
+      .from('membres')
+      .update({ etat: 'archive' })
+      .eq('id', idFaiseurArchive)
+    expect(erreurArchivage).toBeNull()
+
+    const idCible = await creerMembre('cible-update', idRacine)
+    const { error } = await admin
+      .from('membres')
+      .update({ faiseur_de_disciple_id: idFaiseurArchive })
+      .eq('id', idCible)
+    expect(error).not.toBeNull()
+    expect(error?.details).toBe('faiseur_de_disciple_archive')
+
+    // Et rien n'a été écrit : le rattachement d'origine doit tenir.
+    const { data } = await admin
+      .from('membres')
+      .select('faiseur_de_disciple_id')
+      .eq('id', idCible)
+      .single()
+    expect(data?.faiseur_de_disciple_id).toBe(idRacine)
+  })
+
+  // Même déclencheur, chemin `insert` plutôt que `update` : `membres_anti_cycle`
+  // couvre les deux (`before insert or update of faiseur_de_disciple_id`), et ce
+  // déclencheur reprend exactement la même déclaration d'événement — sans ce test, la
+  // moitié `insert` resterait non exercée.
+  it('refuse une insertion directe, par le déclencheur', async () => {
+    const idFaiseurArchive = await creerMembre('faiseur-archive-2', null)
+    const { error: erreurArchivage } = await admin
+      .from('membres')
+      .update({ etat: 'archive' })
+      .eq('id', idFaiseurArchive)
+    expect(erreurArchivage).toBeNull()
+
+    const { error, data } = await admin
+      .from('membres')
+      .insert({
+        nom: `${PREFIXE}-cible-insert`,
+        prenom: 'Test',
+        faiseur_de_disciple_id: idFaiseurArchive,
+      })
+      .select('id')
+      .single()
+    expect(error).not.toBeNull()
+    expect(error?.details).toBe('faiseur_de_disciple_archive')
+    expect(data).toBeNull()
+  })
+
+  it('refuse jusque depuis la passerelle, avec un marqueur stable', async () => {
+    const idFaiseurArchive = await creerMembre('faiseur-archive-3', null)
+    const { error: erreurArchivage } = await admin
+      .from('membres')
+      .update({ etat: 'archive' })
+      .eq('id', idFaiseurArchive)
+    expect(erreurArchivage).toBeNull()
+
+    const idCible = await creerMembre('cible-passerelle', idRacine)
+    const { error } = await admin.rpc('definir_arbre', {
+      p_membre: idCible,
+      p_faiseur_de_disciple: idFaiseurArchive,
+      p_dirigeant: null,
+      p_dirigeant_force: false,
+    })
+    expect(error).not.toBeNull()
+    expect(error?.details).toBe('faiseur_de_disciple_archive')
+
+    // La passerelle écrit trois colonnes dans la même instruction (voir le test
+    // équivalent du bloc précédent) : vérifier qu'AUCUNE des trois n'a bougé.
+    const { data } = await admin
+      .from('membres')
+      .select('faiseur_de_disciple_id, dirigeant_id, dirigeant_force')
+      .eq('id', idCible)
+      .single()
+    expect(data?.faiseur_de_disciple_id).toBe(idRacine)
+    expect(data?.dirigeant_id).toBeNull()
+    expect(data?.dirigeant_force).toBe(false)
+  })
+
+  // CONTRÔLE POSITIF, exigé par le brief de ce correctif : sans lui, les trois refus
+  // ci-dessus seraient satisfaits par une barrière qui refuse TOUT rattachement, actif
+  // ou archivé, ce qui ne prouverait rien sur la discrimination par état.
+  it('laisse passer un rattachement à un faiseur de disciple actif', async () => {
+    const idCible = await creerMembre('cible-controle-positif', null)
+    const { error } = await admin.rpc('definir_arbre', {
+      p_membre: idCible,
+      p_faiseur_de_disciple: idRacine,
+      p_dirigeant: null,
+      p_dirigeant_force: false,
+    })
+    expect(error).toBeNull()
+
+    const { data } = await admin
+      .from('membres')
+      .select('faiseur_de_disciple_id')
+      .eq('id', idCible)
+      .single()
+    expect(data?.faiseur_de_disciple_id).toBe(idRacine)
+  })
+})
+
 describe("parcours de l'arbre", () => {
   it('remonte les ancêtres du plus proche au plus lointain', async () => {
     const { data, error } = await admin.rpc('ancetres_membre', { p_membre: idPetitEnfant })
