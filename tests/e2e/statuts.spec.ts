@@ -431,7 +431,7 @@ test("un compte sans autorité ne peut pas retirer un statut par une requete for
   }
 })
 
-test('masquage d\'interface : un compte non administrateur ne voit ni formulaire ni bouton de retrait', async ({
+test('masquage d\'interface : un compte sans autorité ne voit ni formulaire ni bouton de retrait', async ({
   page,
 }) => {
   // Nommé précisément d'après ce qu'il vérifie : l'absence des éléments dans le
