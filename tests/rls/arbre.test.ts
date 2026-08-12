@@ -241,8 +241,13 @@ describe("parcours de l'arbre", () => {
   })
 
   it('exclut le membre lui-même', async () => {
-    const { data } = await admin.rpc('ancetres_membre', { p_membre: idPetitEnfant })
+    const { data, error } = await admin.rpc('ancetres_membre', { p_membre: idPetitEnfant })
+    expect(error).toBeNull()
     const identifiants = (data ?? []).map((l: { membre_id: string }) => l.membre_id)
+    // Sans ce contrôle, une liste vide (par exemple un appel qui échouerait
+    // silencieusement) satisferait aussi le `not.toContain` ci-dessous sans rien
+    // prouver sur l'exclusion réelle du membre.
+    expect(identifiants.length).toBeGreaterThan(0)
     expect(identifiants).not.toContain(idPetitEnfant)
   })
 
@@ -262,8 +267,21 @@ describe("parcours de l'arbre", () => {
     const { data, error } = await admin.rpc('chemin_arbre', { p_membre: idPetitEnfant })
     expect(error).toBeNull()
     expect(data).toHaveLength(3)
+    // Raison d'être de chemin_arbre par rapport à ancetres_membre : elle porte des
+    // noms. Vérifier nom ET prénom, sur les TROIS lignes y compris celle du milieu,
+    // sans quoi un bug qui viderait, inverserait ou fausserait les noms passerait
+    // inaperçu alors que seuls membre_id et profondeur seraient contrôlés.
     expect(data?.[0].membre_id).toBe(idPetitEnfant)
     expect(data?.[0].profondeur).toBe(0)
+    expect(data?.[0].nom).toBe(`${PREFIXE}-petit-enfant`)
+    expect(data?.[0].prenom).toBe('Test')
+    expect(data?.[1].membre_id).toBe(idEnfant)
+    expect(data?.[1].profondeur).toBe(1)
+    expect(data?.[1].nom).toBe(`${PREFIXE}-enfant`)
+    expect(data?.[1].prenom).toBe('Test')
     expect(data?.[2].membre_id).toBe(idRacine)
+    expect(data?.[2].profondeur).toBe(2)
+    expect(data?.[2].nom).toBe(`${PREFIXE}-racine`)
+    expect(data?.[2].prenom).toBe('Test')
   })
 })
