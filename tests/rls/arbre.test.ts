@@ -229,3 +229,41 @@ describe('passerelle definir_arbre réservée à service_role', () => {
     expect(error?.details).toBe('cycle_faiseur_de_disciple')
   })
 })
+
+describe("parcours de l'arbre", () => {
+  it('remonte les ancêtres du plus proche au plus lointain', async () => {
+    const { data, error } = await admin.rpc('ancetres_membre', { p_membre: idPetitEnfant })
+    expect(error).toBeNull()
+    expect(data).toEqual([
+      { membre_id: idEnfant, profondeur: 1 },
+      { membre_id: idRacine, profondeur: 2 },
+    ])
+  })
+
+  it('exclut le membre lui-même', async () => {
+    const { data } = await admin.rpc('ancetres_membre', { p_membre: idPetitEnfant })
+    const identifiants = (data ?? []).map((l: { membre_id: string }) => l.membre_id)
+    expect(identifiants).not.toContain(idPetitEnfant)
+  })
+
+  it('renvoie une liste vide pour une racine', async () => {
+    const { data, error } = await admin.rpc('ancetres_membre', { p_membre: idRacine })
+    expect(error).toBeNull()
+    expect(data).toEqual([])
+  })
+
+  it('refuse son exécution à un compte authentifié ordinaire', async () => {
+    const { error } = await clientSimple.rpc('ancetres_membre', { p_membre: idPetitEnfant })
+    expect(error).not.toBeNull()
+    expect(error?.code).toBe('42501')
+  })
+
+  it("donne le chemin nommé, membre inclus, pour l'affichage", async () => {
+    const { data, error } = await admin.rpc('chemin_arbre', { p_membre: idPetitEnfant })
+    expect(error).toBeNull()
+    expect(data).toHaveLength(3)
+    expect(data?.[0].membre_id).toBe(idPetitEnfant)
+    expect(data?.[0].profondeur).toBe(0)
+    expect(data?.[2].membre_id).toBe(idRacine)
+  })
+})
