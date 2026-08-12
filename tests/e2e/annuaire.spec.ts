@@ -129,6 +129,38 @@ test('un administrateur crée une fiche et la retrouve dans l’annuaire', async
   await expect(page.getByText('Aucun membre ne correspond à cette recherche.')).toBeVisible()
 })
 
+/*
+  Barrière d'accessibilité, pas un ornement. Un texte d'aide laissé DANS le <label>
+  est concaténé au nom accessible du champ : un lecteur d'écran annonçait
+  « AEL déjà suivis Avant la mise en service de l'application. » comme nom du champ.
+  Vérifié dans un vrai navigateur avant correction, et verrouillé ici.
+
+  Les trois assertions ne sont pas redondantes :
+   1. le nom EXACT correspond — tombe si l'aide revient dans le <label> ;
+   2. aucun champ ne porte l'aide dans son NOM — dit la faute d'origine en propre ;
+   3. `aria-describedby` pointe sur un élément qui existe VRAIMENT et porte l'aide —
+      sans elle, un identifiant mal orthographié laisserait les deux premières vertes
+      tout en supprimant l'aide de l'arbre d'accessibilité, ce qui serait pire
+      qu'avant.
+*/
+test('le champ « AEL déjà suivis » porte un nom accessible propre', async ({ page }) => {
+  await seConnecter(page)
+  await page.goto('/membres/nouveau')
+
+  const champ = page.getByRole('spinbutton', { name: 'AEL déjà suivis', exact: true })
+  await expect(champ).toHaveCount(1)
+
+  await expect(
+    page.getByRole('spinbutton', { name: /Avant la mise en service/ }),
+  ).toHaveCount(0)
+
+  const idAide = await champ.getAttribute('aria-describedby')
+  expect(idAide, "le champ doit déclarer une description").toBeTruthy()
+  // Sélecteur d'ATTRIBUT et non `#id` : `useId()` produit des identifiants qui
+  // contiennent des caractères non valides dans un sélecteur CSS sans échappement.
+  await expect(page.locator(`[id="${idAide}"]`)).toHaveText(/Avant la mise en service/)
+})
+
 test('une fiche archivée disparaît de l’annuaire', async ({ page }) => {
   await seConnecter(page)
 

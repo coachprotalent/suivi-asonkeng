@@ -1,6 +1,6 @@
 'use client'
 
-import { useActionState, useState } from 'react'
+import { useActionState, useId, useState } from 'react'
 import type { Antenne } from '@/lib/donnees/antennes'
 import type { MembreDetail } from '@/lib/donnees/membres'
 import type { EtatFormulaireMembre } from './actions'
@@ -17,6 +17,12 @@ type Props = {
 export function FormulaireMembre({ action, antennes, membre, libelleBouton }: Props) {
   const [etat, envoyer, enCours] = useActionState(action, etatInitial)
   const [situation, setSituation] = useState<string>(membre?.situation ?? '')
+  // Voir la règle d'association posée en tête de
+  // `src/app/membres/[id]/statuts/formulaire-statut.tsx` : un texte d'aide laissé
+  // DANS le <label> est concaténé au nom accessible du champ. Seul « AEL déjà
+  // suivis » en porte un ici ; les autres champs gardent le <label> enveloppant,
+  // qui leur donne déjà un nom correct.
+  const idAel = useId()
 
   // L'antenne actuelle du membre doit figurer dans la liste même si elle a été
   // désactivée depuis. Sans cela, sa valeur n'existerait pas parmi les options : le
@@ -137,20 +143,24 @@ export function FormulaireMembre({ action, antennes, membre, libelleBouton }: Pr
             />
           </label>
         ) : null}
-        <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">AEL déjà suivis</span>
+        <div className="flex flex-col gap-1.5">
+          <label htmlFor={idAel} className="text-sm font-medium">
+            AEL déjà suivis
+          </label>
           <input
+            id={idAel}
             name="reportInitialAel"
             type="number"
             min={0}
             step={1}
             defaultValue={membre?.reportInitialAel ?? 0}
+            aria-describedby={`${idAel}-aide`}
             className="rounded-md border border-neutral-300 px-3 py-2"
           />
-          <span className="text-xs text-neutral-500">
+          <span id={`${idAel}-aide`} className="text-xs text-neutral-500">
             Avant la mise en service de l&apos;application.
           </span>
-        </label>
+        </div>
       </div>
 
       {etat.erreur ? (

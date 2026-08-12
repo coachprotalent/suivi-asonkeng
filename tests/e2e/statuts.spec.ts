@@ -214,6 +214,53 @@ test("une date d'acquisition dans le futur est refusee", async ({ page }) => {
   expect(libelles).not.toContain('Baptisé du Saint-Esprit')
 })
 
+/*
+  Barrière d'accessibilité. Les deux champs facultatifs du formulaire portent un
+  texte d'aide ; laissé DANS le <label>, ce texte est concaténé au nom accessible
+  du champ. Vérifié dans un vrai navigateur avant correction : le champ date
+  s'annonçait « Date d'acquisition Facultative. Elle n'est pas toujours connue.
+  Sur un statut déjà porté, laisser vide conserve la date enregistrée. »
+
+  Ce test ne modifie rien : il lit le formulaire, sans rien attribuer. Il peut
+  donc vivre au milieu d'une suite en mode série sans en perturber le scénario.
+
+  Le <select> « Statut (obligatoire) » est assuré ici LUI AUSSI, et délibérément :
+  la revue qui a signalé ce défaut visait les <select>, alors que la mesure a
+  montré qu'ils étaient déjà corrects. L'assertion fige ce fait au lieu de le
+  laisser reposer sur une mesure ponctuelle.
+*/
+test('les champs du formulaire portent des noms accessibles propres', async ({ page }) => {
+  await seConnecter(page, IDENT_ADMIN, MDP_ADMIN)
+  await page.goto(`/membres/${idMembre}/statuts`)
+
+  await expect(
+    page.getByRole('combobox', { name: 'Statut (obligatoire)', exact: true }),
+  ).toHaveCount(1)
+
+  const champDate = page.getByRole('textbox', { name: "Date d'acquisition", exact: true })
+  const champNote = page.getByRole('textbox', { name: 'Note', exact: true })
+  await expect(champDate).toHaveCount(1)
+  await expect(champNote).toHaveCount(1)
+
+  // Dit la faute d'origine en propre : aucun champ ne doit porter son texte d'aide
+  // dans son NOM.
+  await expect(page.getByRole('textbox', { name: /Facultative/ })).toHaveCount(0)
+
+  // Et l'aide doit rester accessible en DESCRIPTION. Sans cette moitié, un
+  // identifiant mal orthographié laisserait tout le reste vert en ayant fait
+  // disparaître l'aide de l'arbre d'accessibilité — pire qu'avant la correction.
+  for (const [champ, attendu] of [
+    [champDate, /laisser vide conserve la date enregistrée/],
+    [champNote, /laisser vide conserve la note enregistrée/],
+  ] as const) {
+    const idAide = await champ.getAttribute('aria-describedby')
+    expect(idAide, 'le champ doit déclarer une description').toBeTruthy()
+    // Sélecteur d'ATTRIBUT et non `#id` : `useId()` produit des identifiants qui
+    // contiennent des caractères non valides dans un sélecteur CSS sans échappement.
+    await expect(page.locator(`[id="${idAide}"]`)).toHaveText(attendu)
+  }
+})
+
 // --- Requêtes forgées contre les Server Actions ------------------------------
 //
 // Le test de masquage d'interface (plus bas) prouve que l'écran cache le
