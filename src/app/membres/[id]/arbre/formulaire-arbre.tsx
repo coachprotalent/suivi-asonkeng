@@ -1,6 +1,6 @@
 'use client'
 
-import { useActionState, useState, useTransition } from 'react'
+import { useActionState, useRef, useState, useTransition } from 'react'
 import type { MembreBref } from '@/lib/donnees/membres'
 import { SelecteurMembre } from '../../selecteur-membre'
 import { definirArbre, proposerDirigeant, type EtatArbre } from './actions'
@@ -13,6 +13,10 @@ type Props = {
   dirigeantInitial: MembreBref | null
   dirigeantForceInitial: boolean
   propositionInitiale: MembreBref | null
+}
+
+function nomComplet(membre: MembreBref | null): string {
+  return membre ? `${membre.prenom} ${membre.nom}` : 'aucun'
 }
 
 export function FormulaireArbre({
@@ -40,31 +44,92 @@ export function FormulaireArbre({
   const [proposition, setProposition] = useState(propositionInitiale)
   const [calculEnCours, demarrerCalcul] = useTransition()
 
+  // Miroir synchrone de `force`, lu par le rappel asynchrone de `changerFaiseur` : lire
+  // l'état React `force` directement y capturerait sa valeur au moment où la fermeture a
+  // été créée (rendu du clic sur le faiseur), pas sa valeur au moment où la réponse
+  // arrive. Un `ref` reste à jour quel que soit le rendu qui a créé la fermeture — c'est
+  // précisément ce qui manquait : un choix manuel pendant l'aller-retour réseau était
+  // écrasé par la proposition, parce que le rappel testait l'ancien `force === false`.
+  const forceRef = useRef(dirigeantForceInitial)
+
+  // Numéro du dernier événement qui fait autorité sur `dirigeant` / `proposition` : un
+  // changement de faiseur en démarre un nouveau, mais une intervention manuelle directe
+  // sur le dirigeant (choix ou retour au calcul) en démarre un aussi, alors qu'elle
+  // n'appelle pas `proposerDirigeant`. Même parade que `dernierAppel` dans
+  // `SelecteurMembre` (Task 5) : un rappel asynchrone n'applique son résultat que s'il
+  // porte encore le numéro courant. Cela referme, d'un seul mécanisme, le cas où deux
+  // changements de faiseur rapprochés répondent dans le désordre — la première réponse
+  // arrivée en second écraserait sinon la proposition la plus récente.
+  const sequence = useRef(0)
+
   function changerFaiseur(membre: MembreBref | null) {
     setFaiseur(membre)
+    const numero = ++sequence.current
     demarrerCalcul(async () => {
       const propose = await proposerDirigeant(membre?.id ?? null)
+      if (numero !== sequence.current) {
+        // Réponse périmée : un événement plus récent (nouveau changement de faiseur,
+        // choix manuel du dirigeant, ou retour au calcul) a eu lieu entretemps. On ne
+        // l'applique pas — l'appliquer quand même écraserait cet événement plus récent.
+        return
+      }
       setProposition(propose)
       // La proposition ne s'impose PAS à un dirigeant défini à la main : l'admin qui a
       // délibérément forcé une valeur ne doit pas la voir disparaître parce qu'il
-      // corrige le faiseur de disciple. C'est le sens du drapeau (spec §4.2).
-      if (!force) {
+      // corrige le faiseur de disciple. `forceRef.current`, pas `force` : voir le
+      // commentaire sur `forceRef` plus haut.
+      if (!forceRef.current) {
         setDirigeant(propose)
       }
     })
   }
 
   function changerDirigeant(membre: MembreBref | null) {
+    sequence.current++
     setDirigeant(membre)
-    // Toucher soi-même à ce champ, c'est forcer. Le bouton ci-dessous est la seule
-    // façon de revenir au calcul, et il est toujours offert.
+    // Toucher soi-même à ce champ, c'est forcer.
+    forceRef.current = true
     setForce(true)
   }
 
   function revenirAuCalcul() {
+    sequence.current++
     setDirigeant(proposition)
+    forceRef.current = false
     setForce(false)
   }
+
+  // Écart entre la valeur retenue et la proposition courante — jamais déduit du seul
+  // drapeau `force`. Un dirigeant stocké « calculé » (force = false) peut devenir
+  // périmé sans qu'aucune écriture ne le touche : `definir_arbre` ne modifie que le
+  // membre visé, rien ne propage un changement de faiseur vers les descendants déjà
+  // enregistrés. Rouvrir cet écran recalcule la proposition à la volée (`page.tsx`)
+  // pendant que la valeur affichée vient de la colonne stockée : sans cette
+  // comparaison, l'écran continuerait d'annoncer « Calculé » sur une valeur que le
+  // calcul ne rendrait plus.
+  const proposeDiffere = (dirigeant?.id ?? null) !== (proposition?.id ?? null)
+
+  function mentionDirigeant(): string {
+    if (force) {
+      return 'Défini manuellement.'
+    }
+    if (!faiseur) {
+      // Techniquement vrai mais trompeur : calculer à partir de rien ne « calcule »
+      // rien. On le dit clairement plutôt que d'afficher un « Calculé » qui laisse
+      // croire à un calcul qui n'a pas eu lieu.
+      return "Aucun dirigeant n'est proposé, faute de faiseur de disciple."
+    }
+    if (!proposeDiffere) {
+      return 'Calculé à partir du faiseur de disciple.'
+    }
+    return `La proposition a changé depuis le dernier enregistrement : ${nomComplet(proposition)}.`
+  }
+
+  // Offert dès que la valeur retenue n'est plus ce que le calcul rendrait aujourd'hui —
+  // qu'elle ait été forcée, ou qu'elle soit simplement périmée. Même quand `force` est
+  // vrai et que la valeur égale déjà la proposition, le bouton reste utile : il remet
+  // le drapeau à « calculé » sans changer la valeur affichée.
+  const afficherBoutonRevenir = force || proposeDiffere
 
   return (
     <form action={envoyer} className="flex flex-col gap-6">
@@ -90,12 +155,8 @@ export function FormulaireArbre({
           exclureId={membreId}
         />
         <p className="text-xs text-neutral-500">
-          {calculEnCours
-            ? 'Calcul de la proposition…'
-            : force
-              ? 'Défini manuellement.'
-              : 'Calculé à partir du faiseur de disciple.'}
-          {force ? (
+          {calculEnCours ? 'Calcul de la proposition…' : mentionDirigeant()}
+          {!calculEnCours && afficherBoutonRevenir ? (
             <>
               {' '}
               <button
@@ -105,7 +166,7 @@ export function FormulaireArbre({
               >
                 Revenir au dirigeant calculé
               </button>
-              {proposition ? ` (${proposition.prenom} ${proposition.nom})` : ' (aucun)'}
+              {` (${nomComplet(proposition)})`}
             </>
           ) : null}
         </p>

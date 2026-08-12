@@ -131,13 +131,18 @@ test('un rattachement qui fermerait un cycle est refusé, avec le chemin fautif'
   await expect(alerte).toContainText(`${PREFIXE}-petit-enfant`)
   await expect(alerte).toContainText(`${PREFIXE}-racine`)
 
-  // Et rien n'a été écrit.
+  // Et rien n'a été écrit — sur les TROIS colonnes que `definir_arbre` écrit dans la
+  // même instruction. Se limiter à `faiseur_de_disciple_id` serait une assertion
+  // négative sur une valeur déjà nulle avant le test : elle resterait verte même si
+  // `dirigeant_id`/`dirigeant_force` avaient été écrits malgré le refus du cycle.
   const { data } = await admin
     .from('membres')
-    .select('faiseur_de_disciple_id')
+    .select('faiseur_de_disciple_id, dirigeant_id, dirigeant_force')
     .eq('id', idRacine)
     .single()
   expect(data?.faiseur_de_disciple_id).toBeNull()
+  expect(data?.dirigeant_id).toBeNull()
+  expect(data?.dirigeant_force).toBe(false)
 })
 
 test("un compte non administrateur ne peut pas atteindre l'écran de rattachement", async ({ page }) => {
@@ -151,7 +156,16 @@ test("un compte non administrateur ne peut pas atteindre l'écran de rattachemen
     email_confirm: true,
   })
   if (error || !data.user) throw new Error(error?.message)
-  await admin.from('profils').insert({ id: data.user.id, identifiant, nom_affichage: 'Test simple' })
+  const { error: erreurProfil } = await admin
+    .from('profils')
+    .insert({ id: data.user.id, identifiant, nom_affichage: 'Test simple' })
+  if (erreurProfil) {
+    // Sans ce contrôle, un profil manquant se manifesterait plus bas comme un échec
+    // de connexion inexplicable — `seConnecter` échouerait sur un compte qui existe
+    // en authentification mais n'a pas de fiche `profils`, sans dire pourquoi.
+    await admin.auth.admin.deleteUser(data.user.id)
+    throw new Error(`insertion du profil impossible : ${erreurProfil.message}`)
+  }
 
   try {
     await page.goto('/connexion')
