@@ -1,14 +1,26 @@
 'use client'
 
-import { useState, useTransition, type FormEvent } from 'react'
+import { useActionState, useId, useState, useTransition, type FormEvent } from 'react'
 import type { CompteListe } from '@/lib/donnees/comptes'
 import type { MembreBref } from '@/lib/donnees/membres'
 import { SelecteurMembre } from '../membres/selecteur-membre'
-import { lierFiche } from './actions'
+import {
+  basculerActivation,
+  definirRoles,
+  lierFiche,
+  reinitialiserMotDePasse,
+  type EtatCompte,
+} from './actions'
 
 const LIBELLE_ROLE: Record<string, string> = {
   administrateur: 'Administrateur',
   moderateur: 'Modérateur',
+}
+
+const etatInitial: EtatCompte = {
+  erreur: null,
+  identifiantCree: null,
+  motDePasseTemporaire: null,
 }
 
 export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: boolean }) {
@@ -41,6 +53,54 @@ export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: b
       }
     })
   }
+
+  const [erreurRoles, setErreurRoles] = useState<string | null>(null)
+  const [rolesEnCours, demarrerRoles] = useTransition()
+  const [erreurActivation, setErreurActivation] = useState<string | null>(null)
+  const [activationEnCours, demarrerActivation] = useTransition()
+
+  // Correction au brief de la Task 15 (signalée par l'orchestrateur avant l'écriture) :
+  // le brief affirmait que `definirRoles` et `basculerActivation`, en levant plutôt
+  // qu'en renvoyant un état, s'afficheraient « par la page d'erreur de Next, avec le
+  // message porté par l'exception ». C'est faux : `src/app/error.tsx` affiche un texte
+  // STATIQUE et ne lit jamais `error.message` — le refus du dernier administrateur ne
+  // serait donc jamais vu, exactement le défaut déjà trouvé sur `lierFiche` à la Task
+  // 14 (voir le commentaire de `soumettre` ci-dessus). Même remède : on appelle
+  // l'action directement depuis un `useTransition`, avec `try`/`catch`, pour intercepter
+  // le rejet ici plutôt que de le laisser remonter au périmètre d'erreur générique.
+  function soumettreRoles(evenement: FormEvent<HTMLFormElement>) {
+    evenement.preventDefault()
+    const donnees = new FormData(evenement.currentTarget)
+    setErreurRoles(null)
+    demarrerRoles(async () => {
+      try {
+        await definirRoles(donnees)
+      } catch (erreur) {
+        setErreurRoles(erreur instanceof Error ? erreur.message : String(erreur))
+      }
+    })
+  }
+
+  function soumettreActivation(evenement: FormEvent<HTMLFormElement>) {
+    evenement.preventDefault()
+    const donnees = new FormData(evenement.currentTarget)
+    setErreurActivation(null)
+    demarrerActivation(async () => {
+      try {
+        await basculerActivation(donnees)
+      } catch (erreur) {
+        setErreurActivation(erreur instanceof Error ? erreur.message : String(erreur))
+      }
+    })
+  }
+
+  const [etatMdp, reinitialiser, reinitialisationEnCours] = useActionState(
+    reinitialiserMotDePasse,
+    etatInitial,
+  )
+  const prefixe = useId()
+  const idAdmin = `${prefixe}-administrateur`
+  const idModerateur = `${prefixe}-moderateur`
 
   return (
     <li className="py-4">
@@ -96,6 +156,98 @@ export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: b
           ) : null}
         </div>
       )}
+
+      <div className="mt-3 flex flex-wrap items-center gap-4">
+        <form onSubmit={soumettreRoles} className="flex flex-wrap items-center gap-3">
+          <input type="hidden" name="profilId" value={compte.id} />
+          <label htmlFor={idAdmin} className="flex items-center gap-2 text-sm">
+            <input
+              id={idAdmin}
+              name="administrateur"
+              type="checkbox"
+              defaultChecked={compte.roles.includes('administrateur')}
+            />
+            Administrateur
+          </label>
+          <label htmlFor={idModerateur} className="flex items-center gap-2 text-sm">
+            <input
+              id={idModerateur}
+              name="moderateur"
+              type="checkbox"
+              defaultChecked={compte.roles.includes('moderateur')}
+            />
+            Modérateur
+          </label>
+          <button
+            type="submit"
+            disabled={rolesEnCours}
+            className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-50"
+          >
+            {rolesEnCours ? 'Enregistrement…' : 'Enregistrer les rôles'}
+          </button>
+        </form>
+
+        <form onSubmit={soumettreActivation}>
+          <input type="hidden" name="profilId" value={compte.id} />
+          {/* La valeur envoyée est l'état VOULU, pas l'état courant : sans cette
+              inversion explicite, un double-clic ou un onglet périmé rejouerait
+              l'état déjà en place au lieu de le basculer. */}
+          <input type="hidden" name="actif" value={compte.actif ? '0' : '1'} />
+          <button
+            type="submit"
+            disabled={activationEnCours}
+            className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-50"
+          >
+            {activationEnCours ? 'Enregistrement…' : compte.actif ? 'Désactiver' : 'Réactiver'}
+          </button>
+        </form>
+
+        <form action={reinitialiser}>
+          <input type="hidden" name="profilId" value={compte.id} />
+          <input type="hidden" name="identifiant" value={compte.identifiant} />
+          <button
+            type="submit"
+            disabled={reinitialisationEnCours}
+            className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-50"
+          >
+            {reinitialisationEnCours ? 'Réinitialisation…' : 'Réinitialiser le mot de passe'}
+          </button>
+        </form>
+      </div>
+
+      {erreurRoles ? (
+        <p role="alert" className="mt-2 text-sm text-red-600">
+          {erreurRoles}
+        </p>
+      ) : null}
+
+      {erreurActivation ? (
+        <p role="alert" className="mt-2 text-sm text-red-600">
+          {erreurActivation}
+        </p>
+      ) : null}
+
+      {etatMdp.erreur ? (
+        <p role="alert" className="mt-2 text-sm text-red-600">
+          {etatMdp.erreur}
+        </p>
+      ) : null}
+
+      {etatMdp.motDePasseTemporaire ? (
+        <div role="alert" className="mt-3 rounded-md border border-amber-300 bg-amber-50 p-4">
+          <p className="text-sm text-amber-900">
+            Nouveau mot de passe temporaire de « {etatMdp.identifiantCree} », à transmettre de
+            vive voix :{' '}
+            <code className="rounded bg-white px-2 py-1 font-mono">
+              {etatMdp.motDePasseTemporaire}
+            </code>
+          </p>
+          <p className="mt-2 text-xs text-amber-800">
+            Il ne sera plus jamais affiché. La personne devra en choisir un autre à sa
+            prochaine connexion.
+          </p>
+        </div>
+      ) : null}
     </li>
   )
 }

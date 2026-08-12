@@ -6,8 +6,13 @@ import { exigerAdministrateur } from '@/lib/securite/garde'
 import { clientAdmin } from '@/lib/supabase/admin'
 import {
   MESSAGE_CHAMPS_OBLIGATOIRES,
+  MESSAGE_COMPTE_INCONNU,
+  MESSAGE_DERNIER_ADMINISTRATEUR,
+  MESSAGE_ECHEC_ACTIVATION,
   MESSAGE_ECHEC_COMPTE,
   MESSAGE_ECHEC_LIAISON,
+  MESSAGE_ECHEC_REINITIALISATION,
+  MESSAGE_ECHEC_ROLES,
   MESSAGE_FICHE_DEJA_LIEE,
   MESSAGE_IDENTIFIANT_PRIS,
   MESSAGE_RACINE_SANS_FICHE,
@@ -170,4 +175,114 @@ export async function lierFiche(donnees: FormData): Promise<void> {
   }
 
   revalidatePath('/comptes')
+}
+
+const DETAIL_DERNIER_ADMINISTRATEUR = 'dernier_administrateur'
+const DETAIL_COMPTE_INCONNU = 'compte_inconnu'
+
+/**
+ * Rôles d'un compte. Passe par la passerelle sérialisée : la protection du dernier
+ * administrateur est un lire-puis-écrire, et deux administrateurs se rétrogradant
+ * simultanément passeraient tous les deux sans le verrou (voir la migration
+ * 20260814130000). Ne JAMAIS écrire directement dans `roles_profil`.
+ */
+export async function definirRoles(donnees: FormData): Promise<void> {
+  await exigerAdministrateur()
+
+  const profilId = String(donnees.get('profilId') ?? '')
+  if (profilId.length === 0) {
+    console.error('definirRoles : identifiant de compte manquant dans le formulaire')
+    throw new Error(MESSAGE_ECHEC_ROLES)
+  }
+
+  const { error } = await clientAdmin().rpc('definir_roles', {
+    p_profil: profilId,
+    p_administrateur: donnees.get('administrateur') === 'on',
+    p_moderateur: donnees.get('moderateur') === 'on',
+  })
+
+  if (error) {
+    console.error('definirRoles : échec RPC definir_roles', {
+      profilId,
+      code: error.code,
+      details: error.details,
+      message: error.message,
+    })
+    if (error.details === DETAIL_DERNIER_ADMINISTRATEUR) {
+      throw new Error(MESSAGE_DERNIER_ADMINISTRATEUR)
+    }
+    if (error.details === DETAIL_COMPTE_INCONNU) {
+      throw new Error(MESSAGE_COMPTE_INCONNU)
+    }
+    throw new Error(MESSAGE_ECHEC_ROLES)
+  }
+
+  revalidatePath('/comptes')
+}
+
+export async function basculerActivation(donnees: FormData): Promise<void> {
+  await exigerAdministrateur()
+
+  const profilId = String(donnees.get('profilId') ?? '')
+  const actif = donnees.get('actif') === '1'
+  if (profilId.length === 0) {
+    console.error('basculerActivation : identifiant de compte manquant dans le formulaire')
+    throw new Error(MESSAGE_ECHEC_ACTIVATION)
+  }
+
+  const { error } = await clientAdmin().rpc('definir_actif_compte', {
+    p_profil: profilId,
+    p_actif: actif,
+  })
+
+  if (error) {
+    console.error('basculerActivation : échec RPC definir_actif_compte', {
+      profilId,
+      actif,
+      code: error.code,
+      details: error.details,
+      message: error.message,
+    })
+    if (error.details === DETAIL_DERNIER_ADMINISTRATEUR) {
+      throw new Error(MESSAGE_DERNIER_ADMINISTRATEUR)
+    }
+    throw new Error(MESSAGE_ECHEC_ACTIVATION)
+  }
+
+  revalidatePath('/comptes')
+}
+
+/**
+ * Réinitialisation par un administrateur (spec §5.4) : un mot de passe temporaire est
+ * tiré, affiché UNE SEULE FOIS, et `doit_changer_mdp` est reposé — la personne devra en
+ * choisir un autre à sa connexion suivante.
+ *
+ * Même précaution que `creerCompte` : rien ne redirige, sinon le mot de passe
+ * disparaîtrait avant d'avoir été lu, et il n'apparaît dans aucune trace.
+ */
+export async function reinitialiserMotDePasse(
+  _etat: EtatCompte,
+  donnees: FormData,
+): Promise<EtatCompte> {
+  await exigerAdministrateur()
+
+  const profilId = String(donnees.get('profilId') ?? '')
+  const identifiant = String(donnees.get('identifiant') ?? '')
+  if (profilId.length === 0) {
+    return { erreur: MESSAGE_ECHEC_REINITIALISATION, identifiantCree: null, motDePasseTemporaire: null }
+  }
+
+  const motDePasse = motDePasseTemporaire()
+  const { error } = await clientAdmin().auth.admin.updateUserById(profilId, {
+    password: motDePasse,
+    app_metadata: { doit_changer_mdp: true },
+  })
+
+  if (error) {
+    console.error('reinitialiserMotDePasse : échec', { profilId, message: error.message })
+    return { erreur: MESSAGE_ECHEC_REINITIALISATION, identifiantCree: null, motDePasseTemporaire: null }
+  }
+
+  revalidatePath('/comptes')
+  return { erreur: null, identifiantCree: identifiant, motDePasseTemporaire: motDePasse }
 }
