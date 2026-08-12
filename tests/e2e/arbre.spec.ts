@@ -251,3 +251,54 @@ test("archiver un faiseur de disciple est refusé, et la liste des disciples est
   const { data } = await admin.from('membres').select('etat').eq('id', idEnfant).single()
   expect(data?.etat).toBe('actif')
 })
+
+test("le nom d'un disciple contenant des caractères à échapper traverse intact l'aller-retour de l'adresse", async ({
+  page,
+}) => {
+  // Couple dédié, avec des noms contenant apostrophe et esperluette — les deux
+  // caractères qu'une adresse mal construite briserait : l'esperluette est le
+  // séparateur de paramètres d'une query string, elle tronquerait `archivageRefuse`
+  // au premier `&` si `noms` n'était pas encodé avant d'être inséré dans l'URL.
+  const nomParent = `${PREFIXE}-o'connor & fils`
+  const prenomDisciple = `T'Challa`
+  const nomDisciple = `${PREFIXE}-Awa & Fatou`
+
+  const { data: parent, error: erreurParent } = await admin
+    .from('membres')
+    .insert({ nom: nomParent, prenom: 'Test' })
+    .select('id')
+    .single()
+  if (erreurParent || !parent) {
+    throw new Error(`création du parent impossible : ${erreurParent?.message}`)
+  }
+  const idParentSpecial: string = parent.id
+
+  const { data: disciple, error: erreurDisciple } = await admin
+    .from('membres')
+    .insert({ nom: nomDisciple, prenom: prenomDisciple, faiseur_de_disciple_id: idParentSpecial })
+    .select('id')
+    .single()
+  if (erreurDisciple || !disciple) {
+    await admin.from('membres').delete().eq('id', idParentSpecial)
+    throw new Error(`création du disciple impossible : ${erreurDisciple?.message}`)
+  }
+  const idDiscipleSpecial: string = disciple.id
+
+  try {
+    await seConnecter(page)
+    await page.goto(`/membres/${idParentSpecial}`)
+
+    page.once('dialog', (dialogue) => dialogue.accept())
+    await page.getByRole('button', { name: 'Archiver' }).click()
+
+    const alerte = page.locator(ALERTE)
+    // Le nom EXACT, apostrophe et esperluette comprises — pas seulement un extrait
+    // qui aurait survécu à une troncature côté esperluette.
+    await expect(alerte).toContainText(`${prenomDisciple} ${nomDisciple}`)
+  } finally {
+    // Nettoyage explicite : ce couple est créé hors du jeu partagé de `beforeAll`,
+    // le `afterAll` du fichier le rattraperait par le préfixe ZZArbreE2E- en dernier
+    // recours, mais on ne s'y fie pas pour un test qui peut être rejoué seul.
+    await admin.from('membres').delete().in('id', [idDiscipleSpecial, idParentSpecial])
+  }
+})
