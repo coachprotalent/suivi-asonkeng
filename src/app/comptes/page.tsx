@@ -1,14 +1,11 @@
 import Link from 'next/link'
 import { listerComptes } from '@/lib/donnees/comptes'
 import { exigerAdministrateur } from '@/lib/securite/garde'
-
-const LIBELLE_ROLE: Record<string, string> = {
-  administrateur: 'Administrateur',
-  moderateur: 'Modérateur',
-}
+import { FormulaireCompte } from './formulaire-compte'
+import { LigneCompte } from './ligne-compte'
 
 export default async function PageComptes() {
-  await exigerAdministrateur()
+  const profil = await exigerAdministrateur()
   const comptes = await listerComptes()
 
   return (
@@ -21,24 +18,11 @@ export default async function PageComptes() {
         {comptes.length} compte{comptes.length > 1 ? 's' : ''}
       </p>
 
+      <FormulaireCompte />
+
       <ul className="divide-y divide-neutral-200">
         {comptes.map((compte) => (
-          <li key={compte.id} className="py-4">
-            <div className="flex flex-wrap items-baseline justify-between gap-2">
-              <span className="font-medium">{compte.nomAffichage}</span>
-              <span className="text-sm text-neutral-500">{compte.identifiant}</span>
-            </div>
-            <p className="mt-1 text-sm text-neutral-600">
-              {compte.actif ? 'Actif' : 'Désactivé'}
-              {' · '}
-              {compte.roles.length > 0
-                ? compte.roles.map((role) => LIBELLE_ROLE[role] ?? role).join(', ')
-                : 'Utilisateur'}
-              {' · '}
-              {compte.membreNom ? `Fiche : ${compte.membreNom}` : 'Aucune fiche liée'}
-              {compte.estRacine ? ' · Compte racine' : ''}
-            </p>
-          </li>
+          <LigneCompte key={compte.id} compte={compte} estMoi={compte.id === profil.id} />
         ))}
       </ul>
     </main>
