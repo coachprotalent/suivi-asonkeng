@@ -38,6 +38,11 @@ export default async function PageTableauDeBord() {
             Gérer les statuts
           </Link>
         ) : null}
+        {estAdmin ? (
+          <Link href="/comptes" className="underline underline-offset-4">
+            Gérer les comptes
+          </Link>
+        ) : null}
       </div>
     </main>
   )
