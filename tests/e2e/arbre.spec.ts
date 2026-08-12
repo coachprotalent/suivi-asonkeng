@@ -186,7 +186,13 @@ test('la filiation est visible de tous, le lien de rattachement des seuls admini
 }) => {
   await seConnecter(page)
   await page.goto(`/membres/${idPetitEnfant}`)
-  await expect(page.getByText('Faiseur de disciple')).toBeVisible()
+  // Le NOM RÉEL du faiseur de disciple, dans la VALEUR et non l'intitulé : la ligne
+  // « Faiseur de disciple » est empilée inconditionnellement par la page, y compris
+  // quand la valeur est un tiret, donc `getByText('Faiseur de disciple')` ne peut
+  // jamais échouer tant que la page s'affiche — il ne prouve rien sur D20.
+  await expect(page.locator('dt:has-text("Faiseur de disciple") + dd')).toHaveText(
+    `Test ${PREFIXE}-enfant`,
+  )
   await expect(page.getByRole('link', { name: 'Rattacher' })).toHaveCount(1)
 
   // La racine doit voir ses disciples.
@@ -227,7 +233,12 @@ test('la filiation est visible de tous, le lien de rattachement des seuls admini
     await expect(page).toHaveURL(/\/tableau-de-bord/)
 
     await page.goto(`/membres/${idPetitEnfant}`)
-    await expect(page.getByText('Faiseur de disciple')).toBeVisible()
+    // Même correction que plus haut, sous la session ORDINAIRE cette fois : c'est
+    // exactement la garantie la plus sensible de D20 (la filiation reste visible
+    // d'un compte ordinaire) qui doit être prouvée ici, pas seulement l'intitulé.
+    await expect(page.locator('dt:has-text("Faiseur de disciple") + dd')).toHaveText(
+      `Test ${PREFIXE}-enfant`,
+    )
     await expect(page.getByRole('link', { name: 'Rattacher' })).toHaveCount(0)
   } finally {
     await supprimerCompte(identifiant)
