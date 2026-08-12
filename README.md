@@ -114,8 +114,10 @@ catalogue administrable (`/statuts`, lien depuis le tableau de bord) :
   `service_role` (`20260813170000_journal_sans_suppression.sql`) : le journal ne se réécrit pas et
   ne se supprime pas ligne à ligne — même par l'application elle-même — seule la suppression en
   cascade avec le membre reste possible.
-- **Motif facultatif au retrait** — un administrateur peut retirer un statut sans en préciser la
-  raison ; s'il en donne une, elle est journalisée avec le mouvement.
+- **Motif facultatif au retrait** — un compte ayant autorité sur le membre peut retirer un statut
+  sans en préciser la raison ; s'il en donne une, elle est journalisée avec le mouvement. Depuis
+  la phase 1c, l'attribution et le retrait ne sont plus réservés aux administrateurs : voir la
+  « Portée d'autorité » plus bas.
 - **Catalogue administrable** — un administrateur crée des groupes et des statuts, désactive un
   statut existant (il disparaît du formulaire d'attribution sans effacer les attributions déjà
   posées) et le réactive depuis le même écran.
