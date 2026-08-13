@@ -59,13 +59,25 @@ export async function genererToken(_etat: EtatToken, donnees: FormData): Promise
   return { erreur: null, codeGenere: code }
 }
 
-export async function revoquerToken(donnees: FormData): Promise<void> {
+export type ResultatRevocation = { erreur: string | null }
+
+/**
+ * RETOURNE son refus, elle ne le lève plus (correction post-Task-17,
+ * revue de production : un `throw` levé depuis une Server Action perd son
+ * message avant même d'atteindre le `catch` du composant client — React le
+ * remplace par un digest interne en production (« Minified React error #441…
+ * », react.dev/errors/441 : « The specific message is omitted in production
+ * builds »). Observé pour de vrai contre un build de production ; voir le
+ * commentaire de tête de `src/app/demandes/actions.ts` et
+ * `tests/e2e-prod/`.
+ */
+export async function revoquerToken(donnees: FormData): Promise<ResultatRevocation> {
   await exigerAdministrateur()
 
   const tokenId = String(donnees.get('tokenId') ?? '')
   if (tokenId.length === 0) {
     console.error('revoquerToken : identifiant de token manquant dans le formulaire')
-    throw new Error(MESSAGE_ECHEC_REVOCATION)
+    return { erreur: MESSAGE_ECHEC_REVOCATION }
   }
 
   const { data, error } = await clientAdmin()
@@ -78,14 +90,15 @@ export async function revoquerToken(donnees: FormData): Promise<void> {
 
   if (error) {
     console.error('revoquerToken : échec', { tokenId, code: error.code, message: error.message })
-    throw new Error(MESSAGE_ECHEC_REVOCATION)
+    return { erreur: MESSAGE_ECHEC_REVOCATION }
   }
   if (!data || data.length === 0) {
     // Une mise à jour qui ne touche aucune ligne ne renvoie AUCUNE erreur : token
     // déjà révoqué, déjà utilisé, ou inconnu — dans les trois cas, plus rien à
     // révoquer.
-    throw new Error(MESSAGE_TOKEN_DEJA_CLOS)
+    return { erreur: MESSAGE_TOKEN_DEJA_CLOS }
   }
 
   revalidatePath('/tokens')
+  return { erreur: null }
 }

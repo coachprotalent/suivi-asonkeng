@@ -4,7 +4,12 @@ import { useState, useTransition, type FormEvent } from 'react'
 import type { DemandeListe } from '@/lib/donnees/demandes'
 import type { MembreBref } from '@/lib/donnees/membres'
 import { SelecteurMembre } from '@/app/membres/selecteur-membre'
-import { rejeterDemande, validerDemandeNouvellePersonne, validerDemandeRattachement } from './actions'
+import {
+  rejeterDemande,
+  validerDemandeNouvellePersonne,
+  validerDemandeRattachement,
+  type ResultatDemande,
+} from './actions'
 import { FormulaireValidationSuivi } from './formulaire-validation-suivi'
 
 export function LigneDemandeAdmin({
@@ -18,13 +23,15 @@ export function LigneDemandeAdmin({
   const [erreur, setErreur] = useState<string | null>(null)
   const [enCours, demarrer] = useTransition()
 
-  function appeler(action: (donnees: FormData) => Promise<void>, donnees: FormData) {
+  // Les trois actions RETOURNENT leur refus, elles ne le lèvent plus
+  // (correction post-Task-17 : un `throw` perd son message en production —
+  // voir le commentaire de tête de `src/app/demandes/actions.ts`).
+  function appeler(action: (donnees: FormData) => Promise<ResultatDemande>, donnees: FormData) {
     setErreur(null)
     demarrer(async () => {
-      try {
-        await action(donnees)
-      } catch (e) {
-        setErreur(e instanceof Error ? e.message : String(e))
+      const { erreur } = await action(donnees)
+      if (erreur) {
+        setErreur(erreur)
       }
     })
   }
@@ -32,9 +39,6 @@ export function LigneDemandeAdmin({
   function validerNouvellePersonneAutoInscription() {
     const donnees = new FormData()
     donnees.set('demandeId', demande.id)
-    donnees.set('origine', demande.origine)
-    donnees.set('membreId', demande.membreId ?? '')
-    donnees.set('demandeurProfilId', demande.demandeurProfilId)
     appeler(validerDemandeNouvellePersonne, donnees)
   }
 
@@ -99,7 +103,6 @@ export function LigneDemandeAdmin({
         <FormulaireValidationSuivi
           demandeId={demande.id}
           membreId={demande.membreId ?? ''}
-          demandeurProfilId={demande.demandeurProfilId}
           demandeurMembreId={demande.demandeurMembreId}
           dirigeantInitial={dirigeantInitial}
         />

@@ -8,7 +8,6 @@ import { validerDemandeNouvellePersonne } from './actions'
 type Props = {
   demandeId: string
   membreId: string
-  demandeurProfilId: string
   demandeurMembreId: string | null
   dirigeantInitial: MembreBref | null
 }
@@ -16,7 +15,6 @@ type Props = {
 export function FormulaireValidationSuivi({
   demandeId,
   membreId,
-  demandeurProfilId,
   demandeurMembreId,
   dirigeantInitial,
 }: Props) {
@@ -38,10 +36,12 @@ export function FormulaireValidationSuivi({
     const donnees = new FormData(evenement.currentTarget)
     setErreur(null)
     demarrer(async () => {
-      try {
-        await validerDemandeNouvellePersonne(donnees)
-      } catch (e) {
-        setErreur(e instanceof Error ? e.message : String(e))
+      // `validerDemandeNouvellePersonne` RETOURNE son refus, elle ne le lève
+      // plus (correction post-Task-17 : un `throw` perd son message en
+      // production, voir le commentaire de tête de `src/app/demandes/actions.ts`).
+      const { erreur } = await validerDemandeNouvellePersonne(donnees)
+      if (erreur) {
+        setErreur(erreur)
       }
     })
   }
@@ -49,15 +49,12 @@ export function FormulaireValidationSuivi({
   return (
     <form onSubmit={soumettre} className="mt-3 flex flex-col gap-3 rounded-md border border-neutral-200 p-3">
       <input type="hidden" name="demandeId" value={demandeId} />
-      <input type="hidden" name="origine" value="demande_suivi" />
-      <input type="hidden" name="membreId" value={membreId} />
-      <input type="hidden" name="demandeurProfilId" value={demandeurProfilId} />
       <input type="hidden" name="demandeurMembreId" value={demandeurMembreId ?? ''} />
       <input type="hidden" name="dirigeantForce" value={dirigeantForce ? '1' : '0'} />
       <SelecteurMembre
         nom="dirigeantId"
         label="Dirigeant proposé"
-        aide="Calculé à partir du demandeur, posé comme faiseur de disciple par défaut (non modifiable ici). Corrigeable avant validation."
+        aide="Dirigeant proposé à partir du demandeur : corrigeable avant validation. Le faiseur de disciple, lui, est fixé au demandeur et n'est jamais modifiable ici."
         valeur={dirigeant}
         surChoix={choisirDirigeant}
         exclureId={membreId}

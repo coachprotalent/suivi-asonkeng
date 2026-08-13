@@ -16,10 +16,13 @@ export function LigneToken({ token }: { token: TokenListe }) {
   const [enCours, demarrer] = useTransition()
   const revocable = !token.revoqueLe && !token.utiliseLe
 
-  // `revoquerToken` LÈVE plutôt que de renvoyer un état (contrat de la Task 15) :
-  // la lier à `<form action={...}>` directement ferait remonter l'exception
-  // jusqu'à `src/app/error.tsx`, qui affiche un texte STATIQUE — même piège que
-  // `lierFiche` en 1c. On l'appelle donc depuis un `useTransition` avec try/catch.
+  // `revoquerToken` RETOURNE son refus, elle ne le lève plus (correction
+  // post-Task-17 : un `throw` levé depuis une Server Action perd son message
+  // en production — voir le commentaire de tête de `src/app/tokens/actions.ts`).
+  // Toujours appelée depuis un `useTransition` plutôt que liée à
+  // `<form action={...}>` : la lier directement ferait passer par
+  // `src/app/error.tsx`, qui affiche un texte STATIQUE, sur toute panne
+  // technique imprévue qui, elle, peut encore lever.
   function soumettre() {
     if (!window.confirm(`Révoquer ce token ${token.mode === 'nominatif' ? `(${token.membreNom ?? 'fiche inconnue'})` : 'générique'} ?`)) {
       return
@@ -28,10 +31,9 @@ export function LigneToken({ token }: { token: TokenListe }) {
     donnees.set('tokenId', token.id)
     setErreur(null)
     demarrer(async () => {
-      try {
-        await revoquerToken(donnees)
-      } catch (erreur) {
-        setErreur(erreur instanceof Error ? erreur.message : String(erreur))
+      const { erreur } = await revoquerToken(donnees)
+      if (erreur) {
+        setErreur(erreur)
       }
     })
   }

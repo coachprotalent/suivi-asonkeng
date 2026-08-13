@@ -21,10 +21,12 @@ export function LigneDemandePersonnelle({ demande }: { demande: DemandeListe }) 
     donnees.set('demandeId', demande.id)
     setErreur(null)
     demarrer(async () => {
-      try {
-        await annulerDemandeSuivi(donnees)
-      } catch (e) {
-        setErreur(e instanceof Error ? e.message : String(e))
+      // `annulerDemandeSuivi` RETOURNE son refus, elle ne le lève plus
+      // (correction post-Task-17 : un `throw` perd son message en production,
+      // voir le commentaire de tête de `src/app/demandes/actions.ts`).
+      const { erreur } = await annulerDemandeSuivi(donnees)
+      if (erreur) {
+        setErreur(erreur)
       }
     })
   }

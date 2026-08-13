@@ -11,6 +11,7 @@
     "test:watch": "vitest",
     "test:rls": "dotenv -e .env.local -- vitest run --config vitest.rls.config.ts",
     "test:e2e": "dotenv -e .env.local -- playwright test",
+    "test:e2e:prod": "dotenv -e .env.local -- playwright test --config playwright.prod.config.ts",
     "amorcer:racine": "tsx --env-file=.env.local scripts/creer-compte-racine.ts"
   },
   "dependencies": {

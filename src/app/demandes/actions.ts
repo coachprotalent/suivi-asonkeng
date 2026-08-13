@@ -22,6 +22,34 @@ const DETAIL_RATTACHEMENT_VERS_FICHE_JETABLE = 'rattachement_vers_fiche_jetable'
 const DETAIL_MEMBRE_DEJA_RATTACHE = 'membre_deja_rattache'
 
 /**
+ * Un refus MÉTIER est RETOURNÉ, jamais LEVÉ (correction post-Task-17, constat
+ * établi empiriquement — voir le rapport). En production, une exception levée
+ * depuis une Server Action perd son message avant même d'atteindre le `catch`
+ * du composant client : React la remplace par un digest interne (« Minified
+ * React error #441… »), quel que soit le texte écrit ici. Ce n'est PAS un
+ * texte générique de l'application qui se substitue — c'est React lui-même,
+ * documenté sur react.dev/errors/441 : « The specific message is omitted in
+ * production builds ». Observé pour de vrai : `npm run build` + `next start`
+ * sur un port dédié, un refus `membre_deja_rattache` provoquant un clic réel,
+ * affichait littéralement ce texte au lieu de « Cette fiche est déjà
+ * rattachée à un autre compte. ». Le même mécanisme touchait déjà
+ * `MESSAGE_ECHEC_CONNEXION` (`seConnecter`, non levé — voir son commentaire) ;
+ * il n'avait simplement jamais été vérifié contre un build de production pour
+ * les actions de cet écran. Preuve rejouable : `tests/e2e-prod/`.
+ *
+ * `redirect()` reste une exception à part : elle DOIT continuer de traverser
+ * sans être attrapée ni convertie — Next.js la reconnaît spécifiquement côté
+ * serveur et ne la fait jamais passer par le mécanisme de digest décrit
+ * ci-dessus. Aucune des quatre fonctions de ce fichier n'appelle `redirect()`.
+ *
+ * Une vraie panne technique (readable uniquement dans les logs serveur, sans
+ * texte utile pour l'utilisateur) peut continuer de lever : c'est le cas des
+ * erreurs Supabase inattendues, déjà traduites ici en un message MESSAGE_*
+ * avant d'être RETOURNÉES — donc aucune ne lève plus dans ce fichier.
+ */
+export type ResultatDemande = { erreur: string | null }
+
+/**
  * Marque lues (D41) les notifications `nouvelle_demande` déjà envoyées aux
  * administrateurs pour CETTE demande, par symétrie avec les fonctions
  * SECURITY DEFINER de la Task 10 (`annuler_demande_membre`,
@@ -54,13 +82,13 @@ async function marquerNouvelleDemandeLue(admin: ReturnType<typeof clientAdmin>, 
  * d'atomicité. NE JAMAIS scinder cet appel en deux écritures PostgREST séparées
  * — ce serait rouvrir silencieusement l'atomicité que la fonction garantit.
  */
-export async function annulerDemandeSuivi(donnees: FormData): Promise<void> {
+export async function annulerDemandeSuivi(donnees: FormData): Promise<ResultatDemande> {
   const profil = await exigerProfilActif()
 
   const demandeId = String(donnees.get('demandeId') ?? '')
   if (demandeId.length === 0) {
     console.error('annulerDemandeSuivi : identifiant de demande manquant dans le formulaire')
-    throw new Error(MESSAGE_ECHEC_ANNULATION)
+    return { erreur: MESSAGE_ECHEC_ANNULATION }
   }
 
   const { error } = await clientAdmin().rpc('annuler_demande_membre', {
@@ -77,20 +105,21 @@ export async function annulerDemandeSuivi(donnees: FormData): Promise<void> {
       message: error.message,
     })
     if (error.details === DETAIL_DEMANDE_NON_ANNULABLE) {
-      throw new Error(MESSAGE_ECHEC_ANNULATION)
+      return { erreur: MESSAGE_ECHEC_ANNULATION }
     }
-    throw new Error(MESSAGE_ECHEC_ANNULATION)
+    return { erreur: MESSAGE_ECHEC_ANNULATION }
   }
 
   revalidatePath('/demandes')
+  return { erreur: null }
 }
 
 /**
  * Valide une demande comme NOUVELLE PERSONNE (design 2b §7.3) — les deux origines
- * partagent cette action, avec un comportement différent selon `origine`, lue
- * dans le formulaire :
- * - auto_inscription : fiche -> actif, profils.membre_id de demandeurProfilId
- *   posé sur cette fiche. Aucune écriture d'arbre.
+ * partagent cette action, avec un comportement différent selon l'`origine` de la
+ * demande, RELUE depuis `demandes_membre` (voir plus bas — I2, revue post-Task-17) :
+ * - auto_inscription : fiche -> actif, profils.membre_id du demandeur posé sur
+ *   cette fiche. Aucune écriture d'arbre.
  * - demande_suivi : fiche -> actif, faiseur_de_disciple_id = la fiche du
  *   demandeur (demandeurMembreId, PEUT être NULL si le demandeur n'a pas de
  *   fiche liée — cas du compte racine, registre 1c piège n°3 : traité en
@@ -98,30 +127,52 @@ export async function annulerDemandeSuivi(donnees: FormData): Promise<void> {
  *
  * NON ATOMIQUE À TRAVERS SES TROIS ÉCRITURES (membres, éventuellement profils,
  * demandes_membre) : voir la Task 17 du plan pour la justification de ce choix.
+ *
+ * I2 (revue post-Task-17) : la version initiale faisait confiance à `membreId`
+ * et `demandeurProfilId`, soumis par le FORMULAIRE, sans vérifier qu'ils
+ * désignaient bien la demande visée par `demandeId` — un formulaire falsifié
+ * aurait pu, avec un `demandeId` réel, faire valider une fiche et notifier un
+ * compte appartenant à une AUTRE demande. `origine`, `membreId` et
+ * `demandeurProfilId` sont désormais RELUS depuis `demandes_membre`, jamais pris
+ * du formulaire. `etat = 'en_attente'` est exigé à la lecture ET à l'écriture
+ * finale (comme `rejeterDemande` et `valider_demande_rattachement` le font déjà) :
+ * une demande annulée ou rejetée ne peut plus être revalidée.
  */
-export async function validerDemandeNouvellePersonne(donnees: FormData): Promise<void> {
+export async function validerDemandeNouvellePersonne(donnees: FormData): Promise<ResultatDemande> {
   const adminProfil = await exigerAdministrateur()
 
   const demandeId = String(donnees.get('demandeId') ?? '')
-  const origine = String(donnees.get('origine') ?? '')
-  const membreId = String(donnees.get('membreId') ?? '')
-  const demandeurProfilId = String(donnees.get('demandeurProfilId') ?? '')
-  if (
-    demandeId.length === 0 ||
-    membreId.length === 0 ||
-    demandeurProfilId.length === 0 ||
-    (origine !== 'auto_inscription' && origine !== 'demande_suivi')
-  ) {
-    console.error('validerDemandeNouvellePersonne : champs manquants ou origine invalide', {
-      demandeId,
-      origine,
-      membreId,
-      demandeurProfilId,
-    })
-    throw new Error(MESSAGE_ECHEC_VALIDATION)
+  if (demandeId.length === 0) {
+    console.error('validerDemandeNouvellePersonne : identifiant de demande manquant dans le formulaire')
+    return { erreur: MESSAGE_ECHEC_VALIDATION }
   }
 
   const admin = clientAdmin()
+
+  const { data: demandeLue, error: erreurLecture } = await admin
+    .from('demandes_membre')
+    .select('id, origine, membre_id, demandeur_profil_id')
+    .eq('id', demandeId)
+    .eq('etat', 'en_attente')
+    .maybeSingle()
+
+  if (
+    erreurLecture ||
+    !demandeLue ||
+    !demandeLue.membre_id ||
+    (demandeLue.origine !== 'auto_inscription' && demandeLue.origine !== 'demande_suivi')
+  ) {
+    console.error('validerDemandeNouvellePersonne : demande introuvable, déjà traitée, ou sans fiche', {
+      demandeId,
+      code: erreurLecture?.code,
+      message: erreurLecture?.message,
+    })
+    return { erreur: MESSAGE_ECHEC_VALIDATION }
+  }
+
+  const origine = demandeLue.origine
+  const membreId = demandeLue.membre_id
+  const demandeurProfilId = demandeLue.demandeur_profil_id
 
   const colonnesMembre: Record<string, unknown> = { etat: 'actif' }
   if (origine === 'demande_suivi') {
@@ -142,7 +193,7 @@ export async function validerDemandeNouvellePersonne(donnees: FormData): Promise
       code: erreurFiche?.code,
       message: erreurFiche?.message,
     })
-    throw new Error(MESSAGE_ECHEC_VALIDATION)
+    return { erreur: MESSAGE_ECHEC_VALIDATION }
   }
 
   if (origine === 'auto_inscription') {
@@ -153,7 +204,7 @@ export async function validerDemandeNouvellePersonne(donnees: FormData): Promise
         membreId,
         message: erreurProfil.message,
       })
-      throw new Error(MESSAGE_ECHEC_VALIDATION)
+      return { erreur: MESSAGE_ECHEC_VALIDATION }
     }
   }
 
@@ -161,6 +212,7 @@ export async function validerDemandeNouvellePersonne(donnees: FormData): Promise
     .from('demandes_membre')
     .update({ etat: 'validee', traite_par: adminProfil.id, traite_le: new Date().toISOString() })
     .eq('id', demandeId)
+    .eq('etat', 'en_attente')
     .select('id')
   if (erreurDemande || !demandeMaj || demandeMaj.length === 0) {
     console.error('validerDemandeNouvellePersonne : échec de la mise à jour de la demande', {
@@ -168,7 +220,7 @@ export async function validerDemandeNouvellePersonne(donnees: FormData): Promise
       code: erreurDemande?.code,
       message: erreurDemande?.message,
     })
-    throw new Error(MESSAGE_ECHEC_VALIDATION)
+    return { erreur: MESSAGE_ECHEC_VALIDATION }
   }
 
   // `lien` reste réservé à la NAVIGATION (`/demandes`, la seule route qui existe
@@ -193,6 +245,7 @@ export async function validerDemandeNouvellePersonne(donnees: FormData): Promise
   await marquerNouvelleDemandeLue(admin, demandeId)
 
   revalidatePath('/demandes')
+  return { erreur: null }
 }
 
 /**
@@ -201,14 +254,14 @@ export async function validerDemandeNouvellePersonne(donnees: FormData): Promise
  * l'ordre des écritures et la raison d'une fonction dédiée plutôt que d'écritures
  * séquentielles.
  */
-export async function validerDemandeRattachement(donnees: FormData): Promise<void> {
+export async function validerDemandeRattachement(donnees: FormData): Promise<ResultatDemande> {
   const adminProfil = await exigerAdministrateur()
 
   const demandeId = String(donnees.get('demandeId') ?? '')
   const membreExistantId = String(donnees.get('membreExistantId') ?? '')
   if (demandeId.length === 0 || membreExistantId.length === 0) {
     console.error('validerDemandeRattachement : champs manquants', { demandeId, membreExistantId })
-    throw new Error(MESSAGE_ECHEC_RATTACHEMENT)
+    return { erreur: MESSAGE_ECHEC_RATTACHEMENT }
   }
 
   const { error } = await clientAdmin().rpc('valider_demande_rattachement', {
@@ -233,27 +286,28 @@ export async function validerDemandeRattachement(donnees: FormData): Promise<voi
     // Task 17). La discrimination porte UNIQUEMENT sur `error.details`, jamais
     // sur le texte français du message Postgres.
     if (error.details === DETAIL_MEMBRE_INCONNU) {
-      throw new Error(MESSAGE_MEMBRE_INCONNU)
+      return { erreur: MESSAGE_MEMBRE_INCONNU }
     }
     if (error.details === DETAIL_RATTACHEMENT_VERS_FICHE_JETABLE) {
-      throw new Error(MESSAGE_RATTACHEMENT_VERS_FICHE_JETABLE)
+      return { erreur: MESSAGE_RATTACHEMENT_VERS_FICHE_JETABLE }
     }
     if (error.details === DETAIL_MEMBRE_DEJA_RATTACHE) {
-      throw new Error(MESSAGE_MEMBRE_DEJA_RATTACHE)
+      return { erreur: MESSAGE_MEMBRE_DEJA_RATTACHE }
     }
     if (error.details === DETAIL_DEMANDE_NON_VALIDABLE) {
-      throw new Error(MESSAGE_DEMANDE_NON_VALIDABLE)
+      return { erreur: MESSAGE_DEMANDE_NON_VALIDABLE }
     }
     // Marqueur inconnu ou absent (panne technique) : seul cas qui retombe sur le
     // message générique.
-    throw new Error(MESSAGE_ECHEC_RATTACHEMENT)
+    return { erreur: MESSAGE_ECHEC_RATTACHEMENT }
   }
 
   revalidatePath('/demandes')
+  return { erreur: null }
 }
 
 /** Rejette une demande, motif obligatoire, demandeur notifié (design 2b §7.3). */
-export async function rejeterDemande(donnees: FormData): Promise<void> {
+export async function rejeterDemande(donnees: FormData): Promise<ResultatDemande> {
   const adminProfil = await exigerAdministrateur()
 
   const demandeId = String(donnees.get('demandeId') ?? '')
@@ -261,10 +315,10 @@ export async function rejeterDemande(donnees: FormData): Promise<void> {
   const motif = String(donnees.get('motif') ?? '').trim()
   if (demandeId.length === 0 || demandeurProfilId.length === 0) {
     console.error('rejeterDemande : champs manquants', { demandeId, demandeurProfilId })
-    throw new Error(MESSAGE_ECHEC_REJET)
+    return { erreur: MESSAGE_ECHEC_REJET }
   }
   if (motif.length === 0) {
-    throw new Error(MESSAGE_MOTIF_OBLIGATOIRE)
+    return { erreur: MESSAGE_MOTIF_OBLIGATOIRE }
   }
 
   const admin = clientAdmin()
@@ -277,10 +331,10 @@ export async function rejeterDemande(donnees: FormData): Promise<void> {
 
   if (error) {
     console.error('rejeterDemande : échec', { demandeId, code: error.code, message: error.message })
-    throw new Error(MESSAGE_ECHEC_REJET)
+    return { erreur: MESSAGE_ECHEC_REJET }
   }
   if (!data || data.length === 0) {
-    throw new Error(MESSAGE_ECHEC_REJET)
+    return { erreur: MESSAGE_ECHEC_REJET }
   }
 
   // Même contrat que validerDemandeNouvellePersonne : lien = navigation seule,
@@ -300,4 +354,5 @@ export async function rejeterDemande(donnees: FormData): Promise<void> {
   await marquerNouvelleDemandeLue(admin, demandeId)
 
   revalidatePath('/demandes')
+  return { erreur: null }
 }
