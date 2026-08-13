@@ -21,6 +21,9 @@ let idDemandeurA: string
 let idDemandeurB: string
 let idMembreA: string
 let idDemandeA: string
+let idMembreArchive: string
+let idMembreOrphelin: string
+let idMembreActifZZ: string
 let clientAdminAuth: SupabaseClient
 let clientDemandeurA: SupabaseClient
 let clientDemandeurB: SupabaseClient
@@ -94,6 +97,55 @@ beforeAll(async () => {
   if (erreurDemande || !demande) throw new Error(`création de la demande impossible : ${erreurDemande?.message}`)
   idDemandeA = demande.id
 
+  // Fiche ARCHIVÉE, mais référencée par une demande de demandeurA (I3a) : sert à
+  // prouver que la conjonction etat = 'en_attente' de la politique n'est pas
+  // superflue — sans elle, un demandeur lirait sa fiche dans n'importe quel état.
+  const { data: membreArchive, error: erreurMembreArchive } = await admin
+    .from('membres')
+    .insert({ nom: `${PREFIXE_MEMBRE}-archive`, prenom: 'Test', etat: 'archive' })
+    .select('id')
+    .single()
+  if (erreurMembreArchive || !membreArchive) {
+    throw new Error(`création du membre archivé impossible : ${erreurMembreArchive?.message}`)
+  }
+  idMembreArchive = membreArchive.id
+
+  const { error: erreurDemandeArchive } = await admin.from('demandes_membre').insert({
+    origine: 'demande_suivi',
+    demandeur_profil_id: idDemandeurA,
+    membre_id: idMembreArchive,
+    etat: 'en_attente',
+  })
+  if (erreurDemandeArchive) {
+    throw new Error(`création de la demande sur la fiche archivée impossible : ${erreurDemandeArchive.message}`)
+  }
+
+  // Fiche en_attente SANS AUCUNE demande (I3b) : sert à prouver que la corrélation
+  // d.membre_id = p_membre_id, dans prive.est_demandeur_de, n'est pas superflue —
+  // sans elle, avoir NE SERAIT-CE QU'UNE demande (sur idMembreA) suffirait à lire
+  // n'importe quelle fiche en_attente, celle-ci comprise.
+  const { data: membreOrphelin, error: erreurMembreOrphelin } = await admin
+    .from('membres')
+    .insert({ nom: `${PREFIXE_MEMBRE}-orphelin`, prenom: 'Test', etat: 'en_attente' })
+    .select('id')
+    .single()
+  if (erreurMembreOrphelin || !membreOrphelin) {
+    throw new Error(`création du membre orphelin impossible : ${erreurMembreOrphelin?.message}`)
+  }
+  idMembreOrphelin = membreOrphelin.id
+
+  // Fiche ACTIVE propre à cette suite (M3) : remplace une lecture arbitraire dans
+  // la base partagée dev/prod pour les contrôles positifs sur l'annuaire actif.
+  const { data: membreActifZZ, error: erreurMembreActifZZ } = await admin
+    .from('membres')
+    .insert({ nom: `${PREFIXE_MEMBRE}-actif`, prenom: 'Test', etat: 'actif' })
+    .select('id')
+    .single()
+  if (erreurMembreActifZZ || !membreActifZZ) {
+    throw new Error(`création du membre actif impossible : ${erreurMembreActifZZ?.message}`)
+  }
+  idMembreActifZZ = membreActifZZ.id
+
   clientAdminAuth = await connecter(IDENT_ADMIN)
   clientDemandeurA = await connecter(IDENT_DEMANDEUR_A)
   clientDemandeurB = await connecter(IDENT_DEMANDEUR_B)
@@ -119,7 +171,7 @@ describe('politique demandes_membre_lecture', () => {
     expect(data).toHaveLength(0)
   })
 
-  it('laisse un administrateur lire toutes les demandes', async () => {
+  it("laisse un administrateur lire une demande qu'il n'a pas soumise", async () => {
     const { data, error } = await clientAdminAuth.from('demandes_membre').select('id').eq('id', idDemandeA)
     expect(error).toBeNull()
     expect(data).toHaveLength(1)
@@ -152,25 +204,51 @@ describe('amendement de membres_lecture pour le demandeur (design 2b §5.5)', ()
     expect(data).toHaveLength(0)
   })
 
+  // CONTRÔLE POSITIF (M4) : sans lui, les zéro lignes ci-dessus pourraient venir
+  // tout autant d'un compte B cassé ou déconnecté que de la politique elle-même.
+  // On prouve que la session de B fonctionne bel et bien, sur l'annuaire actif.
+  it("contrôle positif : la session de ce compte B lit par ailleurs l'annuaire actif", async () => {
+    const { data, error } = await clientDemandeurB.from('membres').select('id').eq('id', idMembreActifZZ)
+    expect(error).toBeNull()
+    expect(data).toHaveLength(1)
+  })
+
   it('laisse toujours un administrateur lire la fiche en_attente', async () => {
     const { data, error } = await clientAdminAuth.from('membres').select('id').eq('id', idMembreA)
     expect(error).toBeNull()
     expect(data).toHaveLength(1)
   })
 
-  // CONTRÔLE POSITIF : sans lui, les trois assertions ci-dessus pourraient passer
-  // sur une politique qui refuserait TOUJOURS l'accès à une fiche en_attente,
-  // masquant un défaut inverse. On prouve que le demandeur lit AUSSI l'annuaire
-  // actif ordinaire, par ailleurs — la leçon de la 1b et de la 1c.
+  // I3(a) : éprouve la conjonction etat = 'en_attente' de la politique, séparément
+  // de prive.est_demandeur_de. Sans elle, un demandeur lirait sa fiche dans
+  // n'importe quel état — y compris archivée, alors que l'archivage doit rester
+  // réservé à l'administrateur quel que soit le demandeur d'origine.
+  it("interdit au demandeur de lire une fiche ARCHIVÉE que sa propre demande référence", async () => {
+    const { data, error } = await clientDemandeurA.from('membres').select('id').eq('id', idMembreArchive)
+    expect(error).toBeNull()
+    expect(data).toHaveLength(0)
+  })
+
+  // I3(b) : éprouve la corrélation d.membre_id = p_membre_id dans le corps de
+  // prive.est_demandeur_de, séparément de la conjonction etat = 'en_attente' de la
+  // politique. demandeurA A une demande (sur idMembreA) mais PAS sur idMembreOrphelin :
+  // sans cette corrélation, avoir ne serait-ce qu'une demande suffirait à lire
+  // n'importe quelle fiche en_attente.
+  it("interdit au demandeur de lire une fiche en_attente qu'il n'a PAS proposée, même s'il a une demande par ailleurs", async () => {
+    const { data, error } = await clientDemandeurA.from('membres').select('id').eq('id', idMembreOrphelin)
+    expect(error).toBeNull()
+    expect(data).toHaveLength(0)
+  })
+
+  // CONTRÔLE POSITIF : ne prouve PAS qu'une politique qui refuserait TOUJOURS
+  // l'accès à en_attente serait détectée — les tests ci-dessus, qui attendent
+  // toHaveLength(1) pour le demandeur et pour l'administrateur, tomberaient déjà
+  // les premiers dans ce cas. Ce contrôle prouve autre chose : que le drop+create
+  // de cette migration n'a pas RÉTRÉCI la branche etat = 'actif' préexistante — le
+  // demandeur lit toujours l'annuaire actif ordinaire, par ailleurs. Fiche propre à
+  // cette suite (M3), pas une lecture arbitraire de la base partagée dev/prod.
   it("le demandeur continue de lire l'annuaire actif ordinaire par ailleurs", async () => {
-    const { data: unMembreActif } = await admin
-      .from('membres')
-      .select('id')
-      .eq('etat', 'actif')
-      .limit(1)
-      .maybeSingle()
-    if (!unMembreActif) throw new Error('précondition : aucun membre actif en base pour ce contrôle positif')
-    const { data, error } = await clientDemandeurA.from('membres').select('id').eq('id', unMembreActif.id)
+    const { data, error } = await clientDemandeurA.from('membres').select('id').eq('id', idMembreActifZZ)
     expect(error).toBeNull()
     expect(data).toHaveLength(1)
   })
