@@ -106,6 +106,39 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  // I5 (constat de revue) : tentatives_token_inscription n'a AUCUNE purge
+  // automatique (migration 20260815130000, design 2b §5.4/§13 : « croissance non
+  // bornée, assumée »), et ce projet n'a qu'UNE seule base, partagée dev/prod,
+  // JAMAIS réinitialisée (contrainte projet #1). Sans cette purge, chaque
+  // lancement de cette suite dépose ~11 lignes définitives sur la plage
+  // 198.51.100.2-.12 (adresseFraiche()) et .200 (ADRESSE_PLAFOND, qui se purge
+  // déjà elle-même, mais en défense en profondeur seulement — un lancement
+  // interrompu avant son propre nettoyage laisserait des résidus). À raison de
+  // dix lancements en quinze minutes, 198.51.100.2 dépasserait le plafond de 10
+  // tentatives, et le tout premier appel d'un futur lancement recevrait
+  // 'trop_de_tentatives' au lieu du statut attendu.
+  //
+  // Cette plage est TEST-NET-2 (RFC 5737), réservée à la documentation : aucune
+  // adresse réelle ne peut s'y trouver, la purge est donc sans risque pour des
+  // données légitimes. `.like()` échoue sur une colonne inet via PostgREST
+  // (`operator does not exist: inet ~~ unknown`, vérifié empiriquement) : la
+  // plage est donc bornée par comparaison d'ordre, qu'inet supporte nativement.
+  await admin
+    .from('tentatives_token_inscription')
+    .delete()
+    .gte('adresse', '198.51.100.0')
+    .lte('adresse', '198.51.100.255')
+
+  // Nettoyage vérifié PAR COMPTAGE (contrainte projet #8), pas seulement par
+  // l'absence d'erreur sur le DELETE ci-dessus.
+  const { count: tentativesRestantes, error: erreurComptage } = await admin
+    .from('tentatives_token_inscription')
+    .select('id', { count: 'exact', head: true })
+    .gte('adresse', '198.51.100.0')
+    .lte('adresse', '198.51.100.255')
+  expect(erreurComptage).toBeNull()
+  expect(tentativesRestantes).toBe(0)
+
   // Purge des tokens de test créés par le bloc consommer_token_inscription
   // (préfixe test-consommation-), distincts du idToken créé ci-dessus.
   await admin.from('tokens_inscription').delete().like('code_hash', 'test-consommation-%')
@@ -222,8 +255,8 @@ describe('consommer_token_inscription', () => {
     return { id: data.id as string, codeHash: code }
   }
 
-  it('consomme un token valide : statut ok, mode et membre_id rendus', async () => {
-    const { codeHash } = await creerTokenValide('nominatif', idMembre)
+  it('consomme un token valide : statut ok, token_id, mode et membre_id rendus', async () => {
+    const { id, codeHash } = await creerTokenValide('nominatif', idMembre)
     const { data, error } = await admin.rpc('consommer_token_inscription', {
       p_code_hash: codeHash,
       p_adresse: adresseFraiche(),
@@ -231,26 +264,43 @@ describe('consommer_token_inscription', () => {
     expect(error).toBeNull()
     expect(data).toHaveLength(1)
     expect(data![0].statut).toBe('ok')
+    // I1 (constat de revue) : sans cette assertion, une fonction qui rendrait
+    // systématiquement `null::uuid` pour token_id (cf. migration l. 45/70) passerait
+    // les dix tests de ce fichier sans qu'aucun ne s'en aperçoive — token_id est
+    // pourtant ce dont la Task 14 a besoin pour poser utilise_par_profil_id ET pour
+    // appeler relacher_token_inscription en cas d'échec de création du compte.
+    expect(data![0].token_id).toBe(id)
     expect(data![0].mode).toBe('nominatif')
     expect(data![0].membre_id).toBe(idMembre)
 
     // État final en base, pas seulement l'absence d'erreur : utilise_le doit être
-    // réellement posé.
-    const { data: relu } = await admin
+    // réellement posé. `relu` vérifié non nul AVANT d'inspecter son contenu : sans
+    // ce garde, une relecture qui échouerait silencieusement (relu === undefined)
+    // rendrait `relu?.utilise_le` égal à `undefined`, distinct de `null`, et
+    // l'assertion `.not.toBeNull()` passerait quand même — un faux vert.
+    const { data: relu, error: erreurLecture } = await admin
       .from('tokens_inscription')
       .select('utilise_le')
       .eq('code_hash', codeHash)
       .single()
-    expect(relu?.utilise_le).not.toBeNull()
+    expect(erreurLecture).toBeNull()
+    expect(relu).not.toBeNull()
+    expect(relu!.utilise_le).not.toBeNull()
   })
 
-  // PREUVE PAR VERROU (D31) : le MÊME code, consommé deux fois de suite dans le
-  // même test. La seconde doit rendre le statut invalide — preuve d'une écriture
-  // réelle et unique en base (utilise_le posé une fois), pas seulement d'un refus.
+  // DOUBLE CONSOMMATION SÉQUENTIELLE (PAS le verrou lui-même — constat de revue
+  // I4). Le MÊME code, consommé deux fois DE SUITE : deux transactions séparées,
+  // l'une COMMIT avant que l'autre ne démarre. Ce test établit que la consommation
+  // est un événement unique, RÉELLEMENT ÉCRIT en base (mode/token_id rendus,
+  // utilise_le posé), pas seulement qu'un second appel est refusé — mais il
+  // resterait vert même SANS `select ... for update` : la première transaction a
+  // déjà validé sa mise à jour avant que la seconde ne lise la ligne, donc rien
+  // n'exige de verrou ici. La preuve du VERROU proprement dit — deux transactions
+  // qui se CHEVAUCHENT — est le test suivant, avec `Promise.all`.
   // NOTER que la fonction NE LÈVE PLUS pour ce refus (voir l'en-tête de la Task 8
   // du plan) : `error` reste `null`, c'est `data[0].statut` qui porte le résultat.
-  it('la seconde consommation du même code rend le statut invalide, SANS erreur RPC', async () => {
-    const { codeHash } = await creerTokenValide('generique', null)
+  it('la seconde consommation SÉQUENTIELLE du même code rend le statut invalide, SANS erreur RPC', async () => {
+    const { id, codeHash } = await creerTokenValide('generique', null)
 
     const premiere = await admin.rpc('consommer_token_inscription', {
       p_code_hash: codeHash,
@@ -258,6 +308,9 @@ describe('consommer_token_inscription', () => {
     })
     expect(premiere.error).toBeNull()
     expect(premiere.data![0].statut).toBe('ok')
+    expect(premiere.data![0].token_id).toBe(id)
+    expect(premiere.data![0].mode).toBe('generique')
+    expect(premiere.data![0].membre_id).toBeNull()
 
     const seconde = await admin.rpc('consommer_token_inscription', {
       p_code_hash: codeHash,
@@ -265,6 +318,33 @@ describe('consommer_token_inscription', () => {
     })
     expect(seconde.error).toBeNull()
     expect(seconde.data![0].statut).toBe('invalide')
+  })
+
+  // PREUVE PAR VERROU (D31), CETTE FOIS RÉELLEMENT : deux appels RPC CONCURRENTS
+  // (Promise.all, deux transactions qui SE CHEVAUCHENT dans le temps) sur le MÊME
+  // code. Sans `select ... for update` à l'étape 3, les deux transactions
+  // pourraient lire toutes deux utilise_le IS NULL avant que l'une n'ait posé sa
+  // mise à jour, et rendre toutes deux 'ok' — double consommation d'un token qui
+  // serait nominatif en production, donc deux comptes créés sur la même fiche
+  // (D31). Avec le verrou, l'une des deux transactions attend que l'autre COMMIT
+  // avant de lire la ligne, la voit alors déjà utilise_le renseigné, et rend
+  // 'invalide' : exactement UN 'ok' et UN 'invalide' doivent sortir des deux appels.
+  it('deux consommations CONCURRENTES du même code : exactement un ok et un invalide (verrou D31)', async () => {
+    const { id, codeHash } = await creerTokenValide('generique', null)
+
+    const [premier, second] = await Promise.all([
+      admin.rpc('consommer_token_inscription', { p_code_hash: codeHash, p_adresse: adresseFraiche() }),
+      admin.rpc('consommer_token_inscription', { p_code_hash: codeHash, p_adresse: adresseFraiche() }),
+    ])
+    expect(premier.error).toBeNull()
+    expect(second.error).toBeNull()
+
+    const statuts = [premier.data![0].statut, second.data![0].statut].sort()
+    expect(statuts).toEqual(['invalide', 'ok'])
+
+    // Le gagnant, quel qu'il soit, a bien consommé LE token créé pour ce test.
+    const gagnant = premier.data![0].statut === 'ok' ? premier.data![0] : second.data![0]
+    expect(gagnant.token_id).toBe(id)
   })
 
   it('un code inconnu rend le statut invalide, SANS erreur RPC', async () => {
@@ -278,12 +358,18 @@ describe('consommer_token_inscription', () => {
 
   it('un token expiré rend le statut invalide, SANS erreur RPC', async () => {
     const code = `test-consommation-${crypto.randomUUID()}`
-    await admin.from('tokens_inscription').insert({
+    // I2 (constat de revue) : erreur d'insertion vérifiée, comme creerTokenValide
+    // le fait déjà. Sans ce contrôle, un insert en échec laisserait le code
+    // n'exister nulle part, et ce test éprouverait en réalité le chemin du code
+    // INCONNU plutôt que celui du token EXPIRÉ — tout en restant vert, puisque les
+    // deux rendent le même statut 'invalide'.
+    const { error: erreurInsertion } = await admin.from('tokens_inscription').insert({
       code_hash: code,
       mode: 'generique',
       cree_par: idAdmin,
       expire_le: new Date(Date.now() - 1_000).toISOString(),
     })
+    if (erreurInsertion) throw new Error(`création du token expiré de test impossible : ${erreurInsertion.message}`)
     const { data, error } = await admin.rpc('consommer_token_inscription', {
       p_code_hash: code,
       p_adresse: adresseFraiche(),
@@ -294,13 +380,16 @@ describe('consommer_token_inscription', () => {
 
   it('un token révoqué rend le statut invalide, SANS erreur RPC', async () => {
     const code = `test-consommation-${crypto.randomUUID()}`
-    await admin.from('tokens_inscription').insert({
+    // I2 : même contrôle que ci-dessus, même raison — sinon ce test éprouverait le
+    // chemin du code inconnu à la place de celui du token révoqué.
+    const { error: erreurInsertion } = await admin.from('tokens_inscription').insert({
       code_hash: code,
       mode: 'generique',
       cree_par: idAdmin,
       expire_le: new Date(Date.now() + 86_400_000).toISOString(),
       revoque_le: new Date().toISOString(),
     })
+    if (erreurInsertion) throw new Error(`création du token révoqué de test impossible : ${erreurInsertion.message}`)
     const { data, error } = await admin.rpc('consommer_token_inscription', {
       p_code_hash: code,
       p_adresse: adresseFraiche(),
@@ -317,11 +406,18 @@ describe('consommer_token_inscription', () => {
     const codeExpire = `test-consommation-${crypto.randomUUID()}`
     const codeRevoque = `test-consommation-${crypto.randomUUID()}`
     const codeUtilise = `test-consommation-${crypto.randomUUID()}`
-    await admin.from('tokens_inscription').insert([
+    // I2 (constat de revue) : erreur d'insertion vérifiée. C'est ICI que l'oubli
+    // était le plus grave — si les trois inserts échouaient silencieusement, les
+    // trois codes (« expiré », « révoqué », « déjà utilisé ») n'existeraient nulle
+    // part, et ce test comparerait EN RÉALITÉ quatre fois le même cas (code
+    // inconnu) au lieu des quatre causes distinctes qu'il prétend recouper — son
+    // propre commentaire ci-dessus serait alors un mensonge pur.
+    const { error: erreurInsertion } = await admin.from('tokens_inscription').insert([
       { code_hash: codeExpire, mode: 'generique', cree_par: idAdmin, expire_le: new Date(Date.now() - 1_000).toISOString() },
       { code_hash: codeRevoque, mode: 'generique', cree_par: idAdmin, expire_le: new Date(Date.now() + 86_400_000).toISOString(), revoque_le: new Date().toISOString() },
       { code_hash: codeUtilise, mode: 'generique', cree_par: idAdmin, expire_le: new Date(Date.now() + 86_400_000).toISOString(), utilise_le: new Date().toISOString() },
     ])
+    if (erreurInsertion) throw new Error(`création des tokens de test (récapitulatif) impossible : ${erreurInsertion.message}`)
     const codeInconnu = `test-consommation-jamais-${crypto.randomUUID()}`
 
     const resultats = await Promise.all(
@@ -393,6 +489,15 @@ describe('consommer_token_inscription', () => {
     // ZÉROS, et la 11e tentative n'aurait jamais atteint le plafond. Ce test
     // aurait donc échoué net avec l'ancienne version, pour la bonne raison : il
     // ne pouvait pas passer par accident.
+    // NUANCE (mineur, constat de revue) : ce test éprouve le plafond en séquence,
+    // un appel après l'autre. Il ne prouve PAS que le plafond est étanche à la
+    // concurrence : sous READ COMMITTED, le `select count(*)` de l'étape 2 ne voit
+    // que les lignes déjà COMMIT au moment où l'instruction démarre — des appels
+    // réellement concurrents sur la même adresse pourraient donc chacun sous-compter
+    // les tentatives des autres et laisser passer légèrement plus de 10 avant que
+    // le plafond ne se referme. C'est une limite acceptée (best-effort contre la
+    // force brute, pas une garantie dure), pas un défaut à corriger ici — voir
+    // aussi le commentaire de tête de public.consommer_token_inscription.
     it("laisse passer jusqu'à 10 tentatives incluses (statut invalide, SANS erreur), puis bascule sur trop_de_tentatives à la 11e", async () => {
       // Nettoyage de cette adresse précise, pour ne pas hériter de tentatives
       // d'une exécution précédente interrompue.
@@ -426,6 +531,92 @@ describe('consommer_token_inscription', () => {
       expect(tentatives).toHaveLength(11)
 
       await admin.from('tentatives_token_inscription').delete().eq('adresse', ADRESSE_PLAFOND)
+    })
+  })
+
+  // I3 (constat de revue) : jusqu'ici, relacher_token_inscription n'avait AUCUN
+  // test — ni de comportement, ni de droits d'exécution. Asymétrie injustifiée
+  // avec consommer_token_inscription, qui a les deux. Corrigée ci-dessous.
+  describe('relacher_token_inscription', () => {
+    it("relâche un token consommé dont le compte n'a jamais été créé : utilise_le et utilise_par_profil_id repassent à NULL", async () => {
+      const { id, codeHash } = await creerTokenValide('generique', null)
+      const { data: consommation, error: erreurConsommation } = await admin.rpc('consommer_token_inscription', {
+        p_code_hash: codeHash,
+        p_adresse: adresseFraiche(),
+      })
+      expect(erreurConsommation).toBeNull()
+      expect(consommation![0].statut).toBe('ok')
+      // Cas visé par la fonction (design 2b §7.1) : consommé, mais le compte n'a
+      // ensuite jamais été créé (Task 14 en échec) — utilise_par_profil_id reste
+      // NULL puisque consommer_token_inscription ne le pose jamais elle-même (D27).
+      const { data: avant } = await admin
+        .from('tokens_inscription')
+        .select('utilise_le, utilise_par_profil_id')
+        .eq('id', id)
+        .single()
+      expect(avant?.utilise_le).not.toBeNull()
+      expect(avant?.utilise_par_profil_id).toBeNull()
+
+      const { error: erreurRelache } = await admin.rpc('relacher_token_inscription', { p_token_id: id })
+      expect(erreurRelache).toBeNull()
+
+      const { data: apres, error: erreurLecture } = await admin
+        .from('tokens_inscription')
+        .select('utilise_le, utilise_par_profil_id')
+        .eq('id', id)
+        .single()
+      expect(erreurLecture).toBeNull()
+      expect(apres).not.toBeNull()
+      expect(apres!.utilise_le).toBeNull()
+      expect(apres!.utilise_par_profil_id).toBeNull()
+    })
+
+    // LA GARDE, PROUVÉE DIRECTEMENT (I3) : un token déjà rattaché à un compte RÉEL
+    // (utilise_par_profil_id renseigné, comme après une création de compte réussie
+    // — Task 14) ne doit JAMAIS être dé-consommé par cet appel. Avant la migration
+    // 20260815180000, l'UPDATE d'origine n'avait AUCUNE condition sur
+    // utilise_par_profil_id : ce même appel aurait remis utilise_le à NULL et
+    // rendu ce token de nouveau utilisable, alors qu'il a réellement servi. La
+    // garde `and utilise_par_profil_id is null` restreint l'effet à la seule
+    // fenêtre de compensation légitime (compte JAMAIS créé) — ici, elle doit
+    // laisser les deux colonnes intactes.
+    it('refuse de relâcher un token déjà rattaché à un profil réel : aucune ligne modifiée', async () => {
+      const { id } = await creerTokenValide('generique', null)
+      // Simule une consommation suivie d'une création de compte RÉUSSIE (Task 14) :
+      // utilise_le ET utilise_par_profil_id sont tous deux renseignés.
+      const utiliseLeOrigine = new Date().toISOString()
+      const { error: erreurPreparation } = await admin
+        .from('tokens_inscription')
+        .update({ utilise_le: utiliseLeOrigine, utilise_par_profil_id: idAdmin })
+        .eq('id', id)
+      if (erreurPreparation) throw new Error(`préparation du token rattaché impossible : ${erreurPreparation.message}`)
+
+      const { error: erreurRelache } = await admin.rpc('relacher_token_inscription', { p_token_id: id })
+      expect(erreurRelache).toBeNull()
+
+      const { data: apres, error: erreurLecture } = await admin
+        .from('tokens_inscription')
+        .select('utilise_le, utilise_par_profil_id')
+        .eq('id', id)
+        .single()
+      expect(erreurLecture).toBeNull()
+      expect(apres).not.toBeNull()
+      // La garde a bloqué l'UPDATE : les deux colonnes restent renseignées, à
+      // l'identique de ce qui a été posé ci-dessus.
+      expect(apres!.utilise_par_profil_id).toBe(idAdmin)
+      expect(new Date(apres!.utilise_le as string).toISOString()).toBe(utiliseLeOrigine)
+    })
+
+    it('refuse son exécution à un compte authentifié ordinaire (42501)', async () => {
+      const { error } = await clientSimple.rpc('relacher_token_inscription', { p_token_id: crypto.randomUUID() })
+      expect(error).not.toBeNull()
+      expect(error?.code).toBe('42501')
+    })
+
+    it('refuse son exécution au rôle anon (42501)', async () => {
+      const { error } = await anon.rpc('relacher_token_inscription', { p_token_id: crypto.randomUUID() })
+      expect(error).not.toBeNull()
+      expect(error?.code).toBe('42501')
     })
   })
 })
