@@ -694,3 +694,132 @@ describe('vue compteurs_ael (D4, D44, D48)', () => {
   })
 })
 
+describe('passerelle generer_seances_ael (D28, D38, D41)', () => {
+  let idCalendrier: string
+
+  beforeAll(async () => {
+    const { data, error } = await admin
+      .from('calendriers_ael')
+      .insert({ antenne_id: idAntenne, jour_semaine: 4 })
+      .select('id')
+      .single()
+    if (error || !data) throw new Error(`création du calendrier impossible : ${error?.message}`)
+    idCalendrier = data.id as string
+  })
+
+  afterAll(async () => {
+    await admin.from('seances_ael').delete().eq('calendrier_id', idCalendrier)
+    await admin.from('calendriers_ael').delete().eq('id', idCalendrier)
+  })
+
+  it('un compte authentifié ordinaire ne peut pas exécuter generer_seances_ael', async () => {
+    const { error } = await clientSimple.rpc('generer_seances_ael', {
+      p_occurrences: [{ calendrier_id: idCalendrier, antenne_id: idAntenne, date: '2026-12-01', heure: '' }],
+    })
+    expect(error).not.toBeNull()
+    expect(error!.code).toBe('42501')
+
+    const { data } = await admin
+      .from('seances_ael')
+      .select('id')
+      .eq('calendrier_id', idCalendrier)
+      .eq('genere_pour_le', '2026-12-01')
+    expect(data).toEqual([])
+  })
+
+  it('la clé de service exécute la passerelle et crée la séance ET sa jonction', async () => {
+    const { data, error } = await admin.rpc('generer_seances_ael', {
+      p_occurrences: [{ calendrier_id: idCalendrier, antenne_id: idAntenne, date: '2026-12-08', heure: '18:00' }],
+    })
+    expect(error).toBeNull()
+    expect(data).toHaveLength(1)
+
+    const idSeance = data![0].id as string
+    const { data: seance } = await admin
+      .from('seances_ael')
+      .select('date, genere_pour_le, heure, etat')
+      .eq('id', idSeance)
+      .single()
+    expect(seance).toEqual({ date: '2026-12-08', genere_pour_le: '2026-12-08', heure: '18:00:00', etat: 'prevue' })
+
+    const { data: jonction } = await admin
+      .from('seances_ael_antennes')
+      .select('antenne_id')
+      .eq('seance_id', idSeance)
+    expect(jonction).toEqual([{ antenne_id: idAntenne }])
+  })
+
+  it('un second appel sur la MÊME occurrence ne crée AUCUNE ligne nouvelle (idempotence)', async () => {
+    // CONTRÔLE POSITIF avant tout : la séance du test précédent existe bien — sinon
+    // l'assertion « rien de nouveau » ci-dessous regarderait du vide.
+    const { data: avant } = await admin
+      .from('seances_ael')
+      .select('id')
+      .eq('calendrier_id', idCalendrier)
+      .eq('genere_pour_le', '2026-12-08')
+    expect(avant).toHaveLength(1)
+
+    const { data: rejeu, error } = await admin.rpc('generer_seances_ael', {
+      p_occurrences: [{ calendrier_id: idCalendrier, antenne_id: idAntenne, date: '2026-12-08', heure: '18:00' }],
+    })
+    expect(error).toBeNull()
+    expect(rejeu).toEqual([])
+
+    const { data: apres } = await admin
+      .from('seances_ael')
+      .select('id')
+      .eq('calendrier_id', idCalendrier)
+      .eq('genere_pour_le', '2026-12-08')
+    expect(apres).toHaveLength(1)
+    expect(apres![0].id).toBe(avant![0].id)
+
+    const { data: jonctionApres } = await admin
+      .from('seances_ael_antennes')
+      .select('antenne_id')
+      .eq('seance_id', apres![0].id)
+    expect(jonctionApres).toHaveLength(1)
+  })
+
+  it("un appel mêlant une occurrence déjà générée et une nouvelle ne crée QUE la nouvelle", async () => {
+    const { data, error } = await admin.rpc('generer_seances_ael', {
+      p_occurrences: [
+        { calendrier_id: idCalendrier, antenne_id: idAntenne, date: '2026-12-08', heure: '18:00' },
+        { calendrier_id: idCalendrier, antenne_id: idAntenne, date: '2026-12-15', heure: '18:00' },
+      ],
+    })
+    expect(error).toBeNull()
+    expect(data).toHaveLength(1)
+
+    const { data: total } = await admin.from('seances_ael').select('id').eq('calendrier_id', idCalendrier)
+    expect(total).toHaveLength(2)
+  })
+
+  it("le déplacement d'une séance ne la fait pas recréer à sa date d'origine (D39)", async () => {
+    const { data: seance } = await admin
+      .from('seances_ael')
+      .select('id')
+      .eq('calendrier_id', idCalendrier)
+      .eq('genere_pour_le', '2026-12-15')
+      .single()
+
+    // Déplacement ordinaire : SEULE `date` change, `genere_pour_le` reste l'ancre.
+    await admin.from('seances_ael').update({ date: '2026-12-16' }).eq('id', seance!.id)
+
+    // Regénérer sur la MÊME occurrence d'origine.
+    const { data: rejeu, error } = await admin.rpc('generer_seances_ael', {
+      p_occurrences: [{ calendrier_id: idCalendrier, antenne_id: idAntenne, date: '2026-12-15', heure: '18:00' }],
+    })
+    expect(error).toBeNull()
+    expect(rejeu).toEqual([])
+
+    const { data: apres } = await admin
+      .from('seances_ael')
+      .select('id, date')
+      .eq('calendrier_id', idCalendrier)
+      .eq('genere_pour_le', '2026-12-15')
+    // Une SEULE séance pour cette occurrence, et sa date reste la date DÉPLACÉE.
+    expect(apres).toHaveLength(1)
+    expect(apres![0].id).toBe(seance!.id)
+    expect(apres![0].date).toBe('2026-12-16')
+  })
+})
