@@ -46,15 +46,19 @@ describe('hacherCodeInscription', () => {
     expect(hacherCodeInscription('abcdef')).not.toBe(hacherCodeInscription('ABCDEF'))
   })
 
-  // Le hachage doit être irréversible : le code en clair ne doit apparaître, sous
-  // aucune forme reconnaissable, dans son propre hachage. Distinct du test de format
-  // ci-dessus (qui prouve seulement que la SORTIE est hexadécimale, pas qu'elle ne
-  // contient rien de l'ENTRÉE) : une implémentation bogue qui concatènerait le code à
-  // un condensé partiel passerait le test de format sans satisfaire celui-ci.
-  it('ne laisse aucun fragment reconnaissable du code en clair dans le hachage', () => {
-    const code = genererCodeInscription()
-    const hachage = hacherCodeInscription(code)
-    expect(hachage).not.toContain(code)
-    expect(hachage.toLowerCase()).not.toContain(code.toLowerCase())
+  // VECTEUR TÉMOIN : la valeur attendue ci-dessous n'a JAMAIS été obtenue en
+  // appelant hacherCodeInscription (ce serait circulaire — la fonction ne
+  // prouverait plus que « la fonction fait ce qu'elle fait »). Elle a été
+  // calculée par un chemin indépendant :
+  //   node -e "console.log(require('crypto').createHash('sha256').update('CodeTemoinSha256Fixe2026Xy','utf8').digest('hex'))"
+  // et recoupée avec `printf '%s' 'CodeTemoinSha256Fixe2026Xy' | openssl dgst -sha256`.
+  // Ce vecteur épingle l'algorithme ENTIER (SHA-256, encodage UTF-8 de l'entrée,
+  // encodage hexadécimal de la sortie) : toute fuite par encodage, tout
+  // changement silencieux d'algorithme le ferait tomber immédiatement — ce
+  // qu'aucun test à entrée générée aléatoirement ne peut garantir.
+  it('hache une entrée fixe vers la valeur SHA-256 attendue, calculée hors implémentation', () => {
+    expect(hacherCodeInscription('CodeTemoinSha256Fixe2026Xy')).toBe(
+      'ede42a3a2b7099d5543ba769f353fe893c3cb1d9b2b2c30e49681274287ca159',
+    )
   })
 })
