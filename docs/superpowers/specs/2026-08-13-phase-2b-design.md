@@ -273,13 +273,29 @@ compte, et c'est elle qui reste décisive.
 1. Insère une ligne dans `tentatives_token_inscription` — avant tout autre test, pour que même
    une tentative sur un code totalement inconnu compte (D34).
 2. Compte les tentatives de cette adresse sur la fenêtre glissante ; au-delà de **10 tentatives
-   par 15 minutes** (D36), lève une exception marquée `trop_de_tentatives`.
+   par 15 minutes** (D36), rend le statut `trop_de_tentatives`.
 3. Verrouille la ligne du token (`select ... for update`) par son `code_hash` (D31).
 4. Si la ligne n'existe pas, ou si `expire_le < now()`, ou si `revoque_le` est renseigné, ou si
-   `utilise_le` est déjà renseigné : lève une exception marquée `token_invalide` — la même dans
-   les quatre cas.
-5. Sinon, pose `utilise_le = now()` et rend `(mode, membre_id)`. `utilise_par_profil_id` reste
-   `NULL` à ce stade : le compte n'existe pas encore (D27).
+   `utilise_le` est déjà renseigné : rend le statut `invalide` — le même dans les quatre cas.
+5. Sinon, pose `utilise_le = now()`, rend le statut `ok` et `(mode, membre_id)`.
+   `utilise_par_profil_id` reste `NULL` à ce stade : le compte n'existe pas encore (D27).
+
+> **Correction du 2026-08-13 (D43).** Cette section décrivait une fonction qui **lève une
+> exception** pour les deux refus métier. **C'était faux, et cela rendait le plafond de D25
+> entièrement inopérant.** Postgres n'a pas de transaction autonome : une exception levée dans
+> la fonction annule **toute** la transaction, y compris l'insertion de la tentative faite à
+> l'étape 1. Seules les consommations **réussies** auraient donc survécu, et le compteur
+> n'aurait jamais vu un seul échec — exactement la population que le plafond existe pour
+> arrêter. Un attaquant aurait pu essayer indéfiniment.
+>
+> La fonction **ne lève plus** pour les refus attendus : elle rend un **statut**
+> (`ok`, `invalide`, `trop_de_tentatives`). L'insertion de la tentative est ainsi validée, et le
+> compteur voit enfin les échecs. Les exceptions restent réservées aux vraies pannes.
+>
+> **À ne pas confondre en relisant** : l'indiscernabilité exigée par D30 porte sur **ce que voit
+> l'utilisateur**, jamais sur ce que reçoit notre propre serveur. La Server Action distingue
+> donc `invalide` de `trop_de_tentatives` pour **journaliser**, tout en affichant rigoureusement
+> le même message dans les deux cas. Faire remonter le statut à l'écran recréerait l'oracle.
 
 `sInscrire` reçoit ensuite `(mode, membre_id)`, crée le compte auth, puis :
 
