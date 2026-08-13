@@ -20,7 +20,7 @@ export function genererCodeInscription(): string {
  * comportement voulu, pas une lacune à combler par un `'server-only'` supplémentaire.
  *
  * Déterministe à dessein : `consommer_token_inscription` (migration
- * 20260815150000) retrouve la ligne par une égalité stricte sur `code_hash`. Un
+ * 20260815160000) retrouve la ligne par une égalité stricte sur `code_hash`. Un
  * hachage salé serait inutilisable ici — voir le commentaire de tête de la Task 7
  * du plan.
  */
