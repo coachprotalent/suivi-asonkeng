@@ -253,3 +253,98 @@ describe('amendement de membres_lecture pour le demandeur (design 2b §5.5)', ()
     expect(data).toHaveLength(1)
   })
 })
+
+describe('annuler_demande_membre', () => {
+  async function creerDemandeEtFiche(demandeurId: string) {
+    const { data: fiche, error: erreurFiche } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE_MEMBRE}-annulation`, prenom: 'Test', etat: 'en_attente' })
+      .select('id')
+      .single()
+    if (erreurFiche || !fiche) throw new Error(`création de la fiche impossible : ${erreurFiche?.message}`)
+
+    const { data: demande, error: erreurDemande } = await admin
+      .from('demandes_membre')
+      .insert({ origine: 'demande_suivi', demandeur_profil_id: demandeurId, membre_id: fiche.id, etat: 'en_attente' })
+      .select('id')
+      .single()
+    if (erreurDemande || !demande) throw new Error(`création de la demande impossible : ${erreurDemande?.message}`)
+
+    return { ficheId: fiche.id as string, demandeId: demande.id as string }
+  }
+
+  it("annule sa propre demande : LES DEUX EFFETS constatés dans le MÊME test", async () => {
+    const { ficheId, demandeId } = await creerDemandeEtFiche(idDemandeurA)
+
+    const { error } = await admin.rpc('annuler_demande_membre', {
+      p_demande: demandeId,
+      p_demandeur: idDemandeurA,
+    })
+    expect(error).toBeNull()
+
+    // Un test qui ne vérifierait que l'un des deux effets ne prouverait pas
+    // l'atomicité, seulement qu'une moitié a eu lieu.
+    const { data: demandeRelue } = await admin.from('demandes_membre').select('etat').eq('id', demandeId).single()
+    expect(demandeRelue?.etat).toBe('annulee')
+
+    const { data: ficheRelue } = await admin.from('membres').select('id').eq('id', ficheId)
+    expect(ficheRelue).toHaveLength(0)
+  })
+
+  it("refuse d'annuler la demande d'AUTRUI, avec un marqueur stable", async () => {
+    const { demandeId } = await creerDemandeEtFiche(idDemandeurA)
+
+    const { error } = await admin.rpc('annuler_demande_membre', {
+      p_demande: demandeId,
+      p_demandeur: idDemandeurB,
+    })
+    expect(error).not.toBeNull()
+    expect(error?.details).toBe('demande_non_annulable')
+
+    // Rien n'a bougé : la demande reste en_attente.
+    const { data } = await admin.from('demandes_membre').select('etat').eq('id', demandeId).single()
+    expect(data?.etat).toBe('en_attente')
+  })
+
+  it("refuse d'annuler une demande déjà traitée", async () => {
+    const { demandeId } = await creerDemandeEtFiche(idDemandeurA)
+    await admin.from('demandes_membre').update({ etat: 'validee' }).eq('id', demandeId)
+
+    const { error } = await admin.rpc('annuler_demande_membre', {
+      p_demande: demandeId,
+      p_demandeur: idDemandeurA,
+    })
+    expect(error).not.toBeNull()
+    expect(error?.details).toBe('demande_non_annulable')
+  })
+
+  it('marque lues les notifications nouvelle_demande liées à cette demande (D41)', async () => {
+    const { demandeId } = await creerDemandeEtFiche(idDemandeurA)
+    const { data: notif, error: erreurNotif } = await admin
+      .from('notifications')
+      .insert({
+        profil_id: idAdmin,
+        type: 'nouvelle_demande',
+        titre: 'Test',
+        corps: 'Corps de test',
+        lien: `/demandes/${demandeId}`,
+      })
+      .select('id')
+      .single()
+    if (erreurNotif || !notif) throw new Error(`création de la notification impossible : ${erreurNotif?.message}`)
+
+    await admin.rpc('annuler_demande_membre', { p_demande: demandeId, p_demandeur: idDemandeurA })
+
+    const { data: notifRelue } = await admin.from('notifications').select('lu_le').eq('id', notif.id).single()
+    expect(notifRelue?.lu_le).not.toBeNull()
+  })
+
+  it('refuse son exécution à un compte authentifié ordinaire (42501)', async () => {
+    const { error } = await clientDemandeurA.rpc('annuler_demande_membre', {
+      p_demande: idDemandeA,
+      p_demandeur: idDemandeurA,
+    })
+    expect(error).not.toBeNull()
+    expect(error?.code).toBe('42501')
+  })
+})
