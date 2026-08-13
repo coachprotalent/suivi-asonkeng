@@ -101,9 +101,9 @@ describe('politique notifications_lecture', () => {
     expect(data).toHaveLength(0)
   })
 
-  // Design 2b §5.5 : « jamais l'administrateur pour autrui ». Ce test est le seul
-  // de tout le projet où « administrateur » N'EST PAS synonyme de « voit tout » —
-  // à souligner, car un relecteur pressé pourrait le lire comme un défaut.
+  // Design 2b §5.5 : « jamais l'administrateur pour autrui ». Ici, « administrateur »
+  // N'EST PAS synonyme de « voit tout » — à souligner, car un relecteur pressé
+  // pourrait le lire comme un défaut plutôt que comme l'intention du design.
   it("interdit MÊME À UN ADMINISTRATEUR de lire la notification d'autrui", async () => {
     const { data, error } = await clientAdminAuth.from('notifications').select('id').eq('id', idNotifA)
     expect(error).toBeNull()
