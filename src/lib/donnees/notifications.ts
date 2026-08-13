@@ -69,12 +69,28 @@ export async function compterNotificationsNonLues(profilId: string): Promise<num
  * Une notification manquée ne doit pas faire échouer l'inscription ou la demande
  * qui l'a déclenchée : à ce stade, l'écriture principale est déjà en base. On
  * journalise bruyamment plutôt que de lever.
+ *
+ * `demandeId` est OBLIGATOIRE dans le type (`string | null` explicite, pas un
+ * champ optionnel) : c'est la clé de corrélation posée par la migration
+ * 20260815240000, sur laquelle `annuler_demande_membre` (20260815250000) et
+ * `valider_demande_rattachement` (20260815260000) filtrent pour marquer lues les
+ * notifications d'une demande traitée. L'OMETTRE NE CASSE RIEN DE VISIBLE : la
+ * colonne vaudrait NULL, les clauses `demande_id = p_demande` ne trouveraient
+ * jamais rien, et la cloche des administrateurs garderait indéfiniment des non-lus
+ * que plus aucun geste ne peut éteindre — sans une seule erreur. Le champ est
+ * donc rendu non omissible pour qu'un futur appelant doive écrire `null` en toute
+ * conscience plutôt que l'oublier.
+ *
+ * `lien` reste réservé à la NAVIGATION (`/demandes`, la liste) et ne doit jamais
+ * être réutilisé comme clé de corrélation — c'est exactement la confusion que la
+ * migration 20260815240000 a défaite.
  */
 export async function notifierAdministrateurs(notification: {
   type: 'nouvelle_demande'
   titre: string
   corps: string
   lien: string | null
+  demandeId: string | null
 }): Promise<void> {
   const admin = clientAdmin()
   const { data: administrateurs, error: erreurAdmins } = await admin
@@ -104,6 +120,7 @@ export async function notifierAdministrateurs(notification: {
       titre: notification.titre,
       corps: notification.corps,
       lien: notification.lien,
+      demande_id: notification.demandeId,
     })),
   )
   if (erreurInsertion) {

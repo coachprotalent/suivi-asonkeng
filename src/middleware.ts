@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { envSupabase } from '@/lib/supabase/env'
 
 const ROUTE_CONNEXION = '/connexion'
+const ROUTE_INSCRIPTION = '/inscription'
 const ROUTE_CHANGEMENT_MDP = '/changer-mot-de-passe'
 const ROUTE_DECONNEXION = '/deconnexion'
 const ROUTE_APRES_CONNEXION = '/tableau-de-bord'
@@ -38,6 +39,7 @@ export async function middleware(requete: NextRequest) {
 
   const chemin = requete.nextUrl.pathname
   const surConnexion = estRoute(chemin, ROUTE_CONNEXION)
+  const surInscription = estRoute(chemin, ROUTE_INSCRIPTION)
   const surChangementMdp = estRoute(chemin, ROUTE_CHANGEMENT_MDP)
 
   /**
@@ -62,7 +64,19 @@ export async function middleware(requete: NextRequest) {
   }
 
   if (!user) {
-    return surConnexion ? reponse : rediriger(ROUTE_CONNEXION)
+    // /inscription est la SEULE autre route accessible sans session (design 2b
+    // §9) : c'est le premier chemin d'écriture public de l'application. Sa
+    // fermeture ne repose PAS sur ce middleware — elle repose entièrement sur
+    // l'absence de politique RLS ouverte à `anon` et sur les privilèges EXECUTE
+    // retirés à tous sauf `service_role` (design 2b §6). Ce middleware ne fait ici
+    // que la RENDRE ATTEIGNABLE ; il ne la protège pas.
+    //
+    // L'exception reste STRICTEMENT bornée par `estRoute`, qui compare un segment
+    // entier : `/inscription` et `/inscription/...` seulement. `/inscriptions`,
+    // `/inscription-admin` ou `/xinscription` ne l'obtiennent PAS. Toute
+    // substitution d'un `startsWith(ROUTE_INSCRIPTION)` nu à cet appel rouvrirait
+    // l'authentification sur des routes voisines, silencieusement.
+    return surConnexion || surInscription ? reponse : rediriger(ROUTE_CONNEXION)
   }
 
   // Toujours laisser passer la déconnexion, avant toute autre garde.
