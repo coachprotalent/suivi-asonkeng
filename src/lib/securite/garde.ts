@@ -107,3 +107,44 @@ export async function exigerAutoriteSur(membreId: string): Promise<Profil> {
   }
   return profil
 }
+
+/**
+ * Décision « ce compte gère-t-il le calendrier AEL, les séances, le pointage, ou le
+ * rattachement d'un membre à une antenne ? », écrite une seule fois. Les deux fonctions
+ * exportées ci-dessous en dérivent, sur le modèle de `deciderAutorite` plus haut.
+ */
+async function deciderModerateurOuAdministrateur(): Promise<{ profil: Profil; autorise: boolean }> {
+  const profil = await exigerProfilActif()
+  const roles = await rolesDuProfil(profil.id)
+  const autorise = roles.includes('administrateur') || roles.includes('moderateur')
+  return { profil, autorise }
+}
+
+/**
+ * Le compte connecté gère-t-il le calendrier AEL, les séances ou le rattachement d'une
+ * antenne ? Rend un booléen, ne redirige pas.
+ *
+ * À n'employer que pour DÉCIDER D'AFFICHER un formulaire ou un bouton (D22, D50). La
+ * protection réelle, c'est `exigerModerateurOuAdministrateur`, et elle seule.
+ */
+export async function estModerateurOuAdministrateur(): Promise<boolean> {
+  const { autorise } = await deciderModerateurOuAdministrateur()
+  return autorise
+}
+
+/**
+ * Réserve une action au modérateur et à l'administrateur (D22, D42, D50).
+ *
+ * Contrairement à `exigerAutoriteSur`, l'autorisation ici est PAR RÔLE, pas par portée
+ * sur un membre précis : le calendrier, la génération, la tenue d'une séance, le
+ * pointage et le rattachement d'un membre à une antenne ne dépendent d'aucune
+ * arborescence de faiseurs de disciple. `exigerAutoriteSur` répond à une question
+ * différente et ne s'applique pas ici.
+ */
+export async function exigerModerateurOuAdministrateur(): Promise<Profil> {
+  const { profil, autorise } = await deciderModerateurOuAdministrateur()
+  if (!autorise) {
+    redirect('/tableau-de-bord')
+  }
+  return profil
+}
