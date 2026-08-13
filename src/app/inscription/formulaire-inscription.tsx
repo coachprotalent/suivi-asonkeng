@@ -1,6 +1,7 @@
 'use client'
 
 import { useActionState, useId } from 'react'
+import { LONGUEUR_MDP_MINIMALE } from '@/app/changer-mot-de-passe/constantes'
 import type { Antenne } from '@/lib/donnees/antennes'
 import { sInscrire, type EtatInscription } from './actions'
 
@@ -67,12 +68,16 @@ export function FormulaireInscription({ antennes }: { antennes: Antenne[] }) {
           name="motDePasse"
           type="password"
           required
+          // Interpolée, jamais écrite en dur : la page sœur
+          // `/changer-mot-de-passe` fait de même, et une valeur recopiée à la main
+          // deviendrait un mensonge le jour où la constante change.
+          minLength={LONGUEUR_MDP_MINIMALE}
           autoComplete="new-password"
           aria-describedby={`${idMotDePasse}-aide`}
           className="rounded-md border border-neutral-300 px-3 py-2"
         />
         <span id={`${idMotDePasse}-aide`} className="text-xs text-neutral-500">
-          Au moins 12 caractères.
+          Au moins {LONGUEUR_MDP_MINIMALE} caractères.
         </span>
       </div>
 

@@ -8,7 +8,23 @@ export const MESSAGE_IDENTIFIANT_PRIS = 'Cet identifiant est déjà utilisé.'
 export const MESSAGE_CODE_INVALIDE = "Ce code n'est pas valide."
 export const MESSAGE_TROP_DE_TENTATIVES =
   'Trop de tentatives récentes. Réessayez plus tard.'
+export const MESSAGE_ANTENNE_INCONNUE = "L'antenne choisie n'est pas valide."
+/**
+ * Message rendu quand la compensation a RÉUSSI : le compte a été supprimé et le
+ * token relâché, l'état est redevenu celui d'avant la soumission. « N'a pas pu
+ * aboutir » est alors littéralement vrai, et la personne peut réessayer avec le
+ * MÊME code.
+ */
 export const MESSAGE_ECHEC_INSCRIPTION = "L'inscription n'a pas pu aboutir."
+/**
+ * Message rendu quand la compensation a ÉCHOUÉ, et lui seul. Il dit la vérité d'un
+ * état incohérent plutôt que de la masquer : le compte EXISTE et fonctionne, mais
+ * la demande n'a pas été enregistrée. Sur ce chemin, et uniquement sur celui-là,
+ * les administrateurs sont prévenus — sans quoi la personne repartirait en croyant
+ * n'avoir pas de compte, en aurait un, et personne ne saurait qu'elle attend.
+ */
+export const MESSAGE_COMPTE_SANS_DEMANDE =
+  "Votre compte a bien été créé, mais votre demande n'a pas pu être enregistrée. Les administrateurs ont été prévenus. Connectez-vous avec l'identifiant et le mot de passe que vous venez de choisir."
 
 const STATUT_TROP_DE_TENTATIVES = 'trop_de_tentatives'
 

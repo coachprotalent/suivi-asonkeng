@@ -43,6 +43,12 @@ export async function creerAntenne(
   }
 
   revalidatePath('/antennes')
+  // `/inscription` est PRÉRENDUE (elle ne lit aucune API dynamique, voir l'en-tête
+  // de `src/app/inscription/page.tsx`) : sans cette invalidation, une antenne
+  // nouvellement créée n'apparaîtrait dans le formulaire public qu'au bout de son
+  // délai de régénération. Le projet sait rendre l'invalidation immédiate ; il
+  // n'y a aucune raison d'attendre.
+  revalidatePath('/inscription')
   return { erreur: null }
 }
 
@@ -90,4 +96,9 @@ async function basculerAntenne(donnees: FormData, actif: boolean): Promise<void>
 
   revalidatePath('/antennes')
   revalidatePath('/membres')
+  // Même raison que dans `creerAntenne` : une antenne désactivée doit disparaître
+  // TOUT DE SUITE du formulaire public, et une antenne réactivée y revenir de même.
+  // `listerAntennesPubliques` filtre sur `actif`, ces deux bascules changent donc
+  // bien ce que la page prérendue affiche.
+  revalidatePath('/inscription')
 }

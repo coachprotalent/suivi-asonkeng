@@ -9,10 +9,13 @@ import {
   normaliserIdentifiant,
 } from '@/lib/domaine/identifiant'
 import { hacherCodeInscription } from '@/lib/domaine/token-inscription'
+import { listerAntennesPubliques } from '@/lib/donnees/antennes'
 import { notifierAdministrateurs } from '@/lib/donnees/notifications'
 import { clientAdmin } from '@/lib/supabase/admin'
 import {
+  MESSAGE_ANTENNE_INCONNUE,
   MESSAGE_CHAMPS_OBLIGATOIRES,
+  MESSAGE_COMPTE_SANS_DEMANDE,
   MESSAGE_ECHEC_INSCRIPTION,
   MESSAGE_IDENTIFIANT_PRIS,
   MESSAGE_MDP_TROP_COURT,
@@ -52,10 +55,30 @@ function champTexteOptionnel(donnees: FormData, nom: string): string | null {
  * visiteurs dans le même seau — inefficace contre un attaquant qui en a besoin d'un
  * seul, et bloquant pour tous les autres.
  *
- * `x-forwarded-for` porte l'adresse d'origine sur Vercel, où la plateforme
- * l'ÉCRASE : la valeur qu'un client tenterait d'y injecter n'atteint jamais ce
- * code en production. Elle peut porter une liste « client, proxy1, proxy2 » : le
- * premier segment est l'adresse d'origine (Vercel la place en tête).
+ * `x-forwarded-for` peut porter une liste « client, proxy1, proxy2 » : le premier
+ * segment est l'adresse d'origine (Vercel la place en tête).
+ *
+ * ═══ HYPOTHÈSE EXPLICITE, NON VÉRIFIABLE PAR NOS TESTS ═══
+ *
+ * Toute la propriété anti-force-brute de ce chemin repose sur UN postulat :
+ * l'hébergeur ÉCRASE `x-forwarded-for` avec l'adresse réelle du client, au lieu de
+ * relayer celle que le client y aurait écrite. C'est le comportement documenté de
+ * Vercel, où cette application est déployée (`.vercel/`).
+ *
+ * Nos tests ne peuvent PAS l'établir : `tests/e2e/inscription.spec.ts` s'exécute
+ * contre `next dev`, sans proxy, et y INJECTE lui-même cet en-tête. Il prouve donc
+ * que l'en-tête est lu et transmis à `consommer_token_inscription` — ce qui est
+ * déjà l'essentiel, une constante partagée y serait détectée — mais il ne prouve
+ * rien sur ce que fait l'hébergeur en production.
+ *
+ * SI CETTE HYPOTHÈSE EST FAUSSE (déploiement derrière un autre proxy, ou en direct
+ * sans proxy du tout), la conséquence est précise : un attaquant fait varier
+ * `x-forwarded-for` à chaque requête, chaque tentative tombe dans un seau neuf, et
+ * le plafond de 10 tentatives par 15 minutes (D34/D36) NE FREINE PLUS RIEN. Le
+ * hachage du code reste intact, les tokens gardent leurs ~116 bits d'entropie
+ * (D38) — la force brute redevient simplement non ralentie.
+ *
+ * À revérifier avant tout changement d'hébergeur ou ajout d'un proxy en amont.
  */
 async function adresseAppelant(): Promise<string> {
   const listeHeaders = await headers()
@@ -70,6 +93,120 @@ async function adresseAppelant(): Promise<string> {
     return ADRESSE_REPLI_LOCALE
   }
   return premier
+}
+
+/**
+ * RETOUR EN ARRIÈRE après un échec survenu APRÈS la création du compte, sur le
+ * parcours générique (fiche `en_attente` ou demande). Sans lui, l'écran annonçait
+ * « L'inscription n'a pas pu aboutir » alors que le compte EXISTAIT, que le token
+ * était consommé et qu'AUCUN administrateur n'était prévenu : la personne repartait
+ * en croyant n'avoir pas de compte, en avait un, et personne ne savait qu'elle
+ * attendait.
+ *
+ * Les trois gestes sont tentés INCONDITIONNELLEMENT, dans cet ordre :
+ * 1. la fiche `en_attente` d'abord — `demandes_membre.membre_id` est
+ *    `on delete set null`, elle ne partirait donc JAMAIS avec le compte ;
+ * 2. le compte d'authentification, dont la suppression cascade sur `profils` ;
+ * 3. la relâche du token (D27).
+ *
+ * Aucun échec n'interrompt les suivants : même si le compte survit, relâcher le
+ * token vaut mieux que le perdre — la personne pourra réessayer, fût-ce avec un
+ * autre identifiant. Rend `true` seulement si les TROIS ont réussi.
+ */
+async function compenserInscription(
+  admin: ReturnType<typeof clientAdmin>,
+  { profilId, ficheId, tokenId }: { profilId: string; ficheId: string | null; tokenId: string },
+): Promise<boolean> {
+  let complete = true
+
+  if (ficheId !== null) {
+    const { error } = await admin.from('membres').delete().eq('id', ficheId)
+    if (error) {
+      complete = false
+      console.error('compenserInscription : suppression de la fiche en_attente impossible', {
+        ficheId,
+        code: error.code,
+        message: error.message,
+      })
+    }
+  }
+
+  const { error: erreurCompte } = await admin.auth.admin.deleteUser(profilId)
+  if (erreurCompte) {
+    complete = false
+    console.error('compenserInscription : suppression du compte impossible', {
+      profilId,
+      message: erreurCompte.message,
+    })
+  }
+
+  const { error: erreurRelache } = await admin.rpc('relacher_token_inscription', {
+    p_token_id: tokenId,
+  })
+  if (erreurRelache) {
+    complete = false
+    console.error('compenserInscription : relâche du token impossible', {
+      tokenId,
+      message: erreurRelache.message,
+    })
+  }
+
+  return complete
+}
+
+/**
+ * Traite un échec survenu APRÈS la création du compte, sur le parcours générique,
+ * et rend le message à afficher — le seul endroit du fichier où le message dépend
+ * du succès d'un rattrapage, parce que c'est le seul où l'état du monde en dépend.
+ *
+ * - Compensation RÉUSSIE : plus de compte, plus de fiche, token relâché. L'état est
+ *   redevenu celui d'avant la soumission, `MESSAGE_ECHEC_INSCRIPTION` devient
+ *   littéralement vrai, et la personne peut réessayer avec le MÊME code.
+ * - Compensation ÉCHOUÉE : il reste un état incohérent. On le DIT à la personne
+ *   (son compte existe, sa demande n'est pas enregistrée) et on prévient les
+ *   administrateurs, pour que quelqu'un sache qu'elle attend. C'est le seul chemin
+ *   de ce fichier où une notification part sans demande : `demandeId` y vaut donc
+ *   `null` en toute conscience, et `lien` aussi — pointer vers `/demandes`
+ *   promettrait une ligne que cette personne n'y a justement pas.
+ */
+async function echecApresCompte(
+  admin: ReturnType<typeof clientAdmin>,
+  contexte: {
+    profilId: string
+    ficheId: string | null
+    tokenId: string
+    identifiant: string
+    prenom: string
+    nom: string
+    etape: string
+  },
+): Promise<EtatInscription> {
+  const compense = await compenserInscription(admin, {
+    profilId: contexte.profilId,
+    ficheId: contexte.ficheId,
+    tokenId: contexte.tokenId,
+  })
+
+  if (compense) {
+    console.error(
+      `sInscrire : échec sur ${contexte.etape}, compensation RÉUSSIE — compte supprimé, token relâché, la personne peut réessayer`,
+      { identifiant: contexte.identifiant },
+    )
+    return { erreur: MESSAGE_ECHEC_INSCRIPTION }
+  }
+
+  console.error(
+    `sInscrire : échec sur ${contexte.etape}, compensation ÉCHOUÉE — état incohérent, administrateurs prévenus`,
+    { identifiant: contexte.identifiant, profilId: contexte.profilId, tokenId: contexte.tokenId },
+  )
+  await notifierAdministrateurs({
+    type: 'nouvelle_demande',
+    titre: 'Inscription incomplète à reprendre à la main',
+    corps: `${contexte.prenom} ${contexte.nom} (identifiant ${contexte.identifiant}) a créé un compte, mais sa demande n'a pas pu être enregistrée. Sa fiche est à créer manuellement.`,
+    lien: null,
+    demandeId: null,
+  })
+  return { erreur: MESSAGE_COMPTE_SANS_DEMANDE }
 }
 
 /**
@@ -120,6 +257,31 @@ export async function sInscrire(
       return { erreur: erreur.message }
     }
     throw erreur
+  }
+
+  // ENTRÉE PUBLIQUE NON VALIDÉE = clé étrangère refusée plus loin. `antenneId`
+  // arrive d'un `<select>` que n'importe qui peut forger : sans ce contrôle, une
+  // valeur inconnue (ou qui n'est même pas un uuid) faisait échouer l'insertion de
+  // la fiche APRÈS la création du compte — soit exactement le chemin d'incohérence
+  // que `compenserInscription` doit réparer. On le referme ici, AVANT de consommer
+  // quoi que ce soit : le token n'est pas brûlé pour une antenne mal choisie.
+  //
+  // Vérifié contre la MÊME liste que celle affichée par la page
+  // (`listerAntennesPubliques`) : aucune information nouvelle n'est révélée, et
+  // aucun oracle n'est rouvert — cette liste ne dépend jamais du code saisi (D30).
+  if (antenneId !== null) {
+    let antennes
+    try {
+      antennes = await listerAntennesPubliques()
+    } catch (erreur) {
+      console.error("sInscrire : lecture des antennes impossible pour la validation", {
+        message: erreur instanceof Error ? erreur.message : String(erreur),
+      })
+      return { erreur: MESSAGE_ECHEC_INSCRIPTION }
+    }
+    if (!antennes.some((antenne) => antenne.id === antenneId)) {
+      return { erreur: MESSAGE_ANTENNE_INCONNUE }
+    }
   }
 
   const adresse = await adresseAppelant()
@@ -316,10 +478,15 @@ export async function sInscrire(
         code: erreurFiche?.code,
         message: erreurFiche?.message,
       })
-      // Le compte existe déjà et son mot de passe est déjà choisi : on ne
-      // l'annule PAS pour un échec sur la fiche. La personne pourra se connecter ;
-      // un administrateur devra créer la demande manuellement.
-      return { erreur: MESSAGE_ECHEC_INSCRIPTION }
+      return await echecApresCompte(admin, {
+        profilId: compteCree.user.id,
+        ficheId: null,
+        tokenId,
+        identifiant,
+        prenom,
+        nom,
+        etape: 'création de la fiche en_attente',
+      })
     }
 
     const { data: demande, error: erreurDemande } = await admin
@@ -339,7 +506,15 @@ export async function sInscrire(
         ficheId: fiche.id,
         message: erreurDemande?.message,
       })
-      return { erreur: MESSAGE_ECHEC_INSCRIPTION }
+      return await echecApresCompte(admin, {
+        profilId: compteCree.user.id,
+        ficheId: fiche.id,
+        tokenId,
+        identifiant,
+        prenom,
+        nom,
+        etape: 'création de la demande',
+      })
     }
 
     await notifierAdministrateurs({

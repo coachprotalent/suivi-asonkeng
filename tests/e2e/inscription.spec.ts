@@ -116,8 +116,40 @@ async function nettoyer() {
 /** Identifiant de l'administrateur de test, destinataire attendu des notifications. */
 let idAdminTest = ''
 
+/**
+ * Nombre de notifications `nouvelle_demande` ORPHELINES (sans `demande_id`) avant
+ * que cette suite ne s'exécute. Mesuré pour être recomparé à la fin.
+ *
+ * Pourquoi cette mesure existe : `notifierAdministrateurs` écrit à TOUS les
+ * administrateurs actifs — donc aussi aux comptes RÉELS de la base partagée, pas
+ * seulement à l'administrateur de test. Ces lignes-là ne portent aucun préfixe de
+ * test et aucun nettoyage par motif ne peut les retrouver. Elles disparaissent
+ * uniquement par la cascade de `notifications.demande_id`, quand la demande de test
+ * est supprimée avec son demandeur.
+ *
+ * Autrement dit : la propreté de la cloche des administrateurs RÉELS dépend de la
+ * corrélation `demande_id` que cette suite vérifie par ailleurs. Si elle
+ * régressait à NULL, la cascade ne mordrait plus et chaque exécution laisserait un
+ * non-lu inextinguible sur des comptes de production. C'est exactement ce qui est
+ * arrivé pendant la mise au point de cette tâche, et rien ne l'a signalé.
+ *
+ * DELTA et non absolu (base jamais réinitialisée) : on compare avant et après.
+ */
+let orphelinesAvant = 0
+
+async function compterNotificationsOrphelines(): Promise<number> {
+  const { data, error } = await admin
+    .from('notifications')
+    .select('id')
+    .eq('type', 'nouvelle_demande')
+    .is('demande_id', null)
+  if (error) throw new Error(`comptage des notifications orphelines impossible : ${error.message}`)
+  return (data ?? []).length
+}
+
 test.beforeAll(async () => {
   await nettoyer()
+  orphelinesAvant = await compterNotificationsOrphelines()
 
   const { data, error } = await admin.auth.admin.createUser({
     email: EMAIL_ADMIN,
@@ -149,23 +181,58 @@ test.beforeAll(async () => {
 })
 
 test.afterAll(async () => {
+  // Photographié AVANT `nettoyer()`, qui vide la liste : sans cette copie, la
+  // vérification des tokens plus bas porterait sur un tableau vide et serait vraie
+  // sans rien prouver.
+  const hachagesDeCetteExecution = [...hachagesCrees]
+
   await nettoyer()
 
   // Comptage indépendant, pas seulement l'absence d'erreur : le nettoyage des
-  // comptes de test est fragile (registre 1c). DELTA implicite — ces trois motifs
-  // n'appartiennent qu'à cette suite, aucun comptage absolu sur une table
-  // partagée n'est fait ici.
+  // données de test est fragile (registre 1c). Les QUATRE artefacts que cette
+  // suite crée sont recomptés, aucun n'est exempté — c'est un token laissé VIVANT
+  // en production qui était le défaut d'origine de ce fichier, et il aurait été le
+  // seul dont aucune assertion n'aurait vu la réapparition. DELTA et non absolu :
+  // chaque filtre porte sur un motif ou une adresse qui n'appartient qu'à cette
+  // suite, jamais sur le contenu global d'une table partagée.
   const { data: residusComptes } = await admin
     .from('profils')
     .select('id')
     .like('identifiant', `${PREFIXE_COMPTE}%`)
-  expect(residusComptes ?? []).toHaveLength(0)
+  expect(residusComptes ?? [], 'comptes de test résiduels').toHaveLength(0)
 
   const { data: residusFiches } = await admin
     .from('membres')
     .select('id')
     .like('nom', `${PREFIXE_FICHE}%`)
-  expect(residusFiches ?? []).toHaveLength(0)
+  expect(residusFiches ?? [], 'fiches membres de test résiduelles').toHaveLength(0)
+
+  // CONTRÔLE POSITIF : sans lui, une suite qui n'aurait créé aucun token ferait
+  // passer l'assertion suivante sans qu'elle ait rien examiné.
+  expect(
+    hachagesDeCetteExecution.length,
+    'la suite doit avoir créé au moins un token à recompter',
+  ).toBeGreaterThan(0)
+  const { data: residusTokens } = await admin
+    .from('tokens_inscription')
+    .select('id')
+    .in('code_hash', hachagesDeCetteExecution)
+  expect(residusTokens ?? [], 'tokens de test résiduels — un token vivant en production').toHaveLength(0)
+
+  const { data: residusTentatives } = await admin
+    .from('tentatives_token_inscription')
+    .select('id')
+    .eq('adresse', ADRESSE_TEST)
+  expect(residusTentatives ?? [], 'tentatives de test résiduelles').toHaveLength(0)
+
+  // Cinquième artefact, le seul qui atteigne des comptes RÉELS : voir le
+  // commentaire d'`orphelinesAvant`. Aucun filtre par motif ne peut nettoyer ces
+  // lignes ; seule la cascade de `demande_id` le fait. Ce delta est donc à la fois
+  // un contrôle de propreté et un second témoin de la corrélation.
+  expect(
+    await compterNotificationsOrphelines(),
+    "cette suite a laissé des notifications sans demande_id sur des comptes réels : la cascade n'a pas joué",
+  ).toBe(orphelinesAvant)
 })
 
 function identifiantTest(): string {
@@ -230,6 +297,11 @@ test('les QUATRE causes de refus affichent le MÊME message indifférencié', as
   const nomFiche1 = `${PREFIXE_FICHE}${crypto.randomUUID().slice(0, 8)}`
   await remplirEtSoumettre(page, { code: codeConnu, identifiant: identifiant1, nom: nomFiche1 })
   await expect(page).toHaveURL(/\/connexion\?inscrit=1/)
+  // L'ACCUSÉ EST RÉELLEMENT AFFICHÉ. `?inscrit=1` promet une confirmation : tant
+  // que `/connexion` était un composant client, il ne lisait jamais `searchParams`
+  // et cette promesse n'atteignait pas l'écran. Sans cette assertion, la
+  // redirection seule aurait continué de passer pour un accusé de réception.
+  await expect(page.getByRole('status')).toContainText('compte a bien été créé')
 
   // 2. Les quatre causes, vues de l'extérieur. `codeInconnu` n'a JAMAIS été inséré.
   const codeInconnu = `${PREFIXE_CODE}${crypto.randomUUID()}`
@@ -327,13 +399,85 @@ test("une requête forgée sur consommer_token_inscription depuis le rôle anon 
   )
   expect(reponse.ok()).toBe(false)
 
-  // CONTRÔLE POSITIF : le hachage envoyé ci-dessus est le BON — si la requête
-  // avait abouti, ce token serait consommé. `utilise_le` resté NULL prouve donc le
-  // refus de privilège, pas une simple erreur de saisie.
   const { data: token } = await admin
     .from('tokens_inscription')
     .select('utilise_le')
     .eq('code_hash', codeHash)
     .single()
   expect(token?.utilise_le).toBeNull()
+
+  // CANARI — sans lui, tout ce qui précède serait aussi vrai d'une URL mal
+  // orthographiée, d'un nom de paramètre erroné ou d'un projet Supabase éteint :
+  // « ça a échoué » ne prouve un refus de PRIVILÈGE que si la MÊME requête, au
+  // même chemin, avec les mêmes paramètres, réussit sous un rôle autorisé. Seule
+  // la clé change.
+  const codeCanari = `${PREFIXE_CODE}${crypto.randomUUID()}`
+  const hashCanari = await creerTokenGenerique(codeCanari)
+  const reponseCanari = await request.post(
+    `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/rpc/consommer_token_inscription`,
+    {
+      headers: {
+        apikey: process.env.SUPABASE_SERVICE_ROLE_KEY!,
+        Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      data: { p_code_hash: hashCanari, p_adresse: '203.0.113.51' },
+    },
+  )
+  expect(reponseCanari.ok(), "le canari doit aboutir : sinon le refus ci-dessus n'est pas un refus de privilège").toBe(true)
+  expect((await reponseCanari.json())[0]?.statut).toBe('ok')
+
+  await admin.from('tentatives_token_inscription').delete().in('adresse', ['203.0.113.50', '203.0.113.51'])
+})
+
+test("une antenne forgée est refusée AVANT que le token soit consommé", async ({ page }) => {
+  const code = `${PREFIXE_CODE}${crypto.randomUUID()}`
+  const codeHash = await creerTokenGenerique(code)
+
+  // DELTA, pas absolu : les tests précédents de ce fichier ont déjà laissé des
+  // comptes derrière eux (le nettoyage n'a lieu qu'en `afterAll`). Un comptage
+  // absolu serait juste aujourd'hui et faux dès qu'un test serait ajouté au-dessus.
+  const compterComptes = async () => {
+    const { data } = await admin
+      .from('profils')
+      .select('id')
+      .like('identifiant', `${PREFIXE_COMPTE}%`)
+    return (data ?? []).length
+  }
+  const comptesAvant = await compterComptes()
+
+  await page.goto('/inscription')
+  await page.getByLabel("Code d'inscription").fill(code)
+  await page.getByLabel('Identifiant choisi').fill(identifiantTest())
+  await page.getByLabel('Mot de passe choisi').fill(`Test-${crypto.randomUUID()}`)
+  await page.getByLabel('Prénom').fill('ZZ-E2E')
+  await page.getByLabel('Nom', { exact: true }).fill(`${PREFIXE_FICHE}antenne-forgee`)
+
+  // `antenne_id` est une clé étrangère `on delete restrict` alimentée par un
+  // `<select>` PUBLIC : rien n'empêche un visiteur d'y poster autre chose que les
+  // options proposées. On injecte donc une option qui n'existe pas en base.
+  const idInexistant = crypto.randomUUID()
+  await page.evaluate((valeur) => {
+    const select = document.querySelector<HTMLSelectElement>('select[name="antenneId"]')!
+    const option = document.createElement('option')
+    option.value = valeur
+    option.textContent = 'Antenne forgée'
+    select.append(option)
+    select.value = valeur
+  }, idInexistant)
+
+  await page.getByRole('button', { name: "S'inscrire" }).click()
+  expect(await messageRefus(page)).toContain("L'antenne choisie")
+
+  // LE POINT DU TEST : le token n'a PAS été brûlé pour une saisie que nous
+  // pouvions refuser d'avance. La validation a lieu avant la consommation.
+  const { data: token } = await admin
+    .from('tokens_inscription')
+    .select('utilise_le')
+    .eq('code_hash', codeHash)
+    .single()
+  expect(token?.utilise_le).toBeNull()
+
+  // Et aucun compte n'a été créé.
+  expect(await compterComptes()).toBe(comptesAvant)
 })
