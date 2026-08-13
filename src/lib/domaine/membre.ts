@@ -84,3 +84,35 @@ export function normaliserFicheMembre(brut: Record<string, unknown>): FicheMembr
     reportInitialAel,
   }
 }
+
+/** Lit une fiche membre depuis un FormData de formulaire, avant normalisation. */
+export function ficheMembreDepuisFormData(donnees: FormData): FicheMembre {
+  return normaliserFicheMembre({
+    nom: donnees.get('nom'),
+    prenom: donnees.get('prenom'),
+    telephone: donnees.get('telephone'),
+    emailContact: donnees.get('emailContact'),
+    ville: donnees.get('ville'),
+    pays: donnees.get('pays'),
+    antenneId: donnees.get('antenneId'),
+    situation: donnees.get('situation'),
+    domaineEtude: donnees.get('domaineEtude'),
+    reportInitialAel: donnees.get('reportInitialAel'),
+  })
+}
+
+/** Traduit une `FicheMembre` normalisée en colonnes `snake_case` pour Supabase. */
+export function ficheMembreVersColonnes(fiche: FicheMembre): Record<string, unknown> {
+  return {
+    nom: fiche.nom,
+    prenom: fiche.prenom,
+    telephone: fiche.telephone,
+    email_contact: fiche.emailContact,
+    ville: fiche.ville,
+    pays: fiche.pays,
+    antenne_id: fiche.antenneId,
+    situation: fiche.situation,
+    domaine_etude: fiche.domaineEtude,
+    report_initial_ael: fiche.reportInitialAel,
+  }
+}
