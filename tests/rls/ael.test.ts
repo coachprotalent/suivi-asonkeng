@@ -408,3 +408,172 @@ describe('seances_ael, seances_ael_antennes, presences_ael', () => {
     await admin.from('seances_ael').delete().in('id', [premiere!.id, seconde!.id])
   })
 })
+
+describe('déclencheur de complétude (D37)', () => {
+  it('refuse une insertion directement à `tenue` sans thème ni enseignant', async () => {
+    const { error } = await admin.from('seances_ael').insert({ date: '2026-09-29', etat: 'tenue' })
+    expect(error).not.toBeNull()
+    expect(error!.details).toBe('seance_sans_theme')
+  })
+
+  it('refuse un thème présent mais un enseignant absent, avec un marqueur distinct', async () => {
+    const { error } = await admin
+      .from('seances_ael')
+      .insert({ date: '2026-09-29', etat: 'tenue', theme: 'Un thème' })
+    expect(error).not.toBeNull()
+    expect(error!.details).toBe('seance_sans_enseignant')
+  })
+
+  it('refuse la TRANSITION vers `tenue` sur une séance existante incomplète', async () => {
+    const { data: seance, error: erreurCreation } = await admin
+      .from('seances_ael')
+      .insert({ date: '2026-09-29' })
+      .select('id')
+      .single()
+    expect(erreurCreation).toBeNull()
+
+    const { error } = await admin
+      .from('seances_ael')
+      .update({ etat: 'tenue' })
+      .eq('id', seance!.id)
+    expect(error).not.toBeNull()
+    expect(error!.details).toBe('seance_sans_theme')
+
+    await admin.from('seances_ael').delete().eq('id', seance!.id)
+  })
+
+  it("n'agit jamais sur le sens retour, même sur une séance qui redeviendrait incomplète", async () => {
+    const { data: membre, error: erreurMembre } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE}-enseignant`, prenom: 'Test' })
+      .select('id')
+      .single()
+    // Sans ce contrôle, une création échouée produirait un `TypeError` opaque sur
+    // `membre!.id` deux lignes plus bas, au lieu de nommer sa cause.
+    if (erreurMembre || !membre) throw new Error(`création du membre impossible : ${erreurMembre?.message}`)
+
+    const { data: seance, error: erreurCreation } = await admin
+      .from('seances_ael')
+      .insert({ date: '2026-09-29', theme: 'Un thème', enseignant_membre_id: membre!.id, etat: 'tenue' })
+      .select('id')
+      .single()
+    expect(erreurCreation).toBeNull()
+
+    // Repasser à `prevue` doit réussir MÊME si, dans le même mouvement, on efface le
+    // thème : le sens retour n'est jamais surveillé par ce déclencheur (D49).
+    const { error: erreurRetour } = await admin
+      .from('seances_ael')
+      .update({ etat: 'prevue', theme: null })
+      .eq('id', seance!.id)
+    expect(erreurRetour).toBeNull()
+
+    // CONTRÔLE POSITIF, dans le MÊME test : redemander `tenue` sur cette même séance,
+    // désormais sans thème, doit à nouveau être refusé — sans lui, le succès ci-dessus
+    // pourrait aussi bien signifier « le déclencheur est cassé pour de bon », pas
+    // « il ne surveille que le sens vers tenue ».
+    const { error: erreurRetenter } = await admin
+      .from('seances_ael')
+      .update({ etat: 'tenue' })
+      .eq('id', seance!.id)
+    expect(erreurRetenter).not.toBeNull()
+    expect(erreurRetenter!.details).toBe('seance_sans_theme')
+
+    await admin.from('seances_ael').delete().eq('id', seance!.id)
+    await admin.from('membres').delete().eq('id', membre!.id)
+  })
+
+  it('laisse tenir une séance complète, avec enseignant libre', async () => {
+    const { data: seance, error } = await admin
+      .from('seances_ael')
+      .insert({
+        date: '2026-09-29',
+        etat: 'tenue',
+        theme: 'Un thème',
+        enseignant_libre: 'Un intervenant extérieur',
+      })
+      .select('id')
+      .single()
+    expect(error).toBeNull()
+    await admin.from('seances_ael').delete().eq('id', seance!.id)
+  })
+
+  it("supprimer l'enseignant d'une séance TENUE échoue malgré le `on delete set null`, avec contrôle positif", async () => {
+    // `seances_ael.enseignant_membre_id ... on delete set null` (Task 7) ne raconte pas
+    // toute l'histoire : la mise à null est un UPDATE, donc CE déclencheur s'exécute.
+    // Pour une séance déjà `tenue` sans `enseignant_libre`, l'état résultant serait
+    // « tenue sans enseignant » et la suppression du membre est REFUSÉE. Ce test rend
+    // ce comportement explicite et le verrouille : sans lui, un futur `nettoyer()` qui
+    // supprimerait les membres avant les séances échouerait sur un message français
+    // incompréhensible, que la règle n°8 du projet interdit précisément de discriminer.
+    const { data: enseignantTenue, error: erreurEnseignantTenue } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE}-enseignant-suppression-tenue`, prenom: 'Test' })
+      .select('id')
+      .single()
+    if (erreurEnseignantTenue || !enseignantTenue) {
+      throw new Error(`création du membre impossible : ${erreurEnseignantTenue?.message}`)
+    }
+
+    const { data: seanceTenue, error: erreurSeanceTenue } = await admin
+      .from('seances_ael')
+      .insert({
+        date: '2026-09-30',
+        etat: 'tenue',
+        theme: 'Un thème',
+        enseignant_membre_id: enseignantTenue.id,
+      })
+      .select('id')
+      .single()
+    expect(erreurSeanceTenue).toBeNull()
+
+    const { error: erreurSuppression } = await admin
+      .from('membres')
+      .delete()
+      .eq('id', enseignantTenue.id)
+    expect(erreurSuppression).not.toBeNull()
+    // Marqueur posé par `using detail`, jamais le texte français du message (règle n°8).
+    expect(erreurSuppression!.details).toBe('seance_sans_enseignant')
+
+    // Le membre est TOUJOURS là : le refus n'est pas seulement une erreur rapportée.
+    const { data: toujoursLa } = await admin.from('membres').select('id').eq('id', enseignantTenue.id)
+    expect(toujoursLa).toHaveLength(1)
+
+    // CONTRÔLE POSITIF, dans le MÊME test : le même geste sur une séance PRÉVUE réussit,
+    // et `on delete set null` y joue normalement. Sans lui, le refus ci-dessus pourrait
+    // aussi bien signifier « un membre référencé par une séance n'est jamais
+    // supprimable », ce qui serait une tout autre règle.
+    const { data: enseignantPrevue, error: erreurEnseignantPrevue } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE}-enseignant-suppression-prevue`, prenom: 'Test' })
+      .select('id')
+      .single()
+    if (erreurEnseignantPrevue || !enseignantPrevue) {
+      throw new Error(`création du membre impossible : ${erreurEnseignantPrevue?.message}`)
+    }
+
+    const { data: seancePrevue, error: erreurSeancePrevue } = await admin
+      .from('seances_ael')
+      .insert({ date: '2026-09-30', enseignant_membre_id: enseignantPrevue.id })
+      .select('id')
+      .single()
+    expect(erreurSeancePrevue).toBeNull()
+
+    const { error: erreurSuppressionPrevue } = await admin
+      .from('membres')
+      .delete()
+      .eq('id', enseignantPrevue.id)
+    expect(erreurSuppressionPrevue).toBeNull()
+
+    const { data: apresSuppression } = await admin
+      .from('seances_ael')
+      .select('enseignant_membre_id')
+      .eq('id', seancePrevue!.id)
+      .single()
+    expect(apresSuppression?.enseignant_membre_id).toBeNull()
+
+    // Nettoyage : LA SÉANCE TENUE D'ABORD, son enseignant ensuite — l'ordre inverse
+    // rejouerait le refus qu'on vient de prouver.
+    await admin.from('seances_ael').delete().in('id', [seanceTenue!.id, seancePrevue!.id])
+    await admin.from('membres').delete().eq('id', enseignantTenue.id)
+  })
+})
