@@ -43,6 +43,11 @@ export default async function PageTableauDeBord() {
             Gérer les comptes
           </Link>
         ) : null}
+        {estAdmin ? (
+          <Link href="/tokens" className="underline underline-offset-4">
+            Générer des tokens d&apos;inscription
+          </Link>
+        ) : null}
       </div>
     </main>
   )
