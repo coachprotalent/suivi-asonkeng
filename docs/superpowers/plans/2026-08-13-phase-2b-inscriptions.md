@@ -1337,7 +1337,7 @@ git commit -m "refactor: extraire le tirage de chaine lisible, partage entre mot
   `hacherCodeInscription(code: string): string`.
 
 **Longueur (D38).** Le design exige « au moins 16 caractères ». 20 caractères de
-`ALPHABET_LISIBLE` (57 symboles) portent environ 117 bits d'entropie — largement
+`ALPHABET_LISIBLE` (56 symboles) portent environ 116,15 bits d'entropie — largement
 assez pour rendre l'essai exhaustif inopérant face au plafond de 10 tentatives par
 15 minutes (D36), avec une marge confortable sur le minimum imposé.
 
@@ -1424,7 +1424,7 @@ import { tirerChaineLisible } from './tirage'
 
 /**
  * D38 : au moins 16 caractères de ALPHABET_LISIBLE. 20 caractères portent environ
- * 117 bits d'entropie — voir le commentaire de la Task 7 du plan pour le calcul.
+ * 116,15 bits d'entropie — voir le commentaire de la Task 7 du plan pour le calcul.
  */
 export const LONGUEUR_CODE_TOKEN = 20
 

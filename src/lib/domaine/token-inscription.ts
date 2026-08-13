@@ -3,7 +3,7 @@ import { tirerChaineLisible } from './tirage'
 
 /**
  * D38 : au moins 16 caractères de ALPHABET_LISIBLE. 20 caractères portent environ
- * 117 bits d'entropie — voir le commentaire de la Task 7 du plan pour le calcul.
+ * 116,15 bits d'entropie — voir le commentaire de la Task 7 du plan pour le calcul.
  */
 export const LONGUEUR_CODE_TOKEN = 20
 
