@@ -577,3 +577,120 @@ describe('déclencheur de complétude (D37)', () => {
     await admin.from('membres').delete().eq('id', enseignantTenue.id)
   })
 })
+
+describe('vue compteurs_ael (D4, D44, D48)', () => {
+  let idMembreCompteur: string
+  let idEnseignant: string
+  let idSeanceTenuePresent: string
+  let idSeanceTenueAbsent: string
+  let idSeancePrevue: string
+
+  beforeAll(async () => {
+    const { data: membre, error: erreurMembre } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE}-compteur`, prenom: 'Test', report_initial_ael: 5 })
+      .select('id')
+      .single()
+    if (erreurMembre || !membre) throw new Error(`création du membre impossible : ${erreurMembre?.message}`)
+    idMembreCompteur = membre.id as string
+
+    const { data: enseignant, error: erreurEnseignant } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE}-enseignant-compteur`, prenom: 'Test' })
+      .select('id')
+      .single()
+    if (erreurEnseignant || !enseignant) throw new Error(`création de l'enseignant impossible : ${erreurEnseignant?.message}`)
+    idEnseignant = enseignant.id as string
+
+    // Les trois lignes portent CHACUNE leur `etat` explicitement. Un lot hétérogène —
+    // `etat` présent sur certaines lignes, absent sur d'autres — fait PostgREST insérer
+    // NULL (jamais le défaut de colonne 'prevue') pour la ligne qui l'omet ; le
+    // déclencheur de complétude (Task 8) compare `new.etat <> 'tenue'`, qui ne
+    // court-circuite PAS sur NULL, et refuse alors la ligne comme si elle visait
+    // 'tenue' — constaté en pratique (erreur seance_sans_theme) avant cette correction.
+    const { data: seances, error: erreurSeances } = await admin
+      .from('seances_ael')
+      .insert([
+        { date: '2026-09-01', etat: 'tenue', theme: 'T1', enseignant_membre_id: idEnseignant },
+        { date: '2026-09-02', etat: 'tenue', theme: 'T2', enseignant_membre_id: idEnseignant },
+        { date: '2026-09-03', etat: 'prevue' },
+      ])
+      .select('id, date')
+    if (erreurSeances || !seances) throw new Error(`création des séances impossible : ${erreurSeances?.message}`)
+    idSeanceTenuePresent = seances.find((s) => s.date === '2026-09-01')!.id as string
+    idSeanceTenueAbsent = seances.find((s) => s.date === '2026-09-02')!.id as string
+    idSeancePrevue = seances.find((s) => s.date === '2026-09-03')!.id as string
+
+    const { error: erreurPresences } = await admin.from('presences_ael').insert([
+      { seance_id: idSeanceTenuePresent, membre_id: idMembreCompteur, present: true },
+      { seance_id: idSeanceTenueAbsent, membre_id: idMembreCompteur, present: false },
+      { seance_id: idSeancePrevue, membre_id: idMembreCompteur, present: true },
+    ])
+    if (erreurPresences) throw new Error(`création des présences impossible : ${erreurPresences.message}`)
+  })
+
+  afterAll(async () => {
+    await admin.from('presences_ael').delete().eq('membre_id', idMembreCompteur)
+    await admin.from('seances_ael').delete().in('id', [idSeanceTenuePresent, idSeanceTenueAbsent, idSeancePrevue])
+    await admin.from('membres').delete().in('id', [idMembreCompteur, idEnseignant])
+  })
+
+  it('CONTRÔLE POSITIF : les trois présences ont bien été écrites', async () => {
+    const { data } = await admin.from('presences_ael').select('seance_id, present').eq('membre_id', idMembreCompteur)
+    expect(data).toHaveLength(3)
+  })
+
+  it("le total = report initial + présences vraies sur des séances TENUES, rien d'autre", async () => {
+    const { data, error } = await clientSimple
+      .from('compteurs_ael')
+      .select('total')
+      .eq('membre_id', idMembreCompteur)
+      .single()
+    expect(error).toBeNull()
+    // 5 (report) + 1 (idSeanceTenuePresent, present=true, tenue) — pas idSeanceTenueAbsent
+    // (present=false) ni idSeancePrevue (present=true mais séance non tenue).
+    expect(data?.total).toBe(6)
+  })
+
+  it("après archivage, un compte ordinaire ne voit plus de LIGNE — pas un chiffre faux", async () => {
+    await admin.from('membres').update({ etat: 'archive' }).eq('id', idMembreCompteur)
+    try {
+      const { data, error } = await clientSimple
+        .from('compteurs_ael')
+        .select('total')
+        .eq('membre_id', idMembreCompteur)
+        .maybeSingle()
+      expect(error).toBeNull()
+      expect(data).toBeNull()
+
+      // Contrôle positif via la clé de service (contourne la RLS, ne prouve donc pas
+      // qu'un VRAI compte administrateur voit la ligne — voir la Task 19 pour cette
+      // preuve complète) : le total lu reste EXACTEMENT le même qu'avant l'archivage.
+      // La vue ne recalcule rien à partir de l'état courant du membre (D48).
+      const { data: viaAdmin, error: erreurAdmin } = await admin
+        .from('compteurs_ael')
+        .select('total')
+        .eq('membre_id', idMembreCompteur)
+        .single()
+      expect(erreurAdmin).toBeNull()
+      expect(viaAdmin?.total).toBe(6)
+    } finally {
+      await admin.from('membres').update({ etat: 'actif' }).eq('id', idMembreCompteur)
+    }
+  })
+
+  it("un compte actif ne peut pas écrire dans compteurs_ael (ce n'est pas une table)", async () => {
+    const { error } = await clientSimple.from('compteurs_ael').insert({ membre_id: idMembreCompteur, total: 999 })
+    expect(error).not.toBeNull()
+    // Vérifié contre la base réelle, CONTRE l'hypothèse du brief : ce n'est PAS un refus
+    // de privilège (42501). `compteurs_ael` contient un `group by`, donc Postgres la
+    // tient pour non automatiquement modifiable et refuse TOUTE écriture avant même de
+    // consulter les droits — code 55000, message « cannot insert into view ». Le
+    // `revoke all` / `grant select` de la migration reste une défense en profondeur
+    // légitime, mais ce n'est pas lui qui bloque CETTE insertion précise. Sans ce code,
+    // une faute de frappe dans le nom de la vue validerait ce test aussi bien qu'un
+    // refus réel.
+    expect(error!.code).toBe('55000')
+  })
+})
+
