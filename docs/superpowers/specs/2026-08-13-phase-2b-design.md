@@ -194,11 +194,12 @@ phase, faute de table portant la notion de demandeur. Une nouvelle migration add
 (`drop policy` + `create policy` sur `public.membres`, dans un fichier neuf — l'additivité du
 projet porte sur les fichiers de migration, pas sur l'immuabilité de chaque politique)
 introduit une fonction `prive.est_demandeur_de(p_membre_id uuid)`, `SECURITY DEFINER`, qui lit
-`demandes_membre` en s'affranchissant de sa propre RLS — même mécanisme et même raison que
-`prive.est_admin()` : une politique sur `membres` qui lirait `demandes_membre` sous RLS n'a pas
-de risque de récursion direct, mais la lirait avec les privilèges de l'appelant, qui n'a par
-construction pas encore le droit d'y accéder tant que la politique de `membres` n'a pas statué.
-`SECURITY DEFINER` casse cette dépendance circulaire.
+`demandes_membre` en s'affranchissant de sa propre RLS — même mécanisme que `prive.est_admin()`,
+mais pour une autre raison : l'appelant a déjà, via `demandes_membre_lecture`, le droit de lire
+ses propres lignes de `demandes_membre` (`demandeur_profil_id = auth.uid()`), donc
+`SECURITY DEFINER` ne contourne aucun refus présent. Son rôle est de découpler `membres_lecture`
+du sort futur de la RLS de `demandes_membre` : une politique sur `membres` ne doit pas dépendre
+de ce qu'une politique d'une autre table autorise à l'instant T.
 
 Toutes les écritures — génération et révocation de token, consommation, création et traitement
 de demande, création et lecture des notifications — passent par des Server Actions avec la clé
