@@ -348,3 +348,105 @@ describe('annuler_demande_membre', () => {
     expect(error?.code).toBe('42501')
   })
 })
+
+describe('valider_demande_rattachement (D26)', () => {
+  async function creerAutoInscription() {
+    const { data: fiche, error: erreurFiche } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE_MEMBRE}-jetable`, prenom: 'Test', etat: 'en_attente' })
+      .select('id')
+      .single()
+    if (erreurFiche || !fiche) throw new Error(`création de la fiche jetable impossible : ${erreurFiche?.message}`)
+
+    const { data: demande, error: erreurDemande } = await admin
+      .from('demandes_membre')
+      .insert({ origine: 'auto_inscription', demandeur_profil_id: idDemandeurA, membre_id: fiche.id, etat: 'en_attente' })
+      .select('id')
+      .single()
+    if (erreurDemande || !demande) throw new Error(`création de la demande impossible : ${erreurDemande?.message}`)
+
+    return { ficheJetableId: fiche.id as string, demandeId: demande.id as string }
+  }
+
+  it('rattache le compte, repointe la demande, ET supprime réellement la fiche jetable', async () => {
+    const { ficheJetableId, demandeId } = await creerAutoInscription()
+    const { data: ficheExistante, error: erreurExistante } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE_MEMBRE}-existante`, prenom: 'Test' })
+      .select('id')
+      .single()
+    if (erreurExistante || !ficheExistante) throw new Error(`création de la fiche existante impossible`)
+
+    const { error } = await admin.rpc('valider_demande_rattachement', {
+      p_demande: demandeId,
+      p_membre_existant: ficheExistante.id,
+      p_admin: idAdmin,
+    })
+    expect(error).toBeNull()
+
+    const { data: demandeRelue } = await admin
+      .from('demandes_membre')
+      .select('etat, membre_id')
+      .eq('id', demandeId)
+      .single()
+    expect(demandeRelue?.etat).toBe('validee')
+    expect(demandeRelue?.membre_id).toBe(ficheExistante.id)
+
+    const { data: profilRelu } = await admin.from('profils').select('membre_id').eq('id', idDemandeurA).single()
+    expect(profilRelu?.membre_id).toBe(ficheExistante.id)
+
+    // La fiche jetable a RÉELLEMENT disparu de la base — pas seulement « l'appel
+    // n'a pas levé d'erreur » (design 2b §10).
+    const { data: ficheJetableRelue } = await admin.from('membres').select('id').eq('id', ficheJetableId)
+    expect(ficheJetableRelue).toHaveLength(0)
+
+    // Rétablir profils.membre_id à NULL : les tests suivants du fichier ne
+    // s'attendent pas à un demandeur déjà lié.
+    await admin.from('profils').update({ membre_id: null }).eq('id', idDemandeurA)
+  })
+
+  it("refuse une demande d'origine demande_suivi (le rattachement n'est proposé que pour auto_inscription)", async () => {
+    const { demandeId } = await (async () => {
+      const { data: fiche } = await admin
+        .from('membres')
+        .insert({ nom: `${PREFIXE_MEMBRE}-suivi`, prenom: 'Test', etat: 'en_attente' })
+        .select('id')
+        .single()
+      const { data: demande } = await admin
+        .from('demandes_membre')
+        .insert({ origine: 'demande_suivi', demandeur_profil_id: idDemandeurA, membre_id: fiche!.id, etat: 'en_attente' })
+        .select('id')
+        .single()
+      return { demandeId: demande!.id as string }
+    })()
+
+    const { error } = await admin.rpc('valider_demande_rattachement', {
+      p_demande: demandeId,
+      p_membre_existant: idMembreA,
+      p_admin: idAdmin,
+    })
+    expect(error).not.toBeNull()
+    expect(error?.details).toBe('demande_non_validable')
+  })
+
+  it('refuse une fiche existante inconnue, avec un marqueur stable', async () => {
+    const { demandeId } = await creerAutoInscription()
+    const { error } = await admin.rpc('valider_demande_rattachement', {
+      p_demande: demandeId,
+      p_membre_existant: '00000000-0000-0000-0000-000000000000',
+      p_admin: idAdmin,
+    })
+    expect(error).not.toBeNull()
+    expect(error?.details).toBe('membre_inconnu')
+  })
+
+  it('refuse son exécution à un compte authentifié ordinaire (42501)', async () => {
+    const { error } = await clientDemandeurA.rpc('valider_demande_rattachement', {
+      p_demande: idDemandeA,
+      p_membre_existant: idMembreA,
+      p_admin: idAdmin,
+    })
+    expect(error).not.toBeNull()
+    expect(error?.code).toBe('42501')
+  })
+})
