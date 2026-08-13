@@ -128,7 +128,14 @@ describe('politique tokens_inscription_lecture', () => {
 
   it('interdit toute lecture au rôle anon', async () => {
     const { data, error } = await anon.from('tokens_inscription').select('id')
+
+    // Vérifier l'erreur, et pas seulement l'absence de données. `data` vaut `null`
+    // pour n'importe quelle panne — table renommée, réseau coupé, mauvais projet —
+    // et une assertion qui se contenterait de `data` resterait verte alors que la
+    // sécurité serait cassée. Le code `42501` est le refus de privilège Postgres :
+    // le rôle anonyme n'a aucun droit de lecture, le refus tombe même avant la RLS.
     expect(error).not.toBeNull()
+    expect(error!.code).toBe('42501')
     expect(data).toBeNull()
   })
 })
