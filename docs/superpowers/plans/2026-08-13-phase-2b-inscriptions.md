@@ -107,7 +107,7 @@ du 2026-08-14) :
 | `supabase/migrations/20260815140000_membres_lecture_demandeur.sql` | `prive.est_demandeur_de`, amendement de `membres_lecture` |
 | `supabase/migrations/20260815150000_consommation_token_inscription.sql` | `consommer_token_inscription`, `relacher_token_inscription` |
 | `supabase/migrations/20260815200000_annulation_demande_membre.sql` | `annuler_demande_membre` |
-| `supabase/migrations/20260815170000_validation_rattachement_demande.sql` | `valider_demande_rattachement` |
+| `supabase/migrations/20260815210000_validation_rattachement_demande.sql` | `valider_demande_rattachement` |
 
 **Domaine** (fonctions pures, sans accès réseau ni base) :
 
@@ -2204,7 +2204,7 @@ git commit -m "feat: annuler une demande de suivi de facon atomique (D40 D42)"
 ### Task 10 : validation par rattachement à une fiche existante (D26)
 
 **Fichiers :**
-- Créer : `supabase/migrations/20260815170000_validation_rattachement_demande.sql`
+- Créer : `supabase/migrations/20260815210000_validation_rattachement_demande.sql`
 - Modifier : `tests/rls/demandes-membre.test.ts` (ajout d'un bloc)
 
 **Interfaces :**
@@ -2224,7 +2224,7 @@ ne casse jamais et l'historique de la demande reste lisible après coup.
 
 - [ ] **Étape 1 : écrire la migration**
 
-Créer `supabase/migrations/20260815170000_validation_rattachement_demande.sql` :
+Créer `supabase/migrations/20260815210000_validation_rattachement_demande.sql` :
 
 ```sql
 -- Validation par rattachement à une fiche existante (D26, design 2b §7.3). Un des
@@ -2422,7 +2422,7 @@ npx tsc --noEmit && npm run lint && npm test && npm run test:rls && npm run test
 ```
 
 ```bash
-git add supabase/migrations/20260815170000_validation_rattachement_demande.sql tests/rls/demandes-membre.test.ts
+git add supabase/migrations/20260815210000_validation_rattachement_demande.sql tests/rls/demandes-membre.test.ts
 git commit -m "feat: valider une auto-inscription par rattachement a une fiche existante (D26)"
 ```
 

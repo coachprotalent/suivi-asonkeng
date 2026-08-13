@@ -284,8 +284,12 @@ describe('annuler_demande_membre', () => {
 
     // Un test qui ne vérifierait que l'un des deux effets ne prouverait pas
     // l'atomicité, seulement qu'une moitié a eu lieu.
-    const { data: demandeRelue } = await admin.from('demandes_membre').select('etat').eq('id', demandeId).single()
+    const { data: demandeRelue } = await admin.from('demandes_membre').select('etat, membre_id').eq('id', demandeId).single()
     expect(demandeRelue?.etat).toBe('annulee')
+    // Mineur (revue) : le commentaire de la migration promet que membre_id passe
+    // à NULL (on delete set null, la fiche venant d'être supprimée) — jamais
+    // assere jusqu'ici.
+    expect(demandeRelue?.membre_id).toBeNull()
 
     const { data: ficheRelue } = await admin.from('membres').select('id').eq('id', ficheId)
     expect(ficheRelue).toHaveLength(0)
@@ -370,8 +374,15 @@ describe('annuler_demande_membre', () => {
     expect(ficheEncore?.[0]?.etat).toBe('archive')
   })
 
-  it('marque lues les notifications nouvelle_demande liées à cette demande (D41), et PAS une notification sans rapport (I3, revue)', async () => {
+  it('marque lues les notifications nouvelle_demande de CETTE demande (D41), et PAS celles d\'une AUTRE demande distincte (sélectivité, I4b/revue)', async () => {
+    // Preuve de SÉLECTIVITÉ demandée explicitement par la revue (même piège que
+    // I3, sous un autre visage) : deux demandes DISTINCTES, chacune sa propre
+    // notification nouvelle_demande corrélée par demande_id. Une seule
+    // notification en base ne distinguerait pas « le filtre agit » de « il n'y
+    // avait rien d'autre à filtrer ».
     const { demandeId } = await creerDemandeEtFiche(idDemandeurA)
+    const { demandeId: autreDemandeId } = await creerDemandeEtFiche(idDemandeurB)
+
     const { data: notif, error: erreurNotif } = await admin
       .from('notifications')
       .insert({
@@ -380,30 +391,26 @@ describe('annuler_demande_membre', () => {
         titre: 'Test',
         corps: 'Corps de test',
         lien: '/demandes',
+        demande_id: demandeId,
       })
       .select('id')
       .single()
     if (erreurNotif || !notif) throw new Error(`création de la notification impossible : ${erreurNotif?.message}`)
 
-    // CONTRÔLE NÉGATIF (I3, revue) : une seconde notification, non liée à cette
-    // demande (lien différent), doit rester NON lue. Sans elle, un test qui ne
-    // constaterait que le marquage de la première ne distinguerait pas « le
-    // filtre agit » de « il n'y avait rien à filtrer » — si la clause `and lien
-    // = ...` sautait, la fonction marquerait lues TOUTES les nouvelle_demande de
-    // la base, et ce test resterait vert sans cette seconde ligne.
-    const { data: notifSansRapport, error: erreurNotifSansRapport } = await admin
+    const { data: notifAutreDemande, error: erreurNotifAutre } = await admin
       .from('notifications')
       .insert({
         profil_id: idAdmin,
         type: 'nouvelle_demande',
-        titre: 'Test sans rapport',
+        titre: 'Autre demande',
         corps: 'Ne doit pas être touchée',
-        lien: '/autre-chose',
+        lien: '/demandes',
+        demande_id: autreDemandeId,
       })
       .select('id')
       .single()
-    if (erreurNotifSansRapport || !notifSansRapport) {
-      throw new Error(`création de la notification sans rapport impossible : ${erreurNotifSansRapport?.message}`)
+    if (erreurNotifAutre || !notifAutreDemande) {
+      throw new Error(`création de la notification de l'autre demande impossible : ${erreurNotifAutre?.message}`)
     }
 
     await admin.rpc('annuler_demande_membre', { p_demande: demandeId, p_demandeur: idDemandeurA })
@@ -411,12 +418,15 @@ describe('annuler_demande_membre', () => {
     const { data: notifRelue } = await admin.from('notifications').select('lu_le').eq('id', notif.id).single()
     expect(notifRelue?.lu_le).not.toBeNull()
 
-    const { data: notifSansRapportRelue } = await admin
+    // SÉLECTIVITÉ : la notification de l'AUTRE demande reste non lue, malgré le
+    // même lien de navigation ('/demandes') sur les deux — seul demande_id les
+    // distingue désormais.
+    const { data: notifAutreDemandeRelue } = await admin
       .from('notifications')
       .select('lu_le')
-      .eq('id', notifSansRapport.id)
+      .eq('id', notifAutreDemande.id)
       .single()
-    expect(notifSansRapportRelue?.lu_le).toBeNull()
+    expect(notifAutreDemandeRelue?.lu_le).toBeNull()
   })
 
   it('refuse son exécution à un compte authentifié ordinaire (42501)', async () => {
@@ -509,8 +519,12 @@ describe('valider_demande_rattachement (D26)', () => {
     }
   })
 
-  it('marque lues les notifications nouvelle_demande liées à cette demande (I4a, symétrie D41), et PAS une notification sans rapport', async () => {
+  it("marque lues les notifications nouvelle_demande de CETTE demande (I4a, symétrie D41), et PAS celles d'une AUTRE demande distincte (sélectivité, I4b/revue)", async () => {
+    // Même preuve de sélectivité que sur annuler_demande_membre : DEUX demandes
+    // distinctes, chacune sa notification nouvelle_demande corrélée par
+    // demande_id. Traiter la première ne doit PAS toucher celle de la seconde.
     const { demandeId } = await creerAutoInscription()
+    const { demandeId: autreDemandeId } = await creerAutoInscription()
     const { data: ficheExistante, error: erreurExistante } = await admin
       .from('membres')
       .insert({ nom: `${PREFIXE_MEMBRE}-existante-i4a`, prenom: 'Test' })
@@ -520,20 +534,32 @@ describe('valider_demande_rattachement (D26)', () => {
 
     const { data: notif, error: erreurNotif } = await admin
       .from('notifications')
-      .insert({ profil_id: idAdmin, type: 'nouvelle_demande', titre: 'Test', corps: 'Corps de test', lien: '/demandes' })
+      .insert({
+        profil_id: idAdmin,
+        type: 'nouvelle_demande',
+        titre: 'Test',
+        corps: 'Corps de test',
+        lien: '/demandes',
+        demande_id: demandeId,
+      })
       .select('id')
       .single()
     if (erreurNotif || !notif) throw new Error(`création de la notification impossible : ${erreurNotif?.message}`)
 
-    // CONTRÔLE NÉGATIF (même raisonnement que I3 sur l'annulation) : une
-    // notification sans rapport (lien différent) doit rester non lue.
-    const { data: notifSansRapport, error: erreurNotifSansRapport } = await admin
+    const { data: notifAutreDemande, error: erreurNotifAutre } = await admin
       .from('notifications')
-      .insert({ profil_id: idAdmin, type: 'nouvelle_demande', titre: 'Sans rapport', corps: 'Ne doit pas être touchée', lien: '/autre-chose' })
+      .insert({
+        profil_id: idAdmin,
+        type: 'nouvelle_demande',
+        titre: 'Autre demande',
+        corps: 'Ne doit pas être touchée',
+        lien: '/demandes',
+        demande_id: autreDemandeId,
+      })
       .select('id')
       .single()
-    if (erreurNotifSansRapport || !notifSansRapport) {
-      throw new Error(`création de la notification sans rapport impossible : ${erreurNotifSansRapport?.message}`)
+    if (erreurNotifAutre || !notifAutreDemande) {
+      throw new Error(`création de la notification de l'autre demande impossible : ${erreurNotifAutre?.message}`)
     }
 
     try {
@@ -547,12 +573,13 @@ describe('valider_demande_rattachement (D26)', () => {
       const { data: notifRelue } = await admin.from('notifications').select('lu_le').eq('id', notif.id).single()
       expect(notifRelue?.lu_le).not.toBeNull()
 
-      const { data: notifSansRapportRelue } = await admin
+      // SÉLECTIVITÉ : la notification de l'AUTRE demande reste non lue.
+      const { data: notifAutreDemandeRelue } = await admin
         .from('notifications')
         .select('lu_le')
-        .eq('id', notifSansRapport.id)
+        .eq('id', notifAutreDemande.id)
         .single()
-      expect(notifSansRapportRelue?.lu_le).toBeNull()
+      expect(notifAutreDemandeRelue?.lu_le).toBeNull()
     } finally {
       await admin.from('profils').update({ membre_id: null }).eq('id', idDemandeurA)
     }
@@ -590,6 +617,40 @@ describe('valider_demande_rattachement (D26)', () => {
     })
     expect(error).not.toBeNull()
     expect(error?.details).toBe('membre_inconnu')
+  })
+
+  // Mineur (revue) : idempotence de la validation, jamais éprouvée jusqu'ici —
+  // rien ne tombait si la conjonction `and d.etat = 'en_attente'` du SELECT
+  // disparaissait. Valider une demande déjà validée doit refuser une SECONDE
+  // fois, avec le même marqueur que les autres refus (une seule branche,
+  // I2/design : validee, rejetee et annulee sont indiscernables ici).
+  it('refuse de valider une seconde fois une demande déjà validee (idempotence, revue)', async () => {
+    const { demandeId } = await creerAutoInscription()
+    const { data: ficheExistante, error: erreurExistante } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE_MEMBRE}-existante-idempotence`, prenom: 'Test' })
+      .select('id')
+      .single()
+    if (erreurExistante || !ficheExistante) throw new Error(`création de la fiche existante impossible : ${erreurExistante?.message}`)
+
+    try {
+      const { error: erreurPremiere } = await admin.rpc('valider_demande_rattachement', {
+        p_demande: demandeId,
+        p_membre_existant: ficheExistante.id,
+        p_admin: idAdmin,
+      })
+      expect(erreurPremiere).toBeNull()
+
+      const { error: erreurSeconde } = await admin.rpc('valider_demande_rattachement', {
+        p_demande: demandeId,
+        p_membre_existant: ficheExistante.id,
+        p_admin: idAdmin,
+      })
+      expect(erreurSeconde).not.toBeNull()
+      expect(erreurSeconde?.details).toBe('demande_non_validable')
+    } finally {
+      await admin.from('profils').update({ membre_id: null }).eq('id', idDemandeurA)
+    }
   })
 
   // I5 (revue) : rien n'empêchait de rattacher une demande à SA PROPRE fiche
