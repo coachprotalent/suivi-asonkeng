@@ -99,6 +99,24 @@ avec sa propre mesure `ADMINS_REELS_ACTIFS` recalculée à l'exécution — pas 
 `comptes.test.ts`, un autre fichier, la même cause racine et la même impossibilité structurelle
 tant que le compte racine reste actif.
 
+**La phase 2b ajoute trois nouvelles cibles de mutation sur ce projet unique** (cf.
+le design de la phase 2b, §12) : le `revoke execute` de
+`consommer_token_inscription`, le seuil du plafond de tentatives (10 par 15
+minutes), et l'exception insérée dans `annuler_demande_membre` pour éprouver son
+atomicité. Chacune a été restaurée à l'identique après sa preuve, vérifiée par
+`pg_get_functiondef` — voir les tâches correspondantes du plan de la phase 2b pour
+le détail de chaque restauration.
+
+**`admin.auth.admin.listUsers()` n'est pas paginé** partout où le projet l'emploie —
+notamment `scripts/creer-compte-racine.ts`, pour vérifier qu'aucun compte
+d'authentification orphelin ne porte déjà l'email cible avant d'en créer un
+nouveau, et la quasi-totalité des suites RLS et e2e, pour retrouver un compte de
+test par identifiant. L'API rend ses résultats par page (taille par défaut de la
+librairie cliente) ; au-delà de la première page, un compte existant ne serait
+simplement pas trouvé, silencieusement. Sans conséquence tant que le nombre de
+comptes réels et de comptes de test simultanés reste sous ce seuil — à revoir si
+la base de comptes grossit.
+
 ## Phase 1a : le registre des membres
 
 La phase 1a livre le registre des membres, socle des phases suivantes :
@@ -210,12 +228,144 @@ administrateurs :
   pointant au-delà de la dernière page réelle se corrige vers cette dernière page plutôt que
   d'afficher un écran qui se contredit lui-même.
 
+## Phase 2b : tokens d'inscription, inscription publique, demandes de suivi, notifications
+
+La phase 2b ouvre l'application au-delà des comptes créés par un administrateur :
+
+- **Tokens d'inscription** (`/tokens`, réservé aux administrateurs) — génération d'un
+  token nominatif (rattaché à une fiche existante via le sélecteur de membre) ou
+  générique, avec une validité proposée à 7 jours et modifiable ; le code en clair
+  s'affiche **une seule fois**, immédiatement après la génération, jamais stocké tel
+  quel (seul son hachage SHA-256 l'est). Liste de tous les tokens avec leur état ;
+  révocation d'un token encore valide.
+- **Inscription publique** (`/inscription`) — la **première page de toute
+  l'application accessible sans session**. Formulaire unique, qui ne varie jamais
+  selon le contenu du code saisi : code, identifiant, mot de passe, nom, prénom,
+  téléphone, ville, antenne. La consommation du token est atomique (verrou de ligne
+  par `code_hash`, plafond de 10 tentatives par adresse et par fenêtre glissante de
+  15 minutes, toute tentative comptée qu'elle réussisse ou non) ; un code inconnu,
+  expiré, révoqué ou déjà utilisé produit exactement le même message, pour ne jamais
+  révéler qu'un code existe. Un token nominatif rattache automatiquement le compte
+  créé à sa fiche, en ignorant les champs de fiche soumis dans le formulaire (sécurité,
+  pas économie : une fiche existante ne doit jamais être écrasée par une saisie
+  publique non vérifiée). Un token générique crée une fiche `en_attente` et notifie
+  tous les administrateurs actifs.
+- **Demande de suivi** (`/demandes/nouvelle`, ouvert à tout compte actif) — propose une
+  personne à suivre ; crée une fiche `en_attente` et notifie tous les administrateurs
+  actifs. Le demandeur peut **annuler** sa propre demande tant qu'elle reste en
+  attente : l'annulation fait passer la demande à l'état `annulee` et supprime la
+  fiche `en_attente` **dans une transaction unique** (`annuler_demande_membre`),
+  jamais par deux écritures séparées.
+- **Écran `/demandes`** (visible de tout compte actif, la file d'attente réservée aux
+  administrateurs) — chaque compte y voit ses propres demandes, quel que soit leur
+  état. Un administrateur y traite les demandes en attente, avec deux actions selon
+  l'origine :
+  - une **auto-inscription** (token générique) se valide comme nouvelle personne
+    (la fiche `en_attente` devient `actif`, le compte y est rattaché) ou par
+    **rattachement à une fiche existante** — dans ce dernier cas, la fiche
+    `en_attente` créée à l'inscription est **supprimée** par la fonction Postgres
+    `valider_demande_rattachement`, l'un des deux seuls `delete` visant `membres`
+    posés par les fonctions Postgres de cette phase (l'autre est l'annulation
+    ci-dessus, `annuler_demande_membre`). Deux autres `.delete()` existent côté
+    application (`src/app/inscription/actions.ts`, `src/app/demandes/nouvelle/
+    actions.ts`), mais uniquement pour annuler, dans la même requête, une fiche
+    `en_attente` qui vient d'être créée quand une écriture suivante échoue avant
+    toute confirmation à l'utilisateur — une compensation d'échec technique, pas
+    un geste métier. Le rattachement refuse aussi de cibler la fiche jetable de la
+    demande elle-même (marqueur `rattachement_vers_fiche_jetable`) : un cas exclu
+    de l'interface par construction (le sélecteur de fiche existante n'y propose
+    jamais la fiche jetable de la demande en cours), donc éprouvé uniquement par
+    rejeu d'une requête altérée (`tests/e2e/demandes.spec.ts`), jamais par une
+    simple interaction UI.
+  - une **demande de suivi** se valide comme nouvelle personne uniquement : le
+    demandeur devient le faiseur de disciple, le dirigeant proposé (même calcul que
+    l'écran `/membres/[id]/arbre` de la phase 1c) est corrigeable avant validation.
+  - dans les deux cas, un rejet exige un motif et notifie le demandeur.
+- **Notifications in-app** — une cloche, dans l'en-tête de chaque page (rendue par un
+  composant serveur monté depuis `layout.tsx`, silencieuse sans session), et une page
+  « à traiter » (`/notifications`) listant les notifications du compte connecté avec
+  un bouton « marquer comme lue ». **Toujours personnelles, y compris pour un
+  administrateur** : la politique RLS de `notifications` ne laisse jamais un compte
+  lire les notifications d'un autre, sans exception de rôle — la seule table du
+  projet où « administrateur » n'élargit rien. Une notification dont l'objet vient
+  d'être traité (validé, rejeté, ou la demande annulée) est marquée lue
+  automatiquement, jamais supprimée. `notifierAdministrateurs` écrit à **tous les
+  administrateurs actifs de la base**, y compris les comptes réels de ce projet
+  (`racine`, `aubinaso`) : ces lignes ne portent aucun préfixe de test et ne
+  disparaissent que par la cascade de `demande_id` quand la demande qui les a
+  déclenchées est traitée. Quatre résidus (notifications orphelines sur des comptes
+  réels) ont été trouvés sur ces comptes pendant l'exécution de cette phase et
+  nettoyés — voir « Attention » plus bas.
+
+### Ce que la phase 2b ne livre pas, et pourquoi
+
+- **Envoi d'emails ou de SMS** — hors périmètre du projet entier ; les notifications
+  restent strictement in-app.
+- **Fusion générale de fiches** — seul le cas étroit de l'auto-inscription en double
+  est traité, par suppression d'une fiche jetable sans historique.
+- **Gel d'un token après échecs répétés** — délibérément exclu, pour ne pas offrir à
+  un tiers le moyen d'empêcher quelqu'un de s'inscrire en épuisant ses tentatives.
+- **Purge automatique de `tentatives_token_inscription`** — le projet n'a pas
+  d'infrastructure de tâche planifiée ; la table grandit sans borne, acceptable au
+  volume attendu. C'est la page publique `/inscription` elle-même qui alimente cette
+  table à chaque tentative, réussie ou non — donc n'importe quel visiteur, sans
+  authentification.
+- **Protection contre un canal de synchronisation par le temps** sur les quatre
+  branches de refus de `/inscription` — les quatre empruntent le même chemin SQL,
+  ce qui limite l'écart, mais rien ne le mesure ni ne l'égalise dans cette phase.
+
+### Exception ajoutée par la phase 2b : `/inscription` sans garde
+
+`/inscription` est la SEULE page de toute l'application qui n'appelle aucune
+fonction de `src/lib/securite/garde.ts` — documenté explicitement sur place, pour
+qu'un futur lecteur ne la lise jamais comme une régression. Sa fermeture ne repose
+sur aucun garde applicatif : elle repose entièrement sur l'absence de politique RLS
+ouverte au rôle `anon` sur les quatre tables de cette phase, et sur les privilèges
+`EXECUTE` de `consommer_token_inscription` / `relacher_token_inscription`, retirés à
+tous les rôles sauf `service_role`. `src/middleware.ts` porte la seule autre
+exception : `/inscription`, comme `/connexion`, reste atteignable sans session — ce
+middleware ne PROTÈGE rien, il rend seulement la page atteignable ; la protection
+réelle est décrite ci-dessus.
+
+Le plafond anti-force-brute de la consommation de token (10 tentatives par adresse
+et par fenêtre glissante de 15 minutes) repose, en production, sur un postulat non
+vérifiable par nos tests : que l'hébergeur (Vercel) ÉCRASE l'en-tête
+`x-forwarded-for` avec l'adresse réelle du visiteur plutôt que de relayer une valeur
+que le visiteur y aurait lui-même écrite. Ce postulat est documenté à l'endroit où
+l'adresse est lue (`adresseAppelant`, `src/app/inscription/actions.ts`). Nos tests
+l'établissent seulement en local, où `next dev` n'a aucun proxy devant lui et où la
+suite e2e injecte elle-même cet en-tête : ils prouvent que l'en-tête est lu et
+transmis, pas ce que fait l'hébergeur en production. Si ce postulat est faux, le
+hachage du code et l'entropie des tokens restent intacts, mais le plafond ne freine
+plus rien.
+
+### Exception ajoutée par la phase 2b : lecture publique des antennes
+
+`src/lib/donnees/antennes.ts#listerAntennesPubliques` emploie la clé de service
+(`clientAdmin()`) pour une simple lecture, plutôt que le client sous RLS
+(`clientServeur()`) employé par la plupart des fonctions de `src/lib/donnees/`. Elle
+n'est pas la seule à le faire pour une lecture : `src/lib/donnees/arbre.ts` en
+emploie aussi trois (design 1c, D19 : l'autorité suit l'arbre, pas la visibilité
+RLS). Elle est en revanche la SEULE à le faire pour un appel **sans aucune
+session** : les trois lectures d'`arbre.ts` s'exécutent toujours derrière un écran
+déjà authentifié, alors que le formulaire public `/inscription` n'a par construction
+aucune session pour satisfaire la politique RLS d'`antennes` (ouverte à
+`authenticated` seul). La liste rendue est fixe, déjà publique pour tout compte
+actif, et strictement indépendante du code d'inscription saisi : elle ne peut donc
+pas servir d'oracle sur la validité d'un token.
+
 ### Règle de sécurité
 
 Toute page et toute Server Action de l'application passent par `exigerProfilActif`,
 `exigerAdministrateur` ou `exigerAutoriteSur` (`src/lib/securite/garde.ts`) — c'est l'unique
 famille de points d'entrée qui vérifie la session et, le cas échéant, le rôle ou la position dans
 l'arbre ; aucun appel direct à `profilCourant` n'existe ailleurs dans le code de l'application.
+**Exception unique, ajoutée par la phase 2b** : `sInscrire` (`src/app/inscription/actions.ts`)
+n'appelle aucune de ces trois fonctions — `/inscription` s'affiche sans session, par construction,
+il n'existe littéralement aucun profil à exiger à ce stade. Voir « Exception ajoutée par la phase
+2b : `/inscription` sans garde » plus bas pour ce sur quoi repose sa fermeture, et le commentaire
+posé juste avant `exigerProfilActif` dans `garde.ts` pour que cette exception ne soit jamais lue
+comme une régression future.
 Depuis la phase 1c, la modification des statuts d'un membre n'est **plus réservée aux
 administrateurs** : elle passe par `exigerAutoriteSur`, ouverte à tout compte ayant autorité sur
 le membre visé (ancêtre dans l'arbre, ou dirigeant désigné), en plus des administrateurs. Aucune

@@ -5,6 +5,21 @@ import { cibleAutorite } from '@/lib/donnees/arbre'
 import { profilCourant, rolesDuProfil, type Profil } from '@/lib/donnees/profils'
 
 /**
+ * EXCEPTION UNIQUE DU PROJET (design phase 2b, §9) : `src/app/inscription/
+ * actions.ts` (`sInscrire`) est la SEULE Server Action de toute l'application qui
+ * n'appelle AUCUNE fonction de ce fichier. Ce n'est pas un oubli : `/inscription`
+ * s'affiche sans session, par construction — il n'existe littéralement aucun
+ * profil à exiger à ce stade. Sa fermeture ne repose sur AUCUN garde ci-dessous ;
+ * elle repose entièrement sur l'absence de politique RLS ouverte au rôle `anon`
+ * et sur les privilèges `EXECUTE` de `consommer_token_inscription` /
+ * `relacher_token_inscription`, retirés à tous les rôles sauf `service_role`
+ * (migration `20260815160000_consommation_token_inscription.sql`). Si un futur
+ * changement fait apparaître un second appel à une Server Action DEPUIS
+ * `src/app/inscription/`, sans passer par ce fichier, vérifier qu'il s'agit
+ * toujours de cette même exception documentée et non d'une régression.
+ */
+
+/**
  * Passage obligé de toute page et de toute Server Action de l'application.
  *
  * Un contrôle écrit une fois par écran finit par manquer quelque part : ce garde
