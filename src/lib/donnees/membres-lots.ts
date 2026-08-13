@@ -82,10 +82,25 @@ export const TAILLE_LOT_MEMBRES_ANTENNE = 500
  * postérieure à la borne de fin — `range(5, 2)` répond bien `PGRST103`/`416`, message
  * « Limit should be greater than or equal to zero », vérifié de la même façon) — jamais
  * un cas que cette fonction peut construire elle-même tant que `tailleLot` reste validé
- * ≥ 1 ci-dessus, mais gardé au cas où un futur appelant ou une version différente de
- * PostgREST changerait ce contrat. La traiter comme une fin de parcours normale plutôt
- * que de la laisser remonter reste le bon choix : elle ne doit jamais se faire passer
- * pour une antenne vide.
+ * ≥ 1 ci-dessus. Avec `tailleLot` dans `[1, 999]` et `debut` qui n'avance que par pas de
+ * `tailleLot` à partir de 0, cette branche est aujourd'hui MORTE en pratique : rien dans
+ * cette fonction ne peut construire la plage structurellement invalide qui la
+ * déclenche.
+ *
+ * Elle est gardée quand même, mais elle LÈVE plutôt que de traiter le cas comme une fin
+ * de parcours normale (revue task-1-4 puis ronde de correction Q6, `membres-lots.ts`
+ * ancienne version : `break`). Une justification antérieure de ce fichier affirmait le
+ * contraire — que traiter `PGRST103` comme une fin de parcours normale était le bon
+ * choix — et c'était l'envers de la vérité : si cette branche était un jour atteinte
+ * (bug de PostgREST, changement de version, appelant futur qui contournerait la
+ * validation), l'atteindre à `debut = 0` la ferait rendre `[]`, soit exactement « une
+ * antenne vide » — précisément ce que ce module existe pour ne jamais laisser passer —
+ * et l'atteindre à un `debut` ultérieur rendrait la liste accumulée jusque-là COMME
+ * COMPLÈTE, une troncature silencieuse présentée comme un résultat entier. `break`
+ * committait donc, dans le seul cas où elle sert encore de filet, exactement le défaut
+ * que cette fonction a été écrite pour rendre impossible. `throw` est cohérent avec le
+ * reste de la fonction : un échec ne doit jamais être indistinguable d'un résultat
+ * normal.
  */
 export async function membresDesAntennesParLots(
   supabase: SupabaseClient,
@@ -133,7 +148,13 @@ export async function membresDesAntennesParLots(
 
     if (error) {
       if (error.code === 'PGRST103') {
-        break
+        // Branche morte en pratique (voir le commentaire de la fonction) : gardée en
+        // défense, mais LÈVE — ne jamais traiter une plage structurellement invalide
+        // comme une fin de parcours normale, sous peine de rendre `[]` ou une liste
+        // tronquée comme si l'une ou l'autre était le résultat complet.
+        throw new Error(
+          `Lecture des membres de l'antenne impossible : plage invalide rendue par PostgREST (PGRST103) à debut=${debut}, tailleLot=${tailleLot} — ne doit normalement jamais se produire avec un tailleLot validé.`,
+        )
       }
       // Un échec ne doit pas être indistinguable d'une antenne vide : sans ceci, une
       // panne de lecture laisserait croire qu'une antenne active n'a personne rattaché.

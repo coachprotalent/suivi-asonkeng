@@ -401,8 +401,14 @@ describe('membresDesAntennesParLots : tri total malgré des homonymes exacts (I2
   it('deux homonymes exacts à cheval sur une frontière de page sont rendus une fois chacun, jamais deux fois, jamais aucun', async () => {
     // tailleLot = 1 place la frontière de page EXACTEMENT entre les deux homonymes :
     // page 1 rend la première ligne triée (par id, seul critère qui les distingue encore
-    // une fois nom et prenom à égalité), page 2 la seconde, page 3 sort par PGRST103
-    // (2 lignes, multiple exact de 1 — la même branche qu'éprouve I3 plus haut).
+    // une fois nom et prenom à égalité), page 2 la seconde. Page 3 (decalage = 2, total
+    // exact de lignes = 2) sort NORMALEMENT, sans erreur, avec un lot vide (`[]`,
+    // `0 < tailleLot`) — PAS par `PGRST103` : c'est le fait établi par I3 ci-dessus
+    // (un décalage égal au total rend `206`/page vide, jamais `416`), donc EXACTEMENT
+    // la même branche que I3 éprouve (`lot.length < tailleLot`), et non la branche
+    // `error.code === 'PGRST103'` qu'un commentaire antérieur de ce test affirmait à
+    // tort (corrigé ici, ronde de correction Q5 : l'affirmation était fausse sur les
+    // deux points et contredite par la découverte faite par I3 dans ce même commit).
     const membres = await membresDesAntennesParLots(clientSimple, [idAntenneHomonymes], 1)
     expect(membres).toHaveLength(2)
     // Assertion par ENSEMBLE d'identifiants, pas seulement par longueur : une longueur de
