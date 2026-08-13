@@ -43,6 +43,15 @@ export async function creerAntenne(
   }
 
   revalidatePath('/antennes')
+  // SANS EFFET AUJOURD'HUI, ET CONSERVÉ EXPRÈS (I2 de la revue finale de branche).
+  // `/inscription` n'est plus prérendue depuis que `<Cloche />` a été montée dans
+  // le layout racine : toute route du projet est dynamique, il n'y a donc plus
+  // rien à invalider — vérifié par construction réelle, voir l'en-tête de
+  // `src/app/inscription/page.tsx`. Cet appel est un FILET : si la cloche quittait
+  // un jour le layout, la page redeviendrait prérendue et une antenne créée
+  // n'apparaîtrait plus dans le formulaire public, silencieusement. Le coût d'un
+  // `revalidatePath` inerte est nul ; celui de ce retour ne l'est pas.
+  revalidatePath('/inscription')
   return { erreur: null }
 }
 
@@ -90,4 +99,9 @@ async function basculerAntenne(donnees: FormData, actif: boolean): Promise<void>
 
   revalidatePath('/antennes')
   revalidatePath('/membres')
+  // Même statut que dans `creerAntenne` : SANS EFFET tant que `/inscription` est
+  // dynamique (elle l'est, voir là-bas), conservé comme filet si elle redevenait
+  // prérendue. `listerAntennesPubliques` filtre sur `actif`, ces deux bascules
+  // changeraient alors bien ce que la page affiche.
+  revalidatePath('/inscription')
 }

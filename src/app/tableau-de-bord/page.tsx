@@ -28,6 +28,12 @@ export default async function PageTableauDeBord() {
         <Link href="/membres" className="underline underline-offset-4">
           Consulter l&apos;annuaire
         </Link>
+        <Link href="/demandes/nouvelle" className="underline underline-offset-4">
+          Proposer une personne à suivre
+        </Link>
+        <Link href="/demandes" className="underline underline-offset-4">
+          Voir les demandes
+        </Link>
         {estAdmin ? (
           <Link href="/antennes" className="underline underline-offset-4">
             Gérer les antennes
@@ -41,6 +47,11 @@ export default async function PageTableauDeBord() {
         {estAdmin ? (
           <Link href="/comptes" className="underline underline-offset-4">
             Gérer les comptes
+          </Link>
+        ) : null}
+        {estAdmin ? (
+          <Link href="/tokens" className="underline underline-offset-4">
+            Générer des tokens d&apos;inscription
           </Link>
         ) : null}
       </div>

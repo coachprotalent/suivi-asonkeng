@@ -20,7 +20,8 @@ npm run dev
 | `npm run dev` | Serveur de développement sur http://localhost:3000 |
 | `npm test` | Tests unitaires du domaine (rapides, sans base) |
 | `npm run test:rls` | Tests des politiques RLS contre le projet Supabase |
-| `npm run test:e2e` | Parcours de bout en bout (Playwright) |
+| `npm run test:e2e` | Parcours de bout en bout (Playwright), contre `npm run dev`, port 3000 |
+| `npm run test:e2e:prod` | Parcours contre un **build de production** (`next build` + `next start -p 3100`) |
 | `npm run amorcer:racine` | Crée le compte administrateur racine (idempotent) |
 | `npx supabase db push` | Applique les migrations en attente |
 
@@ -41,7 +42,10 @@ servent qu'aux scripts locaux et ne doivent pas être transférées sur Vercel.
 > **Pousser sur `main` déploie en production.** La liaison GitHub–Vercel est active :
 > tout `git push` sur `main` met l'application en ligne, sur le projet Supabase qui
 > sert aussi de base de production. Il n'existe aucune intégration continue pour
-> arrêter un code fautif : lancez les six suites localement avant de pousser.
+> arrêter un code fautif : lancez les six suites localement avant de pousser —
+> **plus `npm run test:e2e:prod`**, qui n'appartient à aucune des six et qui est
+> pourtant la seule preuve s'exécutant contre un build de production (voir
+> « Le message d'erreur perdu en production » ci-dessous).
 
 ## Attention
 
@@ -76,6 +80,18 @@ cinquante et un membres temporaires pour dépasser une page. Le nettoyage des co
 `test.*` orphelin qu'un comptage ultérieur retrouve. Sans conséquence tant que l'application ne
 porte pas de vraies données ; à revoir dès qu'elle en portera.
 
+**Cette limitation a longtemps eu une seconde conséquence, invisible et bien plus coûteuse pour un
+utilisateur réel, et elle est corrigée** (migration `20260815270000`). Quand une inscription
+échouait après la création du compte, `compenserInscription` supprimait la fiche, puis le compte,
+puis relâchait le token. Mais la garde de `relacher_token_inscription` (`and utilise_par_profil_id
+is null`) ne laissait passer la relâche que si la colonne était repassée à NULL — ce qui n'arrive
+que par la cascade du `deleteUser`. **Si `deleteUser` échouait, le token était perdu à jamais pour
+son destinataire**, sans erreur et sans trace, la fonction rendant `void`. La fonction rend
+désormais un **booléen** (une relâche sans effet est journalisée) et sa garde nomme le compte
+compensé : elle interdit toujours de dé-consommer le token d'un AUTRE compte, mais autorise celui
+qu'on est en train de compenser. Éprouvé par injection de faute (`deleteUser` simulé en échec, le
+compte survit, le token redevient consommable) et par un test RLS committé.
+
 **La protection du dernier administrateur (spec §7) n'est éprouvée par aucun test.** La fonction
 `prive.compter_administrateurs_actifs` compte **tous** les administrateurs actifs de la base, pas
 seulement ceux créés par un test ; le compte racine réel de ce projet en est un et il est
@@ -98,6 +114,92 @@ dernier administrateur actif** (`membres_archivage_desactive_compte`, marqueur
 avec sa propre mesure `ADMINS_REELS_ACTIFS` recalculée à l'exécution — pas la même variable que
 `comptes.test.ts`, un autre fichier, la même cause racine et la même impossibilité structurelle
 tant que le compte racine reste actif.
+
+**La phase 2b ajoute trois nouvelles cibles de mutation sur ce projet unique** (cf.
+le design de la phase 2b, §12) : le `revoke execute` de
+`consommer_token_inscription`, le seuil du plafond de tentatives (10 par 15
+minutes), et l'exception insérée dans `annuler_demande_membre` pour éprouver son
+atomicité. Chacune a été restaurée à l'identique après sa preuve, vérifiée par
+`pg_get_functiondef` — voir les tâches correspondantes du plan de la phase 2b pour
+le détail de chaque restauration.
+
+### Le message d'erreur perdu en production, et ce qu'il reste d'exposé
+
+**Découverte de la phase 2b, confirmée par l'observation et non par le raisonnement,
+et elle déborde largement cette phase.** Une exception LEVÉE (`throw`) depuis une
+Server Action, puis interceptée dans un composant client par `useTransition` +
+`try`/`catch`, **perd son message en production**. Ce n'est pas un texte générique
+de l'application qui s'y substitue : c'est **React** qui remplace l'`Error` par un
+digest interne **avant** que le `catch` du composant ne la voie. `erreur.message`
+vaut alors littéralement :
+
+```
+Minified React error #441; visit https://react.dev/errors/441 for the full message...
+```
+
+— une chaîne technique **anglaise** renvoyant vers un site externe, affichée à un
+utilisateur francophone. Même scénario, même clic, même composant :
+`npm run dev` affichait « Cette fiche est déjà rattachée à un autre compte. », le
+build de production affichait le digest. **La garde, elle, tient toujours** :
+l'écriture est bien refusée, seul le message est perdu.
+
+**Pourquoi personne ne l'avait vu : la suite e2e tourne contre `npm run dev`.**
+Aucun test du projet ne s'exécutait contre un build de production — cette classe
+entière de défauts lui était invisible par construction, et deux tests certifiaient
+même le TEXTE EXACT de messages que la production ne montre pas. D'où
+`tests/e2e-prod/` et `npm run test:e2e:prod` (build réel, servi sur le port 3100
+pour ne pas percuter la suite de développement, qui occupe le 3000).
+
+**Corrigé sur le périmètre de la phase 2b** : `src/app/demandes/actions.ts`,
+`src/app/tokens/actions.ts` et `src/app/notifications/actions.ts` **retournent**
+désormais leur refus métier (`{ erreur }`) au lieu de le lever ; les composants
+lisent la valeur retournée. `redirect()` continue de traverser — Next.js la
+reconnaît spécifiquement et ne la fait jamais passer par ce mécanisme.
+
+**CE QUI RESTE EXPOSÉ, ET QU'UN ADMINISTRATEUR VERRA AU PREMIER DÉPLOIEMENT.**
+Cinq fichiers antérieurs à la phase 2b portent encore 17 `throw`, et ils ne
+relèvent pas tous du même piège :
+
+| Fichier | `throw` | Nature |
+|---|---|---|
+| `src/app/comptes/actions.ts` | **12** | **Le même défaut C1**, réellement exposé |
+| `src/app/membres/actions.ts` | 1 | Piège distinct (ci-dessous) |
+| `src/app/membres/[id]/statuts/actions.ts` | 2 | Piège distinct |
+| `src/app/statuts/actions.ts` | 1 | Piège distinct |
+| `src/app/antennes/actions.ts` | 1 | Piège distinct |
+
+`comptes/actions.ts` est **le seul** à porter exactement le motif vulnérable : ses
+douze `throw` se répartissent entre `lierFiche` (5), `definirRoles` (4) et
+`basculerActivation` (3), et `src/app/comptes/ligne-compte.tsx` appelle ces trois
+actions depuis un `useTransition` avec `catch` + `setErreur(erreur.message)`. **Sur
+`/comptes`, en production, un administrateur qui déclenche un de ces refus lira
+`Minified React error #441` à la place du motif.** Ce n'est pas une régression de la
+phase 2b : le défaut y est présent depuis l'écriture de ce fichier, en phase 1c. La
+correction est une remédiation à part entière, laissée à une décision explicite —
+elle est **connue, mesurée, et non faite**.
+
+Les quatre autres relèvent d'un **piège distinct, plus ancien et moins grave à
+l'écran** : leurs actions sont liées à un `<form action={…}>` **nu** (vérifié :
+`antennes/page.tsx`, `membres/[id]/page.tsx`, `membres/[id]/statuts/page.tsx`).
+Une exception y part dans `src/app/error.tsx`, qui affiche un texte **statique** et
+ne lit jamais `error.message` — l'utilisateur voit un refus générique plutôt qu'un
+digest anglais avec lien externe. Leurs refus métier NOMMÉS, eux, passent par
+`redirect()` et un paramètre d'URL, et atteignent bien l'écran.
+
+**Règle à retenir pour tout nouveau code** : une Server Action **retourne** son
+refus métier ; elle ne le lève pas. Un `throw` reste acceptable pour une panne
+technique dont aucun texte n'aiderait l'utilisateur — mais jamais pour un message
+qu'on veut lui montrer.
+
+**`admin.auth.admin.listUsers()` n'est pas paginé** partout où le projet l'emploie —
+notamment `scripts/creer-compte-racine.ts`, pour vérifier qu'aucun compte
+d'authentification orphelin ne porte déjà l'email cible avant d'en créer un
+nouveau, et la quasi-totalité des suites RLS et e2e, pour retrouver un compte de
+test par identifiant. L'API rend ses résultats par page (taille par défaut de la
+librairie cliente) ; au-delà de la première page, un compte existant ne serait
+simplement pas trouvé, silencieusement. Sans conséquence tant que le nombre de
+comptes réels et de comptes de test simultanés reste sous ce seuil — à revoir si
+la base de comptes grossit.
 
 ## Phase 1a : le registre des membres
 
@@ -210,12 +312,187 @@ administrateurs :
   pointant au-delà de la dernière page réelle se corrige vers cette dernière page plutôt que
   d'afficher un écran qui se contredit lui-même.
 
+## Phase 2b : tokens d'inscription, inscription publique, demandes de suivi, notifications
+
+La phase 2b ouvre l'application au-delà des comptes créés par un administrateur :
+
+- **Tokens d'inscription** (`/tokens`, réservé aux administrateurs) — génération d'un
+  token nominatif (rattaché à une fiche existante via le sélecteur de membre) ou
+  générique, avec une validité proposée à 7 jours et modifiable ; le code en clair
+  s'affiche **une seule fois**, immédiatement après la génération, jamais stocké tel
+  quel (seul son hachage SHA-256 l'est). Liste de tous les tokens avec leur état ;
+  révocation d'un token **non encore consommé et non déjà révoqué** — `revoquerToken`
+  ne teste QUE `revoque_le` et `utilise_le`, jamais l'expiration : un token affiché
+  « Expiré » garde donc son bouton « Révoquer » et la révocation aboutit. Sans
+  conséquence (un token expiré est déjà refusé à la consommation), mais l'écran
+  suggère une distinction que le code ne fait pas.
+- **Inscription publique** (`/inscription`) — la **première page de toute
+  l'application accessible sans session**. Formulaire unique, qui ne varie jamais
+  selon le contenu du code saisi : code, identifiant, mot de passe, nom, prénom,
+  téléphone, ville, antenne. La consommation du token est atomique (verrou de ligne
+  par `code_hash`, plafond de 10 tentatives par adresse et par fenêtre glissante de
+  15 minutes, toute tentative comptée qu'elle réussisse ou non) ; un code inconnu,
+  expiré, révoqué ou déjà utilisé produit exactement le même message, pour ne jamais
+  révéler qu'un code existe. Un token nominatif rattache automatiquement le compte
+  créé à sa fiche, en ignorant les champs de fiche soumis dans le formulaire (sécurité,
+  pas économie : une fiche existante ne doit jamais être écrasée par une saisie
+  publique non vérifiée). Un token générique crée une fiche `en_attente` et notifie
+  tous les administrateurs actifs.
+- **Demande de suivi** (`/demandes/nouvelle`, ouvert à tout compte actif) — propose une
+  personne à suivre ; crée une fiche `en_attente` et notifie tous les administrateurs
+  actifs. Le demandeur peut **annuler** sa propre demande tant qu'elle reste en
+  attente : l'annulation fait passer la demande à l'état `annulee` et supprime la
+  fiche `en_attente` **dans une transaction unique** (`annuler_demande_membre`),
+  jamais par deux écritures séparées.
+- **Écran `/demandes`** (visible de tout compte actif, la file d'attente réservée aux
+  administrateurs) — chaque compte y voit ses propres demandes, quel que soit leur
+  état. Un administrateur y traite les demandes en attente, avec deux actions selon
+  l'origine :
+  - une **auto-inscription** (token générique) se valide comme nouvelle personne
+    (la fiche `en_attente` devient `actif`, le compte y est rattaché) ou par
+    **rattachement à une fiche existante** — dans ce dernier cas, la fiche
+    `en_attente` créée à l'inscription est **supprimée** par la fonction Postgres
+    `valider_demande_rattachement`, l'un des deux seuls `delete` visant `membres`
+    posés par les fonctions Postgres de cette phase (l'autre est l'annulation
+    ci-dessus, `annuler_demande_membre`). Deux autres `.delete()` existent côté
+    application (`src/app/inscription/actions.ts`, `src/app/demandes/nouvelle/
+    actions.ts`), mais uniquement pour annuler, dans la même requête, une fiche
+    `en_attente` qui vient d'être créée quand une écriture suivante échoue avant
+    toute confirmation à l'utilisateur — une compensation d'échec technique, pas
+    un geste métier. Le rattachement refuse aussi de cibler la fiche jetable de la
+    demande elle-même (marqueur `rattachement_vers_fiche_jetable`) : un cas exclu
+    de l'interface par construction (le sélecteur de fiche existante n'y propose
+    jamais la fiche jetable de la demande en cours), donc éprouvé uniquement par
+    rejeu d'une requête altérée (`tests/e2e/demandes.spec.ts`), jamais par une
+    simple interaction UI.
+  - une **demande de suivi** se valide comme nouvelle personne uniquement : le
+    demandeur devient le faiseur de disciple, le dirigeant proposé (même calcul que
+    l'écran `/membres/[id]/arbre` de la phase 1c) est corrigeable avant validation.
+  - dans les deux cas, un rejet exige un motif et notifie le demandeur.
+- **Notifications in-app** — une cloche, dans l'en-tête de chaque page (rendue par un
+  composant serveur monté depuis `layout.tsx`, silencieuse sans session), et une page
+  « à traiter » (`/notifications`) listant les notifications du compte connecté avec
+  un bouton « marquer comme lue ». **Toujours personnelles, y compris pour un
+  administrateur** : la politique RLS de `notifications` ne laisse jamais un compte
+  lire les notifications d'un autre, sans exception de rôle — la seule table du
+  projet **dotée d'une politique de lecture** où « administrateur » n'élargit rien.
+  (`tentatives_token_inscription` ne l'élargit pas davantage, mais pour une tout
+  autre raison : elle n'a AUCUNE politique et aucun `grant select`, elle est fermée
+  à tout le monde, administrateur compris.) Une notification dont l'objet vient
+  d'être traité (validé, rejeté, ou la demande annulée) est marquée lue
+  automatiquement, jamais supprimée. `notifierAdministrateurs` écrit à **tous les
+  administrateurs actifs de la base**, y compris les comptes réels de ce projet
+  (`racine`, `aubinaso`) : ces lignes ne portent aucun préfixe de test et ne
+  disparaissent que par la cascade de `demande_id` quand la demande qui les a
+  déclenchées est traitée. Quatre résidus (notifications orphelines sur des comptes
+  réels) ont été trouvés sur ces comptes pendant l'exécution de cette phase et
+  nettoyés — voir « Attention » plus bas.
+
+### Ce que la phase 2b ne livre pas, et pourquoi
+
+- **Envoi d'emails ou de SMS** — hors périmètre du projet entier ; les notifications
+  restent strictement in-app.
+- **Fusion générale de fiches** — seul le cas étroit de l'auto-inscription en double
+  est traité, par suppression d'une fiche jetable sans historique.
+- **Gel d'un token après échecs répétés** — délibérément exclu, pour ne pas offrir à
+  un tiers le moyen d'empêcher quelqu'un de s'inscrire en épuisant ses tentatives.
+- **Purge automatique de `tentatives_token_inscription`** — le projet n'a pas
+  d'infrastructure de tâche planifiée ; la table grandit sans borne, acceptable au
+  volume attendu. C'est la page publique `/inscription` elle-même qui alimente cette
+  table à chaque tentative, réussie ou non — donc n'importe quel visiteur, sans
+  authentification.
+- **Protection contre un canal de synchronisation par le temps** sur les quatre
+  branches de refus de `/inscription` — les quatre empruntent le même chemin SQL,
+  ce qui limite l'écart, mais rien ne le mesure ni ne l'égalise dans cette phase.
+
+### Exception ajoutée par la phase 2b : `/inscription` sans garde
+
+`/inscription` est la SEULE page de toute l'application qui n'appelle aucune
+fonction de `src/lib/securite/garde.ts` — documenté explicitement sur place, pour
+qu'un futur lecteur ne la lise jamais comme une régression. Sa fermeture ne repose
+sur aucun garde applicatif : elle repose entièrement sur l'absence de politique RLS
+ouverte au rôle `anon` sur les quatre tables de cette phase, et sur les privilèges
+`EXECUTE` de `consommer_token_inscription` / `relacher_token_inscription`, retirés à
+tous les rôles sauf `service_role`. `src/middleware.ts` porte la seule autre
+exception : `/inscription`, comme `/connexion`, reste atteignable sans session — ce
+middleware ne PROTÈGE rien, il rend seulement la page atteignable ; la protection
+réelle est décrite ci-dessus.
+
+**`/inscription` est rendue DYNAMIQUEMENT, à chaque requête** — comme toutes les
+routes du projet, depuis que la cloche de notifications est montée dans le layout
+racine (elle appelle `cookies()`). Constaté par construction réelle : `next build`
+classe les 20 routes en `ƒ (Dynamic)`, et retirer `<Cloche />` du layout suffit à
+reclasser `/inscription` en `○ (Static)`. Conséquence à connaître avant d'ouvrir la
+porte : **chaque GET anonyme sur cette page exécute une lecture en base avec la clé
+de service** (`listerAntennesPubliques`). C'est modeste — quatre colonnes d'une
+petite table — et la contrepartie est réelle (la liste des antennes est toujours
+fraîche), mais c'est un levier d'amplification ouvert, sur la seule page publique.
+Le `export const revalidate = 300` qui prétendait le fermer a été retiré : il était
+inerte depuis que la cloche existe.
+
+Le plafond anti-force-brute de la consommation de token (10 tentatives par adresse
+et par fenêtre glissante de 15 minutes) repose, en production, sur un postulat non
+vérifiable par nos tests : que l'hébergeur (Vercel) ÉCRASE l'en-tête
+`x-forwarded-for` avec l'adresse réelle du visiteur plutôt que de relayer une valeur
+que le visiteur y aurait lui-même écrite. Ce postulat est documenté à l'endroit où
+l'adresse est lue (`adresseAppelant`, `src/app/inscription/actions.ts`). Nos tests
+l'établissent seulement en local, où `next dev` n'a aucun proxy devant lui et où la
+suite e2e injecte elle-même cet en-tête : ils prouvent que l'en-tête est lu et
+transmis, pas ce que fait l'hébergeur en production. Si ce postulat est faux, le
+hachage du code et l'entropie des tokens restent intacts, mais le plafond ne freine
+plus rien.
+
+### Exception ajoutée par la phase 2b : lecture publique des antennes
+
+`src/lib/donnees/antennes.ts#listerAntennesPubliques` emploie la clé de service
+(`clientAdmin()`) pour une simple lecture, plutôt que le client sous RLS
+(`clientServeur()`) employé par la plupart des fonctions de `src/lib/donnees/`. Elle
+n'est pas la seule à le faire pour une lecture : `src/lib/donnees/arbre.ts` en
+emploie aussi trois (design 1c, D19 : l'autorité suit l'arbre, pas la visibilité
+RLS). Elle est en revanche la SEULE à le faire pour un appel **sans aucune
+session** : les trois lectures d'`arbre.ts` s'exécutent toujours derrière un écran
+déjà authentifié, alors que le formulaire public `/inscription` n'a par construction
+aucune session pour satisfaire la politique RLS d'`antennes` (ouverte à
+`authenticated` seul). La liste rendue est fixe, déjà publique pour tout compte
+actif, et strictement indépendante du code d'inscription saisi : elle ne peut donc
+pas servir d'oracle sur la validité d'un token.
+
 ### Règle de sécurité
 
-Toute page et toute Server Action de l'application passent par `exigerProfilActif`,
+Toute page et toute Server Action **qui lit ou écrit des données** passe par `exigerProfilActif`,
 `exigerAdministrateur` ou `exigerAutoriteSur` (`src/lib/securite/garde.ts`) — c'est l'unique
 famille de points d'entrée qui vérifie la session et, le cas échéant, le rôle ou la position dans
-l'arbre ; aucun appel direct à `profilCourant` n'existe ailleurs dans le code de l'application.
+l'arbre.
+
+**Les exceptions, recensées contre le code et non contre l'intention** (les deux affirmations qui
+tenaient ici la place de cette liste — « aucun appel direct à `profilCourant` ailleurs » et
+« exception unique » — étaient devenues fausses ; corrigées d'après un audit des 18 `page.tsx`, des
+14 fichiers `'use server'` et de toutes les occurrences de `profilCourant`) :
+
+- **`profilCourant` est appelé directement à UN seul endroit hors de `garde.ts`** :
+  `src/app/notifications/cloche.tsx`. C'est délibéré et justifié sur place — la cloche est montée
+  par le layout racine, donc rendue aussi sur `/connexion` et `/inscription`, où exiger un profil
+  provoquerait une redirection absurde. Elle ne rend rien sans session. C'est la **seconde**
+  exception légitime à cette règle, et la seule autre.
+- **`sInscrire`** (`src/app/inscription/actions.ts`) n'appelle aucun garde : `/inscription`
+  s'affiche sans session, par construction, il n'existe littéralement aucun profil à exiger.
+  Exception ajoutée par la phase 2b, détaillée plus bas.
+- **Cinq `page.tsx` sur 18 n'appellent aucun garde**, et aucun n'expose de donnée :
+  `src/app/page.tsx` (une seule instruction, `redirect('/tableau-de-bord')`),
+  `/connexion` et `/changer-mot-de-passe` (antérieures ; la seconde est un composant client dont
+  l'action vérifie elle-même la session et le drapeau `doit_changer_mdp`),
+  `/demandes/nouvelle` (**ajoutée par la phase 2b** ; composant client pur, sans aucune lecture —
+  sa protection réelle est le middleware plus le garde de `creerDemandeSuivi`), et `/inscription`
+  (l'exception voulue).
+- **Trois Server Actions appellent leur garde ailleurs qu'en première instruction**, chaque fois
+  pour une raison écrite sur place : `changerMotDePasse` (qui vérifie la session par
+  `auth.getUser()` puis redirige), `attribuerStatut` et `retirerStatut` (dont le garde
+  `exigerAutoriteSur` DÉPEND du `membreId` lu dans le formulaire, donc ne peut pas le précéder ;
+  rien avant ne touche la base). `seConnecter` et `seDeconnecter` n'en ont pas, par nature.
+
+Voir « Exception ajoutée par la phase 2b : `/inscription` sans garde » plus bas pour ce sur quoi
+repose sa fermeture, et le commentaire posé juste avant `exigerProfilActif` dans `garde.ts` pour
+que cette exception ne soit jamais lue comme une régression future.
 Depuis la phase 1c, la modification des statuts d'un membre n'est **plus réservée aux
 administrateurs** : elle passe par `exigerAutoriteSur`, ouverte à tout compte ayant autorité sur
 le membre visé (ancêtre dans l'arbre, ou dirigeant désigné), en plus des administrateurs. Aucune

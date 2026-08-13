@@ -50,6 +50,11 @@ pendant l'implémentation sans validation.
 | D22 | Le modérateur gère aussi le calendrier AEL récurrent | Amendement du 2026-08-12 : il tient déjà les séances que ce calendrier engendre. Voir la note sous la matrice du §5.2. **À appliquer au plan de la phase 3.** |
 | D23 | Le modérateur crée un événement, saisit **et voit** les trois désirs | Amendement du 2026-08-12. La saisie était seule demandée ; la consultation suit nécessairement — on ne saisit pas dans un champ qu'on ne peut pas relire, ni corriger une valeur qu'on ne voit pas. D16 et la RLS du §5.3 sont amendées en conséquence. **À appliquer au plan de la phase 4.** |
 | D24 | **Archiver une fiche désactive le compte qui lui est lié** | Amendement du 2026-08-12. Sans cela, archiver quelqu'un ne lui retirait rien : son compte restait actif et il conservait sa portée d'autorité sur les membres dont il est ancêtre ou dirigeant. L'archivage est le geste qui dit « cette personne a quitté l'équipe » ; il doit fermer l'accès. La réciproque n'est **pas** vraie — désarchiver ne réactive pas le compte, car rendre un accès est une décision délibérée qui se prend sur l'écran des comptes |
+| D25 | L'inscription par token est protégée par un **code long haché** et un **plafond de tentatives** par adresse et par fenêtre de temps | Décision du 2026-08-12. `/inscription` est le premier chemin d'écriture **public** de l'application. Le §7 exige déjà un message indifférencié qui ne révèle jamais qu'un code existe — mais un message prudent sans plafond ne protège de rien, il rend seulement l'attaque silencieuse. **Pas** de gel du token visé après N échecs : un tiers pourrait alors empêcher quelqu'un de s'inscrire en brûlant ses tentatives |
+| D26 | Pas de fusion générale de fiches. À la validation, le compte est **rattaché à la fiche existante** et la fiche `en_attente` est supprimée | Décision du 2026-08-12. La fiche en attente vient d'être créée et ne porte ni statuts, ni historique, ni place dans l'arbre : la rattacher puis la jeter ne peut rien perdre. Une vraie fusion de deux fiches anciennes est précisément là où l'on perd des données sans s'en apercevoir — à n'écrire que si le doublon devient un problème réel |
+| D27 | L'atomicité promise au §6 entre consommation du token et création du compte **n'existe pas** ; elle est remplacée par une consommation atomique **du token seul** | Correction du 2026-08-12. La création du compte est un appel HTTP au service d'authentification, le marquage du token une écriture SQL : aucune transaction ne couvre les deux. Voir l'encadré du §6 |
+| D28 | Les seances AEL sont engendrees par un **geste explicite**, sur un **horizon glissant**, de facon **idempotente** | Decision du 2026-08-13. D14 dit que les seances sont pre-generees, sans dire par quoi. Une generation a l'ouverture de l'ecran ferait ecrire une simple consultation, ce que l'architecture interdit, et rendrait invisible le moment de la creation. Une tache planifiee ajouterait une infrastructure que le projet n'a pas, invisible depuis l'application et difficile a eprouver. Le bouton laisse le geste visible et maitrise ; l'idempotence permet de le rejouer sans creer de doublon |
+| D29 | Le pointage affiche la **liste complete** des membres actifs des antennes ciblees, avec une recherche, **sans pagination** | Decision du 2026-08-13. Pointer suppose de balayer toute l'assistance : paginer obligerait a changer de page pour finir et ferait perdre le fil sur mobile, ou une liste de presence se remplit souvent. C'est le seul ecran du projet ou la pagination nuirait au geste qu'il sert |
 
 > **D17 à D21** sont posées dans `2026-08-12-phase-1c-design.md` et ne sont pas recopiées
 > ici. D18 y **amende D15** ci-dessus : l'équipe vise un millier de membres ou plus, et non
@@ -317,6 +322,7 @@ Cette règle est implémentée par une fonction unique `peutModifier(profil, mem
 | Créer et tenir une séance AEL, pointer les présences | ❌ | ✅ | ✅ |
 | Modifier l'arbre (faiseur de disciple, dirigeant) | ❌ | ❌ | ✅ |
 | Créer statuts, groupes, antennes, types d'événement | ❌ | ❌ | ✅ |
+| Rattacher ou détacher un membre d'une antenne | ❌ | ✅ | ✅ |
 | Créer un événement et saisir les trois désirs | ❌ | ✅ | ✅ |
 | Convertir un participant externe en membre | ❌ | ❌ | ✅ |
 | Valider ou rejeter une demande de suivi | ❌ | ❌ | ✅ |
@@ -331,6 +337,13 @@ Cette règle est implémentée par une fonction unique `peutModifier(profil, mem
 > engendre ces séances, et en réserver le réglage à un administrateur obligerait la
 > personne qui anime à demander une intervention pour déplacer une date. Sans effet sur
 > les phases 0 à 1c, qui ne livrent aucun AEL — **à appliquer au plan de la phase 3.**
+>
+> **Amendement du 2026-08-13 (D50).** La ligne « Rattacher ou détacher un membre d'une
+> antenne » est **nouvelle** : la matrice ne la portait pas. Sa ligne voisine sur les antennes
+> couvre la **création** de l'entité, pas l'affectation d'un membre existant — le silence était
+> réel, il est comblé ici plutôt que réinterprété. Le geste est ouvert au modérateur parce que
+> D29 tire la liste de pointage de ce même rattachement : le lui refuser l'obligerait à demander
+> une intervention pour corriger une donnée qui bloque son propre travail.
 >
 > **Amendement du 2026-08-12 (D23).** La création d'un événement et la saisie des trois
 > désirs sont ouvertes au modérateur. **Conséquence assumée, tirée en même temps :** la
@@ -408,8 +421,23 @@ racines de l'arbre —, leur crée des comptes, les lie à leurs fiches et leur 
 d'expiration. Seul le haché est stocké ; le code en clair s'affiche une seule fois. Un token
 nominatif relie automatiquement le compte créé à sa fiche. Un token générique fait remplir ses
 informations à l'inscrit, crée une fiche `en_attente` et notifie l'admin, qui valide en
-fusionnant au besoin avec une fiche existante. Le token est marqué comme utilisé de façon
-atomique, dans la même transaction que la création du compte.
+**rattachant au besoin le compte à une fiche existante** (D26).
+
+> **Correction du 2026-08-12 (D27).** Cette section affirmait que le token est marqué utilisé
+> « de façon atomique, **dans la même transaction que la création du compte** ». C'est
+> **impossible** dans cette architecture : la création du compte est un appel HTTP au service
+> d'authentification de Supabase, le marquage du token une écriture SQL. Aucune transaction ne
+> couvre les deux.
+>
+> Ce qui est réellement garanti, et qui suffit : le token est **consommé d'abord**, par une
+> fonction Postgres qui le verrouille, vérifie qu'il est inconnu-expiré-ou-déjà-utilisé, le
+> marque utilisé et rend ses données — **en une seule transaction**. Deux personnes ne peuvent
+> donc jamais consommer le même code. Le compte est créé ensuite ; si sa création échoue, le
+> token est relâché et l'échec journalisé.
+>
+> L'ordre inverse serait pire : créer le compte puis consommer laisserait deux inscrits créer
+> deux comptes avant que l'un perde. La fenêtre résiduelle assumée est un token consommé sans
+> compte — récupérable par un administrateur, jamais un double usage.
 
 **Modification de statuts.** Un utilisateur ouvre la fiche d'un membre de sa portée d'autorité,
 coche ou décoche des statuts, renseigne éventuellement une date d'acquisition. L'effet est

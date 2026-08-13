@@ -1,0 +1,611 @@
+'use server'
+
+import { headers } from 'next/headers'
+import { redirect } from 'next/navigation'
+import { LONGUEUR_MDP_MINIMALE } from '@/app/changer-mot-de-passe/constantes'
+import {
+  IdentifiantInvalideError,
+  identifiantVersEmail,
+  normaliserIdentifiant,
+} from '@/lib/domaine/identifiant'
+import { hacherCodeInscription } from '@/lib/domaine/token-inscription'
+import { listerAntennesPubliques } from '@/lib/donnees/antennes'
+import { notifierAdministrateurs } from '@/lib/donnees/notifications'
+import { clientAdmin } from '@/lib/supabase/admin'
+import {
+  MESSAGE_ANTENNE_INCONNUE,
+  MESSAGE_CHAMPS_OBLIGATOIRES,
+  MESSAGE_COMPTE_SANS_DEMANDE,
+  MESSAGE_ECHEC_INSCRIPTION,
+  MESSAGE_IDENTIFIANT_PRIS,
+  MESSAGE_MDP_TROP_COURT,
+  messageErreurConsommation,
+} from './messages'
+
+export type EtatInscription = { erreur: string | null }
+
+const CODE_AUTH_EMAIL_PRIS = 'email_exists'
+const CODE_VIOLATION_UNICITE = '23505'
+
+/**
+ * Adresse de repli, employée UNIQUEMENT lorsque aucun en-tête d'adresse n'est
+ * présent — c'est-à-dire en développement local sans proxy. Derrière Vercel,
+ * `x-forwarded-for` est toujours posé par la plateforme : ce repli n'est jamais
+ * atteint en production. S'il l'était, le plafond de D36 resterait actif mais
+ * partagé par tous les appelants, ce qui serait à la fois inefficace contre un
+ * attaquant et bloquant pour les autres — d'où la journalisation ci-dessous.
+ */
+const ADRESSE_REPLI_LOCALE = '0.0.0.0'
+
+function champTexte(donnees: FormData, nom: string): string {
+  const valeur = donnees.get(nom)
+  return typeof valeur === 'string' ? valeur.trim() : ''
+}
+
+function champTexteOptionnel(donnees: FormData, nom: string): string | null {
+  const valeur = champTexte(donnees, nom)
+  return valeur.length > 0 ? valeur : null
+}
+
+/**
+ * Adresse de l'appelant, lue côté SERVEUR uniquement (design 2b §5.4) — jamais
+ * fournie par le client dans un champ de formulaire, qu'il pourrait forger. C'est
+ * l'argument `p_adresse` de `consommer_token_inscription`, donc le SEAU du plafond
+ * anti-force-brute de D34/D36 : une valeur constante ici mettrait tous les
+ * visiteurs dans le même seau — inefficace contre un attaquant qui en a besoin d'un
+ * seul, et bloquant pour tous les autres.
+ *
+ * `x-forwarded-for` peut porter une liste « client, proxy1, proxy2 » : le premier
+ * segment est l'adresse d'origine (Vercel la place en tête).
+ *
+ * ═══ HYPOTHÈSE EXPLICITE, NON VÉRIFIABLE PAR NOS TESTS ═══
+ *
+ * Toute la propriété anti-force-brute de ce chemin repose sur UN postulat :
+ * l'hébergeur ÉCRASE `x-forwarded-for` avec l'adresse réelle du client, au lieu de
+ * relayer celle que le client y aurait écrite. C'est le comportement documenté de
+ * Vercel, où cette application est déployée (`.vercel/`).
+ *
+ * Nos tests ne peuvent PAS l'établir : `tests/e2e/inscription.spec.ts` s'exécute
+ * contre `next dev`, sans proxy, et y INJECTE lui-même cet en-tête. Il prouve donc
+ * que l'en-tête est lu et transmis à `consommer_token_inscription` — ce qui est
+ * déjà l'essentiel, une constante partagée y serait détectée — mais il ne prouve
+ * rien sur ce que fait l'hébergeur en production.
+ *
+ * SI CETTE HYPOTHÈSE EST FAUSSE (déploiement derrière un autre proxy, ou en direct
+ * sans proxy du tout), la conséquence est précise : un attaquant fait varier
+ * `x-forwarded-for` à chaque requête, chaque tentative tombe dans un seau neuf, et
+ * le plafond de 10 tentatives par 15 minutes (D34/D36) NE FREINE PLUS RIEN. Le
+ * hachage du code reste intact, les tokens gardent leurs ~116 bits d'entropie
+ * (D38) — la force brute redevient simplement non ralentie.
+ *
+ * À revérifier avant tout changement d'hébergeur ou ajout d'un proxy en amont.
+ */
+async function adresseAppelant(): Promise<string> {
+  const listeHeaders = await headers()
+  const brut = listeHeaders.get('x-forwarded-for')
+  // Le segment vide est traité comme une absence : `p_adresse` est de type `inet`,
+  // une chaîne vide y produirait un 22P02 (panne technique) au lieu d'un comptage.
+  const premier = brut?.split(',')[0]?.trim()
+  if (!premier) {
+    console.error(
+      "sInscrire : aucun en-tête x-forwarded-for — repli sur une adresse partagée, le plafond anti-force-brute n'est pas discriminant sur cet appel",
+    )
+    return ADRESSE_REPLI_LOCALE
+  }
+  return premier
+}
+
+/**
+ * Relâche un token consommé (D27) ET VÉRIFIE QUE LA RELÂCHE A MORDU.
+ *
+ * `relacher_token_inscription` rend, depuis la migration 20260815270000, un
+ * BOOLÉEN : `true` si une ligne a été relâchée, `false` si aucune. Avant elle, la
+ * fonction rendait `void` — une relâche sans effet ne produisait NI erreur NI
+ * trace, et l'appelant croyait avoir relâché un token qui restait consommé. Ce
+ * seul point rendait le défaut I1 invisible ; d'où la vérification ci-dessous,
+ * commune aux QUATRE sites de relâche de ce fichier.
+ *
+ * `profilId` nomme le compte que l'on est en train de compenser, et NULL signifie
+ * « aucun compte à excuser » (la garde stricte : seuls les tokens dont le compte
+ * n'a jamais été créé sont relâchables). Le paramètre est obligatoire côté SQL
+ * exprès : l'oublier échoue franchement au lieu de retomber en silence sur
+ * l'ancien comportement.
+ */
+async function relacherToken(
+  admin: ReturnType<typeof clientAdmin>,
+  tokenId: string,
+  profilId: string | null,
+  contexte: string,
+): Promise<boolean> {
+  const { data, error } = await admin.rpc('relacher_token_inscription', {
+    p_token_id: tokenId,
+    p_profil_id: profilId,
+  })
+
+  if (error) {
+    console.error(`${contexte} : échec technique de la relâche du token`, {
+      tokenId,
+      profilId,
+      code: error.code,
+      message: error.message,
+    })
+    return false
+  }
+
+  if (data !== true) {
+    // AUCUNE LIGNE TOUCHÉE. Le token reste consommé alors que l'inscription a
+    // échoué : il est perdu pour la personne à qui il était destiné, et seul ce
+    // journal permettra à un administrateur d'en émettre un nouveau. C'est
+    // exactement le cas qui, jusqu'à la migration 20260815270000, ne laissait
+    // aucune trace.
+    console.error(
+      `${contexte} : relâche du token SANS EFFET — aucune ligne touchée, le token reste consommé et son destinataire ne peut plus s'en servir`,
+      { tokenId, profilId },
+    )
+    return false
+  }
+
+  return true
+}
+
+/**
+ * RETOUR EN ARRIÈRE après un échec survenu APRÈS la création du compte, sur le
+ * parcours générique (fiche `en_attente` ou demande). Sans lui, l'écran annonçait
+ * « L'inscription n'a pas pu aboutir » alors que le compte EXISTAIT, que le token
+ * était consommé et qu'AUCUN administrateur n'était prévenu : la personne repartait
+ * en croyant n'avoir pas de compte, en avait un, et personne ne savait qu'elle
+ * attendait.
+ *
+ * Les trois gestes sont tentés INCONDITIONNELLEMENT, dans cet ordre :
+ * 1. la fiche `en_attente` d'abord — `demandes_membre.membre_id` est
+ *    `on delete set null`, elle ne partirait donc JAMAIS avec le compte ;
+ * 2. le compte d'authentification, dont la suppression cascade sur `profils` ;
+ * 3. la relâche du token (D27), EN NOMMANT `profilId`.
+ *
+ * POURQUOI L'ÉTAPE 3 NOMME LE PROFIL — et c'était le défaut I1 de la revue finale.
+ * À ce stade, `utilise_par_profil_id` vient d'être posée sur le token (voir le
+ * marquage qui suit la création du compte, plus bas). La garde de la migration
+ * 20260815180000 (`and utilise_par_profil_id is null`) bloquait donc la relâche :
+ * elle ne mordait QUE si la cascade `deleteUser -> profils -> set null` avait déjà
+ * remis cette colonne à NULL, c'est-à-dire uniquement si l'étape 2 avait réussi.
+ * Or l'échec silencieux de `deleteUser` est une limitation connue de ce projet
+ * (README, « Attention ») : quand il se produisait, le token était perdu à jamais,
+ * sans erreur et sans trace, pendant que ce commentaire promettait le contraire.
+ * Depuis la migration 20260815270000, passer `profilId` autorise explicitement la
+ * relâche DE CE COMPTE-LÀ — sans jamais rouvrir la dé-consommation du token d'un
+ * AUTRE compte, qui reste refusée.
+ *
+ * Aucun échec n'interrompt les suivants : même si le compte survit, relâcher le
+ * token vaut mieux que le perdre — la personne pourra réessayer, fût-ce avec un
+ * autre identifiant. Cette phrase est désormais tenue par le code, elle ne l'était
+ * pas. Rend `true` seulement si les TROIS ont réussi.
+ */
+async function compenserInscription(
+  admin: ReturnType<typeof clientAdmin>,
+  { profilId, ficheId, tokenId }: { profilId: string; ficheId: string | null; tokenId: string },
+): Promise<boolean> {
+  let complete = true
+
+  if (ficheId !== null) {
+    // `etat = 'en_attente'` : la MÊME garde que la ronde I2 des Tasks 9-10 a
+    // imposée aux deux `delete` SQL (migrations 20260815220000/230000). Elle était
+    // absente des deux `delete` APPLICATIFS (mineur de la revue finale) : la
+    // sûreté n'y tenait qu'à la construction — la fiche vient d'être créée — et
+    // non à un contrat. Or la cascade d'une suppression de `membres` emporte
+    // `journal_statuts`, que 20260813170000 désigne comme la seule voie
+    // d'effacement complet d'une personne. Le contrat est désormais écrit ici
+    // aussi.
+    const { data, error } = await admin
+      .from('membres')
+      .delete()
+      .eq('id', ficheId)
+      .eq('etat', 'en_attente')
+      .select('id')
+    if (error) {
+      complete = false
+      console.error('compenserInscription : suppression de la fiche en_attente impossible', {
+        ficheId,
+        code: error.code,
+        message: error.message,
+      })
+    } else if (!data || data.length === 0) {
+      // Aucune ligne supprimée : la fiche a disparu entre-temps, ou elle n'est
+      // plus `en_attente`. Un `delete` qui ne touche rien ne rend AUCUNE erreur —
+      // sans ce contrôle, la compensation se déclarerait complète en laissant une
+      // fiche derrière elle.
+      complete = false
+      console.error('compenserInscription : aucune fiche en_attente supprimée', { ficheId })
+    }
+  }
+
+  const { error: erreurCompte } = await admin.auth.admin.deleteUser(profilId)
+  if (erreurCompte) {
+    complete = false
+    console.error('compenserInscription : suppression du compte impossible', {
+      profilId,
+      message: erreurCompte.message,
+    })
+  }
+
+  const relachee = await relacherToken(admin, tokenId, profilId, 'compenserInscription')
+  if (!relachee) {
+    complete = false
+  }
+
+  return complete
+}
+
+/**
+ * Traite un échec survenu APRÈS la création du compte, sur le parcours générique,
+ * et rend le message à afficher — le seul endroit du fichier où le message dépend
+ * du succès d'un rattrapage, parce que c'est le seul où l'état du monde en dépend.
+ *
+ * - Compensation RÉUSSIE : plus de compte, plus de fiche, token relâché. L'état est
+ *   redevenu celui d'avant la soumission, `MESSAGE_ECHEC_INSCRIPTION` devient
+ *   littéralement vrai, et la personne peut réessayer avec le MÊME code.
+ * - Compensation ÉCHOUÉE : il reste un état incohérent. On le DIT à la personne
+ *   (son compte existe, sa demande n'est pas enregistrée) et on prévient les
+ *   administrateurs, pour que quelqu'un sache qu'elle attend. C'est le seul chemin
+ *   de ce fichier où une notification part sans demande : `demandeId` y vaut donc
+ *   `null` en toute conscience, et `lien` aussi — pointer vers `/demandes`
+ *   promettrait une ligne que cette personne n'y a justement pas.
+ */
+async function echecApresCompte(
+  admin: ReturnType<typeof clientAdmin>,
+  contexte: {
+    profilId: string
+    ficheId: string | null
+    tokenId: string
+    identifiant: string
+    prenom: string
+    nom: string
+    etape: string
+  },
+): Promise<EtatInscription> {
+  const compense = await compenserInscription(admin, {
+    profilId: contexte.profilId,
+    ficheId: contexte.ficheId,
+    tokenId: contexte.tokenId,
+  })
+
+  if (compense) {
+    console.error(
+      `sInscrire : échec sur ${contexte.etape}, compensation RÉUSSIE — compte supprimé, token relâché, la personne peut réessayer`,
+      { identifiant: contexte.identifiant },
+    )
+    return { erreur: MESSAGE_ECHEC_INSCRIPTION }
+  }
+
+  console.error(
+    `sInscrire : échec sur ${contexte.etape}, compensation ÉCHOUÉE — état incohérent, administrateurs prévenus`,
+    { identifiant: contexte.identifiant, profilId: contexte.profilId, tokenId: contexte.tokenId },
+  )
+  await notifierAdministrateurs({
+    type: 'nouvelle_demande',
+    titre: 'Inscription incomplète à reprendre à la main',
+    corps: `${contexte.prenom} ${contexte.nom} (identifiant ${contexte.identifiant}) a créé un compte, mais sa demande n'a pas pu être enregistrée. Sa fiche est à créer manuellement.`,
+    lien: null,
+    demandeId: null,
+  })
+  return { erreur: MESSAGE_COMPTE_SANS_DEMANDE }
+}
+
+/**
+ * L'UNIQUE Server Action atteignable sans session (design 2b §6, §9). AUCUN garde
+ * de `src/lib/securite/garde.ts` en tête : il n'existe aucune session à ce stade,
+ * exception unique et documentée du projet.
+ *
+ * NI LE CODE EN CLAIR NI LE MOT DE PASSE ne sont journalisés, renvoyés ou stockés :
+ * le code ne sort d'ici que sous forme de hachage SHA-256 (D25), le mot de passe
+ * n'est transmis qu'à Supabase Auth. Aucun `console.*` de ce fichier ne doit jamais
+ * en recevoir un.
+ */
+export async function sInscrire(
+  _etat: EtatInscription,
+  donnees: FormData,
+): Promise<EtatInscription> {
+  const code = champTexte(donnees, 'code')
+  const identifiantBrut = champTexte(donnees, 'identifiant')
+  const motDePasse = String(donnees.get('motDePasse') ?? '')
+  const nom = champTexte(donnees, 'nom')
+  const prenom = champTexte(donnees, 'prenom')
+  const telephone = champTexteOptionnel(donnees, 'telephone')
+  const ville = champTexteOptionnel(donnees, 'ville')
+  const antenneId = champTexteOptionnel(donnees, 'antenneId')
+
+  if (
+    code.length === 0 ||
+    identifiantBrut.length === 0 ||
+    motDePasse.length === 0 ||
+    nom.length === 0 ||
+    prenom.length === 0
+  ) {
+    return { erreur: MESSAGE_CHAMPS_OBLIGATOIRES }
+  }
+
+  // D39 : même règle que le changement de mot de passe volontaire. Contrôle EN
+  // AMONT — confort seulement, Supabase Auth impose de toute façon sa propre
+  // règle minimale à la création du compte, qui reste décisive (design 2b §7.1).
+  if (motDePasse.length < LONGUEUR_MDP_MINIMALE) {
+    return { erreur: MESSAGE_MDP_TROP_COURT }
+  }
+
+  let identifiant: string
+  try {
+    identifiant = normaliserIdentifiant(identifiantBrut)
+  } catch (erreur) {
+    if (erreur instanceof IdentifiantInvalideError) {
+      return { erreur: erreur.message }
+    }
+    throw erreur
+  }
+
+  // ENTRÉE PUBLIQUE NON VALIDÉE = clé étrangère refusée plus loin. `antenneId`
+  // arrive d'un `<select>` que n'importe qui peut forger : sans ce contrôle, une
+  // valeur inconnue (ou qui n'est même pas un uuid) faisait échouer l'insertion de
+  // la fiche APRÈS la création du compte — soit exactement le chemin d'incohérence
+  // que `compenserInscription` doit réparer. On le referme ici, AVANT de consommer
+  // quoi que ce soit : le token n'est pas brûlé pour une antenne mal choisie.
+  //
+  // Vérifié contre la MÊME liste que celle affichée par la page
+  // (`listerAntennesPubliques`) : aucune information nouvelle n'est révélée, et
+  // aucun oracle n'est rouvert — cette liste ne dépend jamais du code saisi (D30).
+  if (antenneId !== null) {
+    let antennes
+    try {
+      antennes = await listerAntennesPubliques()
+    } catch (erreur) {
+      console.error("sInscrire : lecture des antennes impossible pour la validation", {
+        message: erreur instanceof Error ? erreur.message : String(erreur),
+      })
+      return { erreur: MESSAGE_ECHEC_INSCRIPTION }
+    }
+    if (!antennes.some((antenne) => antenne.id === antenneId)) {
+      return { erreur: MESSAGE_ANTENNE_INCONNUE }
+    }
+  }
+
+  const adresse = await adresseAppelant()
+  const codeHash = hacherCodeInscription(code)
+  const admin = clientAdmin()
+
+  const { data: resultat, error: erreurConsommation } = await admin.rpc(
+    'consommer_token_inscription',
+    { p_code_hash: codeHash, p_adresse: adresse },
+  )
+
+  // ICI, `error` NE PORTE JAMAIS un refus métier (migration 20260815160000, voir
+  // son en-tête) : `consommer_token_inscription` rend un STATUT
+  // (`'ok'` | `'invalide'` | `'trop_de_tentatives'`) plutôt que de lever, pour
+  // que l'insertion de la tentative survive au refus. `error` non nul ici signale
+  // donc une VRAIE panne technique (réseau, bug), pas un code invalide.
+  if (erreurConsommation || !resultat || resultat.length === 0) {
+    console.error(
+      'sInscrire : appel de consommer_token_inscription en échec (panne technique)',
+      { code: erreurConsommation?.code, message: erreurConsommation?.message },
+    )
+    return { erreur: MESSAGE_ECHEC_INSCRIPTION }
+  }
+
+  // Forme rendue par `returns table (statut public.statut_consommation_token,
+  // token_id uuid, mode public.mode_token, membre_id uuid)` (migration
+  // 20260815160000) : contrôle de forme, pas décoration — `rpc()` rend `any`
+  // faute de types `Database` générés (piège connu du projet). Sans ce contrôle,
+  // une colonne renommée produirait des `undefined` silencieux plutôt qu'un
+  // échec visible.
+  const ligne = resultat[0] as {
+    statut?: unknown
+    token_id?: unknown
+    mode?: unknown
+    membre_id?: unknown
+  }
+  if (
+    ligne.statut !== 'ok' &&
+    ligne.statut !== 'invalide' &&
+    ligne.statut !== 'trop_de_tentatives'
+  ) {
+    console.error('sInscrire : forme inattendue rendue par consommer_token_inscription', {
+      ligne,
+    })
+    return { erreur: MESSAGE_ECHEC_INSCRIPTION }
+  }
+
+  if (ligne.statut !== 'ok') {
+    // D30 : le MESSAGE affiché est rigoureusement le même pour `invalide` et
+    // `trop_de_tentatives` (voir `messageErreurConsommation`). L'indiscernabilité
+    // exigée par D30 porte sur ce que voit l'UTILISATEUR, pas sur ce que reçoit
+    // notre propre serveur : rien n'empêche de journaliser les deux causes
+    // séparément ici, ce qui est précieux au diagnostic — mais `ligne.statut` ne
+    // doit JAMAIS remonter au-delà de ce mappage uniforme.
+    console.error('sInscrire : consommation refusée', { statut: ligne.statut })
+    return { erreur: messageErreurConsommation(ligne.statut) }
+  }
+
+  // statut === 'ok' : contrôle de forme sur token_id/mode, même raison qu'au-dessus.
+  if (
+    typeof ligne.token_id !== 'string' ||
+    (ligne.mode !== 'nominatif' && ligne.mode !== 'generique')
+  ) {
+    console.error(
+      'sInscrire : forme inattendue rendue par consommer_token_inscription (statut ok)',
+      { ligne },
+    )
+    // Le token VIENT D'ÊTRE CONSOMMÉ : sans relâche il serait perdu pour toujours
+    // (D27). On ne peut la tenter que si l'identifiant rendu est exploitable — s'il
+    // ne l'est pas, la perte est journalisée plutôt que masquée par un appel qui
+    // n'aurait aucune chance d'aboutir.
+    if (typeof ligne.token_id === 'string') {
+      // `profilId` NULL : aucun compte n'a encore été créé à ce stade, donc
+      // `utilise_par_profil_id` est encore NULL sur ce token (le marquage n'a lieu
+      // qu'après la création du compte). La garde stricte suffit, et la nommer
+      // ainsi dit qu'il n'y a ici aucun compte à excuser.
+      await relacherToken(admin, ligne.token_id, null, 'sInscrire (forme inattendue)')
+    } else {
+      console.error(
+        'sInscrire : token consommé mais NON relâchable (token_id inexploitable) — intervention manuelle requise',
+      )
+    }
+    return { erreur: MESSAGE_ECHEC_INSCRIPTION }
+  }
+  const tokenId = ligne.token_id
+  const mode = ligne.mode
+  const membreIdToken = (ligne.membre_id as string | null) ?? null
+
+  const { data: compteCree, error: erreurCompte } = await admin.auth.admin.createUser({
+    email: identifiantVersEmail(identifiant),
+    password: motDePasse,
+    email_confirm: true,
+  })
+
+  if (erreurCompte || !compteCree.user) {
+    console.error('sInscrire : échec de la création du compte', {
+      identifiant,
+      code: erreurCompte?.code,
+      status: erreurCompte?.status,
+      message: erreurCompte?.message,
+    })
+    // D27 : le token est RELÂCHÉ, jamais laissé consommé sans compte au-delà de
+    // cette fenêtre. La fenêtre résiduelle assumée par D27 (interruption entre la
+    // consommation et cette relâche) reste possible mais jamais un double usage.
+    // `profilId` NULL : la création du compte vient d'échouer, il n'existe donc
+    // aucun profil à excuser et `utilise_par_profil_id` est encore NULL.
+    await relacherToken(admin, tokenId, null, 'sInscrire (échec de création du compte)')
+    return {
+      erreur:
+        erreurCompte?.code === CODE_AUTH_EMAIL_PRIS
+          ? MESSAGE_IDENTIFIANT_PRIS
+          : MESSAGE_ECHEC_INSCRIPTION,
+    }
+  }
+
+  const { error: erreurProfil } = await admin
+    .from('profils')
+    .insert({ id: compteCree.user.id, identifiant, nom_affichage: `${prenom} ${nom}` })
+
+  if (erreurProfil) {
+    const { error: erreurNettoyage } = await admin.auth.admin.deleteUser(compteCree.user.id)
+    // `profilId` NULL, et ce n'est pas un oubli : le marquage
+    // `utilise_par_profil_id` n'a lieu qu'APRÈS l'insertion du profil, qui vient
+    // justement d'échouer — la colonne est donc encore NULL et la garde stricte
+    // laisse passer, que le compte auth ait été supprimé ou non.
+    const relachee = await relacherToken(admin, tokenId, null, "sInscrire (échec d'insertion du profil)")
+    console.error("sInscrire : échec de l'insertion du profil, nettoyage tenté", {
+      identifiant,
+      code: erreurProfil.code,
+      details: erreurProfil.details,
+      message: erreurProfil.message,
+      nettoyageCompte: erreurNettoyage ? `ÉCHOUÉ : ${erreurNettoyage.message}` : 'compte auth supprimé',
+      nettoyageToken: relachee ? 'token relâché' : 'ÉCHOUÉ (voir le journal ci-dessus)',
+    })
+    return {
+      erreur:
+        erreurProfil.code === CODE_VIOLATION_UNICITE
+          ? MESSAGE_IDENTIFIANT_PRIS
+          : MESSAGE_ECHEC_INSCRIPTION,
+    }
+  }
+
+  // Écriture SIMPLE, sans concurrence à fermer (design 2b §7.1) : un seul flux
+  // touche cette ligne à ce stade, le compte venant d'être créé par CE flux.
+  const { error: erreurMarquage } = await admin
+    .from('tokens_inscription')
+    .update({ utilise_par_profil_id: compteCree.user.id })
+    .eq('id', tokenId)
+  if (erreurMarquage) {
+    // Non fatal pour l'inscrit : le compte existe et fonctionne. Seule la trace
+    // d'audit « qui a utilisé ce token » resterait incomplète — journalisé pour
+    // qu'un administrateur puisse la compléter à la main si besoin.
+    console.error('sInscrire : échec du marquage utilise_par_profil_id', {
+      tokenId,
+      profilId: compteCree.user.id,
+      message: erreurMarquage.message,
+    })
+  }
+
+  if (mode === 'nominatif') {
+    // SÉCURITÉ, pas économie d'écriture (design 2b §7.1) : nom, prénom, téléphone,
+    // ville et antenne soumis dans le formulaire sont IGNORÉS — la fiche existe
+    // déjà et ses valeurs ne doivent jamais être écrasées par une saisie publique
+    // non vérifiée.
+    const { error: erreurLiaison } = await admin
+      .from('profils')
+      .update({ membre_id: membreIdToken })
+      .eq('id', compteCree.user.id)
+    if (erreurLiaison) {
+      console.error('sInscrire : échec de la liaison nominative', {
+        profilId: compteCree.user.id,
+        membreId: membreIdToken,
+        message: erreurLiaison.message,
+      })
+    }
+  } else {
+    const { data: fiche, error: erreurFiche } = await admin
+      .from('membres')
+      .insert({ nom, prenom, telephone, ville, antenne_id: antenneId, etat: 'en_attente' })
+      .select('id')
+      .single()
+
+    if (erreurFiche || !fiche) {
+      console.error('sInscrire : échec de la création de la fiche en_attente', {
+        profilId: compteCree.user.id,
+        code: erreurFiche?.code,
+        message: erreurFiche?.message,
+      })
+      return await echecApresCompte(admin, {
+        profilId: compteCree.user.id,
+        ficheId: null,
+        tokenId,
+        identifiant,
+        prenom,
+        nom,
+        etape: 'création de la fiche en_attente',
+      })
+    }
+
+    const { data: demande, error: erreurDemande } = await admin
+      .from('demandes_membre')
+      .insert({
+        origine: 'auto_inscription',
+        demandeur_profil_id: compteCree.user.id,
+        membre_id: fiche.id,
+        etat: 'en_attente',
+      })
+      .select('id')
+      .single()
+
+    if (erreurDemande || !demande) {
+      console.error('sInscrire : échec de la création de la demande', {
+        profilId: compteCree.user.id,
+        ficheId: fiche.id,
+        message: erreurDemande?.message,
+      })
+      return await echecApresCompte(admin, {
+        profilId: compteCree.user.id,
+        ficheId: fiche.id,
+        tokenId,
+        identifiant,
+        prenom,
+        nom,
+        etape: 'création de la demande',
+      })
+    }
+
+    await notifierAdministrateurs({
+      type: 'nouvelle_demande',
+      titre: "Nouvelle demande d'inscription",
+      corps: `${prenom} ${nom} s'est inscrit(e) par token générique.`,
+      // NAVIGATION seule : la liste, pas la demande. Il n'existe pas de route
+      // `/demandes/[id]` dans cette phase (migration 20260815240000).
+      lien: '/demandes',
+      // CORRÉLATION (migration 20260815240000) : ce que `annuler_demande_membre` et
+      // `valider_demande_rattachement` cherchent pour marquer cette notification
+      // lue. Sans lui, la cloche des administrateurs garderait un non-lu que plus
+      // rien ne peut éteindre — silencieusement, sans aucune erreur.
+      demandeId: demande.id,
+    })
+  }
+
+  // PAS dans un try : `redirect()` lève une exception de contrôle que le projet
+  // ne doit jamais avaler (contrainte globale, pitfall documenté).
+  redirect('/connexion?inscrit=1')
+}

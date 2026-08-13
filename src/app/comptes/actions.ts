@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { IdentifiantInvalideError, identifiantVersEmail, normaliserIdentifiant } from '@/lib/domaine/identifiant'
+import { tirerChaineLisible } from '@/lib/domaine/tirage'
 import { exigerAdministrateur } from '@/lib/securite/garde'
 import { clientAdmin } from '@/lib/supabase/admin'
 import {
@@ -34,24 +35,12 @@ const CODE_VIOLATION_CHECK = '23514'
 const CODE_AUTH_EMAIL_PRIS = 'email_exists'
 
 // Sans 0/O ni 1/l/I : ce mot de passe se dicte de vive voix (spec §5.4), et une
-// confusion à l'oral coûterait un compte inaccessible.
-const ALPHABET_LISIBLE = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'
+// confusion à l'oral coûterait un compte inaccessible. Tirage partagé avec le code
+// d'inscription (D38, `src/lib/domaine/tirage.ts`) : un seul mécanisme à maintenir.
 const LONGUEUR_MDP_TEMPORAIRE = 14
 
 function motDePasseTemporaire(): string {
-  const seuil = Math.floor(0xffffffff / ALPHABET_LISIBLE.length) * ALPHABET_LISIBLE.length
-  const caracteres: string[] = []
-  const tampon = new Uint32Array(1)
-  while (caracteres.length < LONGUEUR_MDP_TEMPORAIRE) {
-    crypto.getRandomValues(tampon)
-    // Rejet des valeurs qui déborderaient le dernier bloc complet de l'alphabet. Sans
-    // lui, les premiers caractères seraient très légèrement plus probables. Le biais
-    // serait minuscule — il n'y a simplement aucune raison de l'accepter.
-    if (tampon[0] < seuil) {
-      caracteres.push(ALPHABET_LISIBLE[tampon[0] % ALPHABET_LISIBLE.length])
-    }
-  }
-  return caracteres.join('')
+  return tirerChaineLisible(LONGUEUR_MDP_TEMPORAIRE)
 }
 
 export async function creerCompte(_etat: EtatCompte, donnees: FormData): Promise<EtatCompte> {

@@ -2,7 +2,12 @@
 
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
-import { FicheMembreInvalideError, normaliserFicheMembre, type EtatMembre } from '@/lib/domaine/membre'
+import {
+  FicheMembreInvalideError,
+  ficheMembreDepuisFormData,
+  ficheMembreVersColonnes,
+  type EtatMembre,
+} from '@/lib/domaine/membre'
 import { disciplesDe } from '@/lib/donnees/arbre'
 import { compteLieEstDernierAdministrateurActif } from '@/lib/donnees/comptes'
 import { membreParId } from '@/lib/donnees/membres'
@@ -19,36 +24,6 @@ const DETAIL_DERNIER_ADMINISTRATEUR = 'dernier_administrateur'
 
 export type EtatFormulaireMembre = { erreur: string | null }
 
-function lireFiche(donnees: FormData) {
-  return normaliserFicheMembre({
-    nom: donnees.get('nom'),
-    prenom: donnees.get('prenom'),
-    telephone: donnees.get('telephone'),
-    emailContact: donnees.get('emailContact'),
-    ville: donnees.get('ville'),
-    pays: donnees.get('pays'),
-    antenneId: donnees.get('antenneId'),
-    situation: donnees.get('situation'),
-    domaineEtude: donnees.get('domaineEtude'),
-    reportInitialAel: donnees.get('reportInitialAel'),
-  })
-}
-
-function versColonnes(fiche: ReturnType<typeof lireFiche>) {
-  return {
-    nom: fiche.nom,
-    prenom: fiche.prenom,
-    telephone: fiche.telephone,
-    email_contact: fiche.emailContact,
-    ville: fiche.ville,
-    pays: fiche.pays,
-    antenne_id: fiche.antenneId,
-    situation: fiche.situation,
-    domaine_etude: fiche.domaineEtude,
-    report_initial_ael: fiche.reportInitialAel,
-  }
-}
-
 export async function creerMembre(
   _etat: EtatFormulaireMembre,
   donnees: FormData,
@@ -57,7 +32,7 @@ export async function creerMembre(
 
   let colonnes
   try {
-    colonnes = versColonnes(lireFiche(donnees))
+    colonnes = ficheMembreVersColonnes(ficheMembreDepuisFormData(donnees))
   } catch (erreur) {
     return {
       erreur:
@@ -89,7 +64,7 @@ export async function modifierMembre(
 
   let colonnes
   try {
-    colonnes = versColonnes(lireFiche(donnees))
+    colonnes = ficheMembreVersColonnes(ficheMembreDepuisFormData(donnees))
   } catch (erreur) {
     return {
       erreur:
