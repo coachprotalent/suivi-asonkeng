@@ -139,3 +139,53 @@ describe('politique tokens_inscription_lecture', () => {
     expect(data).toBeNull()
   })
 })
+
+describe("politique de tentatives_token_inscription : ZÉRO lecture accordée", () => {
+  it('interdit la lecture à un administrateur authentifié', async () => {
+    const { data, error } = await clientAdminAuth.from('tentatives_token_inscription').select('id')
+    // À la différence de tokens_inscription et de ses tables sœurs, aucun
+    // `grant select` n'est redonné à authenticated sur cette table (migration
+    // 20260815130000) : le refus tombe au niveau du PRIVILÈGE Postgres (42501),
+    // avant même que la RLS n'ait à filtrer quoi que ce soit — vérifié
+    // empiriquement, pas seulement RLS activée + zéro politique.
+    expect(error).not.toBeNull()
+    expect(error!.code).toBe('42501')
+    expect(data).toBeNull()
+  })
+
+  it('interdit la lecture à un compte ordinaire authentifié', async () => {
+    const { data, error } = await clientSimple.from('tentatives_token_inscription').select('id')
+    expect(error).not.toBeNull()
+    expect(error!.code).toBe('42501')
+    expect(data).toBeNull()
+  })
+
+  it('interdit la lecture au rôle anon', async () => {
+    const { data, error } = await anon.from('tentatives_token_inscription').select('id')
+    expect(error).not.toBeNull()
+    expect(error!.code).toBe('42501')
+    expect(data).toBeNull()
+  })
+
+  // CONTRÔLE POSITIF : sans lui, les trois refus ci-dessus seraient satisfaits par
+  // une table qui n'existe pas, ou par une erreur de nom de colonne. On prouve que
+  // service_role, LUI, atteint réellement la table.
+  it('laisse la clé de service lire et écrire la table', async () => {
+    const { data: inseree, error: erreurInsertion } = await admin
+      .from('tentatives_token_inscription')
+      .insert({ adresse: '203.0.113.9' })
+      .select('id')
+      .single()
+    expect(erreurInsertion).toBeNull()
+    expect(inseree?.id).toBeTruthy()
+
+    const { data: lue, error: erreurLecture } = await admin
+      .from('tentatives_token_inscription')
+      .select('id')
+      .eq('id', inseree!.id)
+    expect(erreurLecture).toBeNull()
+    expect(lue).toHaveLength(1)
+
+    await admin.from('tentatives_token_inscription').delete().eq('id', inseree!.id)
+  })
+})
