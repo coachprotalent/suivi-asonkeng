@@ -219,3 +219,192 @@ describe('calendriers_ael', () => {
       .in('id', [premier!.id, horodate!.id, autreHeure!.id])
   })
 })
+
+describe('seances_ael, seances_ael_antennes, presences_ael', () => {
+  let idSeance: string
+  let idMembre: string
+
+  beforeAll(async () => {
+    const { data: membre, error: erreurMembre } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE}-membre`, prenom: 'Test' })
+      .select('id')
+      .single()
+    if (erreurMembre || !membre) throw new Error(`création du membre impossible : ${erreurMembre?.message}`)
+    idMembre = membre.id as string
+
+    const { data: seance, error: erreurSeance } = await admin
+      .from('seances_ael')
+      .insert({ date: '2026-09-01' })
+      .select('id')
+      .single()
+    if (erreurSeance || !seance) throw new Error(`création de la séance impossible : ${erreurSeance?.message}`)
+    idSeance = seance.id as string
+
+    const { error: erreurJonction } = await admin
+      .from('seances_ael_antennes')
+      .insert({ seance_id: idSeance, antenne_id: idAntenne })
+    if (erreurJonction) throw new Error(`jonction impossible : ${erreurJonction.message}`)
+
+    const { error: erreurPresence } = await admin
+      .from('presences_ael')
+      .insert({ seance_id: idSeance, membre_id: idMembre, present: true })
+    if (erreurPresence) throw new Error(`présence impossible : ${erreurPresence.message}`)
+  })
+
+  afterAll(async () => {
+    // Les enfants d'abord : `presences_ael` et `seances_ael_antennes` sont en
+    // `on delete cascade` sur `seances_ael`, mais la suppression explicite garde ce
+    // fichier lisible même si l'ordre des contraintes changeait un jour.
+    await admin.from('presences_ael').delete().eq('seance_id', idSeance)
+    await admin.from('seances_ael_antennes').delete().eq('seance_id', idSeance)
+    await admin.from('seances_ael').delete().eq('id', idSeance)
+    await admin.from('membres').delete().eq('id', idMembre)
+  })
+
+  it('un compte actif lit une séance, sa jonction et sa présence', async () => {
+    const { data: seance, error: erreurSeance } = await clientSimple
+      .from('seances_ael')
+      .select('id, date')
+      .eq('id', idSeance)
+      .single()
+    expect(erreurSeance).toBeNull()
+    expect(seance?.date).toBe('2026-09-01')
+
+    const { data: jonction } = await clientSimple
+      .from('seances_ael_antennes')
+      .select('antenne_id')
+      .eq('seance_id', idSeance)
+    expect(jonction).toEqual([{ antenne_id: idAntenne }])
+
+    const { data: presence } = await clientSimple
+      .from('presences_ael')
+      .select('present')
+      .eq('seance_id', idSeance)
+      .eq('membre_id', idMembre)
+    expect(presence).toEqual([{ present: true }])
+  })
+
+  it('un compte actif ne peut écrire sur aucune des trois tables', async () => {
+    const { error: erreurSeance } = await clientSimple.from('seances_ael').insert({ date: '2026-09-08' })
+    expect(erreurSeance).not.toBeNull()
+    expect(erreurSeance!.code).toBe('42501')
+
+    const { error: erreurJonction } = await clientSimple
+      .from('seances_ael_antennes')
+      .insert({ seance_id: idSeance, antenne_id: idAntenneExistante })
+    expect(erreurJonction).not.toBeNull()
+    expect(erreurJonction!.code).toBe('42501')
+
+    const { error: erreurPresence } = await clientSimple
+      .from('presences_ael')
+      .update({ present: false })
+      .eq('seance_id', idSeance)
+      .eq('membre_id', idMembre)
+      .select()
+    expect(erreurPresence).not.toBeNull()
+    // Même exigence que les deux branches précédentes : sans le code, une faute de
+    // frappe dans le nom de la table validerait ce test aussi bien qu'un refus réel.
+    expect(erreurPresence!.code).toBe('42501')
+
+    // Aucune des trois tentatives n'a rien écrit.
+    const { data: seances } = await admin.from('seances_ael').select('id').eq('date', '2026-09-08')
+    expect(seances).toEqual([])
+    const { data: presenceInchangee } = await admin
+      .from('presences_ael')
+      .select('present')
+      .eq('seance_id', idSeance)
+      .eq('membre_id', idMembre)
+      .single()
+    expect(presenceInchangee?.present).toBe(true)
+  })
+
+  it("l'exclusivité enseignant/modérateur (D36) refuse les deux champs à la fois, avec contrôle positif", async () => {
+    const { error: erreurExclusiviteEnseignant } = await admin
+      .from('seances_ael')
+      .insert({ date: '2026-09-09', enseignant_membre_id: idMembre, enseignant_libre: 'Un intervenant' })
+    expect(erreurExclusiviteEnseignant).not.toBeNull()
+    expect(erreurExclusiviteEnseignant!.code).toBe('23514')
+
+    const { error: erreurExclusiviteModerateur } = await admin
+      .from('seances_ael')
+      .insert({ date: '2026-09-09', moderateur_membre_id: idMembre, moderateur_libre: 'Un intervenant' })
+    expect(erreurExclusiviteModerateur).not.toBeNull()
+    expect(erreurExclusiviteModerateur!.code).toBe('23514')
+
+    // CONTRÔLE POSITIF : un seul des deux champs, dans chaque paire, doit être accepté.
+    const { data: seanceValide, error: erreurValide } = await admin
+      .from('seances_ael')
+      .insert({ date: '2026-09-09', enseignant_libre: 'Un intervenant', moderateur_membre_id: idMembre })
+      .select('id')
+      .single()
+    expect(erreurValide).toBeNull()
+    await admin.from('seances_ael').delete().eq('id', seanceValide!.id)
+  })
+
+  it('la contrainte unique de génération (D38, D39) refuse un doublon exact, avec contrôle positif', async () => {
+    // L'antenne de test n'a par construction aucun calendrier amorcé (Task 6) : on en
+    // crée un pour cette seule assertion, plutôt que de dépendre d'un état préexistant.
+    // Ce créneau est SUPPRIMÉ en fin de test : `calendriers_ael.antenne_id` est en
+    // `on delete restrict`, et l'oublier ferait échouer silencieusement la suppression
+    // de l'antenne dans l'`afterAll` du fichier — l'antenne et son créneau resteraient
+    // définitivement en base de production.
+    const { data: calendrier, error: erreurCalendrier } = await admin
+      .from('calendriers_ael')
+      .insert({ antenne_id: idAntenne, jour_semaine: 2 })
+      .select('id')
+      .single()
+    expect(erreurCalendrier).toBeNull()
+    const idCalendrier = calendrier!.id as string
+
+    const { data: premiere, error: erreurPremiere } = await admin
+      .from('seances_ael')
+      .insert({ date: '2026-09-15', calendrier_id: idCalendrier, genere_pour_le: '2026-09-15' })
+      .select('id')
+      .single()
+    expect(erreurPremiere).toBeNull()
+
+    const { error: erreurDoublon } = await admin
+      .from('seances_ael')
+      .insert({ date: '2026-09-15', calendrier_id: idCalendrier, genere_pour_le: '2026-09-15' })
+    expect(erreurDoublon).not.toBeNull()
+    expect(erreurDoublon!.code).toBe('23505')
+
+    // CONTRÔLE POSITIF : une occurrence à une AUTRE date, même calendrier, est acceptée
+    // — sans lui, le refus ci-dessus pourrait aussi bien signifier « ce calendrier ne
+    // peut plus rien générer », pas « cette occurrence précise existe déjà ».
+    const { data: autreDate, error: erreurAutreDate } = await admin
+      .from('seances_ael')
+      .insert({ date: '2026-09-22', calendrier_id: idCalendrier, genere_pour_le: '2026-09-22' })
+      .select('id')
+      .single()
+    expect(erreurAutreDate).toBeNull()
+
+    // Les séances d'abord (elles référencent le calendrier en `on delete restrict`),
+    // le calendrier ensuite.
+    await admin.from('seances_ael').delete().in('id', [premiere!.id, autreDate!.id])
+    const { error: erreurNettoyageCalendrier } = await admin
+      .from('calendriers_ael')
+      .delete()
+      .eq('id', idCalendrier)
+    expect(erreurNettoyageCalendrier).toBeNull()
+  })
+
+  it('deux séances créées à la main (calendrier_id NULL) ne se bloquent jamais entre elles', async () => {
+    const { data: premiere, error: erreurPremiere } = await admin
+      .from('seances_ael')
+      .insert({ date: '2026-10-01' })
+      .select('id')
+      .single()
+    expect(erreurPremiere).toBeNull()
+
+    const { data: seconde, error: erreurSeconde } = await admin
+      .from('seances_ael')
+      .insert({ date: '2026-10-01' })
+      .select('id')
+      .single()
+    expect(erreurSeconde).toBeNull()
+
+    await admin.from('seances_ael').delete().in('id', [premiere!.id, seconde!.id])
+  })
+})
