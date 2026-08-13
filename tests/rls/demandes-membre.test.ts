@@ -138,3 +138,40 @@ describe('politique demandes_membre_lecture', () => {
     expect(data).toBeNull()
   })
 })
+
+describe('amendement de membres_lecture pour le demandeur (design 2b §5.5)', () => {
+  it("laisse le demandeur lire la fiche en_attente qu'il a proposée", async () => {
+    const { data, error } = await clientDemandeurA.from('membres').select('id').eq('id', idMembreA)
+    expect(error).toBeNull()
+    expect(data).toHaveLength(1)
+  })
+
+  it("interdit à un AUTRE compte ordinaire de lire cette même fiche en_attente", async () => {
+    const { data, error } = await clientDemandeurB.from('membres').select('id').eq('id', idMembreA)
+    expect(error).toBeNull()
+    expect(data).toHaveLength(0)
+  })
+
+  it('laisse toujours un administrateur lire la fiche en_attente', async () => {
+    const { data, error } = await clientAdminAuth.from('membres').select('id').eq('id', idMembreA)
+    expect(error).toBeNull()
+    expect(data).toHaveLength(1)
+  })
+
+  // CONTRÔLE POSITIF : sans lui, les trois assertions ci-dessus pourraient passer
+  // sur une politique qui refuserait TOUJOURS l'accès à une fiche en_attente,
+  // masquant un défaut inverse. On prouve que le demandeur lit AUSSI l'annuaire
+  // actif ordinaire, par ailleurs — la leçon de la 1b et de la 1c.
+  it("le demandeur continue de lire l'annuaire actif ordinaire par ailleurs", async () => {
+    const { data: unMembreActif } = await admin
+      .from('membres')
+      .select('id')
+      .eq('etat', 'actif')
+      .limit(1)
+      .maybeSingle()
+    if (!unMembreActif) throw new Error('précondition : aucun membre actif en base pour ce contrôle positif')
+    const { data, error } = await clientDemandeurA.from('membres').select('id').eq('id', unMembreActif.id)
+    expect(error).toBeNull()
+    expect(data).toHaveLength(1)
+  })
+})
