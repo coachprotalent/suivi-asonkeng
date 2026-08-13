@@ -1,6 +1,7 @@
 import 'server-only'
 import type { EtatMembre, SituationMembre } from '@/lib/domaine/membre'
 import { clientServeur } from '@/lib/supabase/serveur'
+import { TAILLE_LOT_MEMBRES_ANTENNE, membresDesAntennesParLots } from './membres-lots'
 
 export type MembreListe = {
   id: string
@@ -310,14 +311,26 @@ export async function membreBrefParId(id: string): Promise<MembreBref | null> {
   return { id: data.id as string, nom: data.nom as string, prenom: data.prenom as string }
 }
 
+// `TAILLE_LOT_MEMBRES_ANTENNE` et `membresDesAntennesParLots` vivent dans
+// `./membres-lots`, un module SANS `import 'server-only'` — voir l'encadré en tête de
+// ce fichier-là pour pourquoi : c'est délibéré, pas un oubli d'import, et c'est ce qui
+// permet à `tests/rls/membres.test.ts` de faire tourner ce code contre la vraie base
+// sans passer par un Server Component. Réexportées ici pour les appelants de ce fichier.
+export { TAILLE_LOT_MEMBRES_ANTENNE, membresDesAntennesParLots }
+
 /**
  * Membres ACTIFS dont l'antenne figure dans `antenneIds`, triés par nom puis prénom,
- * SANS PAGINATION.
+ * SANS PAGINATION CÔTÉ APPELANT — mais parcourue par lots en interne pour rester
+ * complète quel que soit l'effectif (voir `membresDesAntennesParLots` dans
+ * `./membres-lots`, dont le commentaire détaille pourquoi : le plafond `max_rows` de
+ * PostgREST tronque silencieusement toute lecture non paginée au-delà de 1000 lignes,
+ * y compris sans `.range()` explicite).
  *
  * Deux appelants distincts, une seule fonction (D51) : l'écran de gestion d'une antenne
  * (Task 4, un seul identifiant dans le tableau) et le pointage d'une séance (Task 16,
- * plusieurs antennes ciblées par `seances_ael_antennes`). Sans limite ni `range` : D29 et
- * D53 l'exigent toutes deux, pour deux raisons distinctes — voir le design de la phase 3.
+ * plusieurs antennes ciblées par `seances_ael_antennes`). Aucune pagination visible de
+ * l'appelant : D29 et D53 l'exigent toutes deux, pour deux raisons distinctes — voir le
+ * design de la phase 3.
  *
  * `antenneIds` vide rend `[]` sans requête : `.in('antenne_id', [])` interrogerait la
  * base pour une réponse déjà connue.
@@ -326,24 +339,6 @@ export async function membresDesAntennes(antenneIds: string[]): Promise<MembreBr
   if (antenneIds.length === 0) {
     return []
   }
-
   const supabase = await clientServeur()
-  const { data, error } = await supabase
-    .from('membres')
-    .select('id, nom, prenom')
-    .eq('etat', 'actif')
-    .in('antenne_id', antenneIds)
-    .order('nom')
-    .order('prenom')
-
-  if (error) {
-    // Un échec ne doit pas être indistinguable d'une antenne vide : sans ceci, une
-    // panne de lecture laisserait croire qu'une antenne active n'a personne rattaché.
-    throw new Error(`Lecture des membres de l'antenne impossible : ${error.message}`)
-  }
-  return (data ?? []).map((l) => ({
-    id: l.id as string,
-    nom: l.nom as string,
-    prenom: l.prenom as string,
-  }))
+  return membresDesAntennesParLots(supabase, antenneIds)
 }
