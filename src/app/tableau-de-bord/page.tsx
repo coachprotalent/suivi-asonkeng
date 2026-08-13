@@ -31,6 +31,9 @@ export default async function PageTableauDeBord() {
         <Link href="/demandes/nouvelle" className="underline underline-offset-4">
           Proposer une personne à suivre
         </Link>
+        <Link href="/demandes" className="underline underline-offset-4">
+          Voir les demandes
+        </Link>
         {estAdmin ? (
           <Link href="/antennes" className="underline underline-offset-4">
             Gérer les antennes

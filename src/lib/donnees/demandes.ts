@@ -14,16 +14,20 @@ export type DemandeListe = {
   traiteParNom: string | null
   traiteLe: string | null
   creeLe: string
+  demandeurMembreId: string | null
 }
 
 const COLONNES =
   'id, origine, demandeur_profil_id, membre_id, etat, motif_rejet, traite_le, cree_le, ' +
   'membres(nom, prenom), ' +
-  'demandeur:profils!demandes_membre_demandeur_profil_id_fkey(nom_affichage), ' +
+  'demandeur:profils!demandes_membre_demandeur_profil_id_fkey(nom_affichage, membre_id), ' +
   'traiteur:profils!demandes_membre_traite_par_fkey(nom_affichage)'
 
 type LigneMembre = { nom: string; prenom: string } | { nom: string; prenom: string }[] | null
-type LigneProfil = { nom_affichage: string } | { nom_affichage: string }[] | null
+type LigneProfil =
+  | { nom_affichage: string; membre_id?: string | null }
+  | { nom_affichage: string; membre_id?: string | null }[]
+  | null
 
 function premier<T>(valeur: T | T[] | null): T | null {
   if (!valeur) return null
@@ -51,6 +55,7 @@ function versDemandeListe(ligne: any): DemandeListe {
     traiteParNom: traiteur?.nom_affichage ?? null,
     traiteLe: ligne.traite_le as string | null,
     creeLe: ligne.cree_le as string,
+    demandeurMembreId: demandeur?.membre_id ?? null,
   }
 }
 
