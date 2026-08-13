@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { expect, test, type Page } from '@playwright/test'
 import { identifiantVersEmail } from '../../src/lib/domaine/identifiant'
 import { MESSAGE_TOKEN_DEJA_CLOS } from '../../src/app/tokens/messages'
+import { VALIDITE_JOURS_DEFAUT } from '../../src/app/tokens/constantes'
 
 const admin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -255,14 +256,84 @@ test('révoquer un token déjà consommé par ailleurs échoue proprement et lai
   expect(relu!.utilise_par_profil_id).toBe(profilAdmin!.id)
 })
 
-test("un compte non-administrateur qui appelle genererToken directement échoue et n'écrit rien", async ({ page }) => {
-  await connecter(page, IDENT_SIMPLE)
+// Même motif de forge que `tests/e2e/statuts.spec.ts` et `tests/e2e/autorite.spec.ts` :
+// un formulaire lié à une Server Action via `<form action={...}>` (ici,
+// `envoyer` issu de `useActionState(genererToken, ...)`) rend des champs cachés
+// `$ACTION_*` — des références déterministes à la fonction serveur pour cette
+// version du code, pas un secret lié à la session. Quiconque a vu la page une
+// seule fois peut les rejouer tels quels depuis une session différente : c'est
+// exactement ce qu'un appel DIRECT à `genererToken` (par opposition à une simple
+// navigation) doit démontrer.
+function decoderEntitesHtml(valeur: string): string {
+  return valeur
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+}
+
+function extraireChampsCaches(formHtml: string): Record<string, string> {
+  const champs: Record<string, string> = {}
+  const regex = /<input type="hidden" name="([^"]+)"(?:\s+value="([^"]*)")?/g
+  let correspondance: RegExpExecArray | null
+  while ((correspondance = regex.exec(formHtml))) {
+    champs[decoderEntitesHtml(correspondance[1])] = decoderEntitesHtml(correspondance[2] ?? '')
+  }
+  return champs
+}
+
+/** Lève si la capture n'a trouvé aucun champ `$ACTION*` : mieux vaut un échec
+ * bruyant ici qu'un test qui, silencieusement, ne teste plus rien. */
+function verifierCaptureAction(champs: Record<string, string>): void {
+  const trouve = Object.keys(champs).some((nom) => nom.startsWith('$ACTION'))
+  if (!trouve) {
+    throw new Error(
+      `Capture invalide : aucun champ « $ACTION* » parmi ${JSON.stringify(Object.keys(champs))}. ` +
+        "L'encodage des Server Actions a peut-être changé — ce test ne peut plus prouver ce qu'il prétend.",
+    )
+  }
+}
+
+test("un compte non-administrateur qui appelle genererToken directement échoue et n'écrit rien", async ({
+  page,
+  browser,
+  baseURL,
+}) => {
+  // Le titre promet un appel DIRECT de la Server Action, pas une simple
+  // navigation : une navigation vers /tokens renvoyée au tableau de bord
+  // resterait verte même si `exigerAdministrateur()` disparaissait de
+  // `genererToken` tout en restant dans `page.tsx` — le garde de la PAGE
+  // suffirait à lui seul à faire passer ce test, sans jamais éprouver le garde
+  // de l'ACTION. On capture donc les champs `$ACTION*` du vrai formulaire, pour
+  // les rejouer par une requête HTTP brute, hors de toute interaction UI.
+  await connecter(page, IDENT_ADMIN)
+  await page.goto('/tokens')
+  const formulaireGeneration = page
+    .locator('form')
+    .filter({ has: page.getByRole('button', { name: 'Générer le token' }) })
+  const champs = extraireChampsCaches(await formulaireGeneration.evaluate((el) => el.outerHTML))
+  verifierCaptureAction(champs)
 
   const { count: avant } = await admin.from('tokens_inscription').select('id', { count: 'exact', head: true })
 
-  await page.goto('/tokens')
-  await expect(page).toHaveURL(/\/tableau-de-bord/)
+  // Session non-administrateur distincte : ce compte n'a jamais vu ce
+  // formulaire (l'écran le renvoie au tableau de bord), il ne fait que rejouer
+  // les champs capturés ci-dessus sous sa propre identité authentifiée.
+  const contexteSimple = await browser.newContext({ baseURL })
+  try {
+    const pageSimple = await contexteSimple.newPage()
+    await connecter(pageSimple, IDENT_SIMPLE)
 
-  const { count: apres } = await admin.from('tokens_inscription').select('id', { count: 'exact', head: true })
-  expect(apres).toBe(avant)
+    await pageSimple.request.post('/tokens', {
+      multipart: { ...champs, mode: 'generique', validiteJours: String(VALIDITE_JOURS_DEFAUT) },
+    })
+
+    // Seule assertion qui compte : aucune ligne n'a été créée, quel qu'ait été
+    // le code HTTP ou la redirection renvoyés par la requête forgée.
+    const { count: apres } = await admin.from('tokens_inscription').select('id', { count: 'exact', head: true })
+    expect(apres).toBe(avant)
+  } finally {
+    await contexteSimple.close()
+  }
 })
