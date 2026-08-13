@@ -40,9 +40,11 @@ export async function definirAntenneMembre(
 
   const membreId = champOuNull(donnees, 'membreId')
   if (!membreId) {
-    // Atteignable par une soumission sans JavaScript du formulaire de rattachement
-    // (Task 4) : le bouton n'y est désactivé que côté client tant qu'aucun membre
-    // n'est choisi. Message dédié, pas le message générique : la cause est connue.
+    // Le bouton du formulaire de rattachement (Task 4) est déjà désactivé CÔTÉ SERVEUR
+    // tant qu'aucun membre n'est choisi (`formulaire-rattachement.tsx`) : une soumission
+    // sans JavaScript ne peut donc pas emprunter ce chemin. Reste atteignable par une
+    // requête forgée ou un `FormData` partiel (revue task-1-4, constat M3) — filet réel,
+    // message dédié plutôt que générique parce que la cause est connue dans ce cas-là.
     return { erreur: MESSAGE_MEMBRE_MANQUANT }
   }
 

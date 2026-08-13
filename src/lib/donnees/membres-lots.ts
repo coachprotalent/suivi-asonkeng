@@ -55,19 +55,57 @@ export const TAILLE_LOT_MEMBRES_ANTENNE = 500
  * naturelle. Le parcours par lots rend la troncature IMPOSSIBLE quel que soit
  * l'effectif, plutôt que seulement DÉTECTABLE sous une hypothèse qui peut se tromper.
  *
- * Chaque lot est demandé sous `tailleLot` (strictement < `max_rows`), donc jamais
- * lui-même tronqué. La dernière page est celle dont le lot rendu est plus court que
- * `tailleLot` — signe qu'il ne reste rien après. Cas particulier : si le total est un
- * multiple EXACT de `tailleLot`, la page suivante démarre exactement au nombre total de
- * lignes ; PostgREST refuse alors la plage entière avec `PGRST103` (416, la même erreur
- * que `listerMembres` traite déjà dans `membres.ts`, pour une raison différente) plutôt
- * que de rendre un lot vide — fin de parcours normale, pas une panne.
+ * Chaque lot est demandé sous `tailleLot` : c'est vrai PAR CONSTRUCTION de la constante
+ * `TAILLE_LOT_MEMBRES_ANTENNE` (500, strictement < `max_rows`), mais PAS du paramètre
+ * `tailleLot` en général — c'est un paramètre public, exporté, que rien n'empêcherait
+ * d'appeler avec une valeur ≥ `max_rows`. D'où la validation ci-dessous : sans elle, un
+ * appel à `tailleLot >= max_rows` ferait tronquer le lot PAR POSTGREST LUI-MÊME, la
+ * condition `lot.length < tailleLot` (plus bas) conclurait alors « dernière page », et la
+ * fonction rendrait une liste tronquée COMME COMPLÈTE — le défaut d'origine, réintroduit
+ * par la porte même ouverte pour le corriger (revue task-1-4, constat I1). Une valeur
+ * ≤ 0, elle, donnerait `debut += 0` à chaque tour : boucle infinie.
+ *
+ * La dernière page est celle dont le lot rendu est plus court que `tailleLot` — signe
+ * qu'il ne reste rien après. C'est CE critère, et lui seul, qui termine le parcours dans
+ * TOUS les cas, y compris le cas particulier où le total est un multiple EXACT de
+ * `tailleLot` : vérifié par appel réel contre la base de ce projet (pas seulement supposé
+ * depuis le code), demander une page dont le décalage égale le nombre total de lignes NE
+ * PRODUIT PAS `PGRST103` sur la version de PostgREST qui sert ce projet — elle répond
+ * `200`/`206` avec un tableau vide, une page vide comme une autre. Un commentaire antérieur
+ * de cette fonction affirmait le contraire (revue task-1-4, hypothèse posée mais jamais
+ * vérifiée — voir son constat I3) ; corrigé ici après vérification directe, HTTP brut
+ * compris (`Range: 2-3` sur 2 lignes → `206`, `Content-Range` sans plage sur un total de
+ * 2, corps `[]`).
+ *
+ * `PGRST103` reste néanmoins traité ci-dessous, en pure défense : c'est un code réel,
+ * mais produit par PostgREST pour une plage STRUCTURELLEMENT invalide (borne de début
+ * postérieure à la borne de fin — `range(5, 2)` répond bien `PGRST103`/`416`, message
+ * « Limit should be greater than or equal to zero », vérifié de la même façon) — jamais
+ * un cas que cette fonction peut construire elle-même tant que `tailleLot` reste validé
+ * ≥ 1 ci-dessus, mais gardé au cas où un futur appelant ou une version différente de
+ * PostgREST changerait ce contrat. La traiter comme une fin de parcours normale plutôt
+ * que de la laisser remonter reste le bon choix : elle ne doit jamais se faire passer
+ * pour une antenne vide.
  */
 export async function membresDesAntennesParLots(
   supabase: SupabaseClient,
   antenneIds: string[],
   tailleLot: number = TAILLE_LOT_MEMBRES_ANTENNE,
 ): Promise<MembreBref[]> {
+  // Validation levée, pas bornée en silence : borner (`Math.min(tailleLot, 999)`)
+  // masquerait un appel erroné derrière un comportement différent de celui demandé, sans
+  // qu'aucun signal ne le montre — exactement le genre de mensonge silencieux que ce
+  // module existe pour éliminer. `tailleLot` n'a qu'un seul appelant capable de le faire
+  // varier (`tests/rls/membres.test.ts`, pour franchir une frontière de page réelle sans
+  // construire des centaines de fiches) : une erreur bruyante ne coûte donc rien en
+  // production (l'appel par défaut ne passe jamais ce paramètre) et referme I1 pour de
+  // bon plutôt que de repousser la troncature à une valeur simplement plus haute.
+  if (!Number.isInteger(tailleLot) || tailleLot < 1 || tailleLot >= 1000) {
+    throw new Error(
+      `membresDesAntennesParLots : tailleLot invalide (${tailleLot}) — doit être un entier compris entre 1 et 999 inclus (max_rows PostgREST = 1000, supabase/config.toml:18).`,
+    )
+  }
+
   if (antenneIds.length === 0) {
     return []
   }
@@ -82,6 +120,15 @@ export async function membresDesAntennesParLots(
       .in('antenne_id', antenneIds)
       .order('nom')
       .order('prenom')
+      // `.order('id')` en dernier départage : (nom, prenom) n'est PAS unique — deux
+      // homonymes exacts (cas banal sur une liste de membres) n'ont aucun ordre relatif
+      // garanti d'une exécution à l'autre de cette requête (plan différent, tri
+      // parallèle...). À cheval sur une frontière de page, l'un pourrait être rendu deux
+      // fois ou jamais — « jamais » étant exactement le sinistre que toute cette
+      // correction vise à rendre impossible (revue task-1-4, constat I2). `id` est la clé
+      // primaire, donc unique : ce troisième critère rend le tri TOTAL, et la pagination
+      // par décalage déterministe quel que soit le nombre d'ex æquo sur (nom, prenom).
+      .order('id')
       .range(debut, debut + tailleLot - 1)
 
     if (error) {

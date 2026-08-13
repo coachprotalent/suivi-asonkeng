@@ -240,6 +240,15 @@ describe('membresDesAntennes : correction de la troncature silencieuse (max_rows
   })
 
   afterAll(async () => {
+    if (!idAntenneLots) {
+      // `beforeAll` a levé avant d'affecter `idAntenneLots` (création de l'antenne ou
+      // des membres de test en échec) : cette erreur est déjà remontée par vitest telle
+      // quelle. Rien n'a été créé, donc rien à nettoyer ici — sans ce garde, les appels
+      // ci-dessous s'exécuteraient avec `antenne_id: undefined`, une requête PostgREST
+      // malformée qui empilerait une seconde erreur trompeuse par-dessus la vraie cause
+      // (revue task-1-4, constat M7).
+      return
+    }
     // Ordre imposé par `antenne_id ... on delete restrict` (migration 20260812120000,
     // délibéré : une antenne encore rattachée ne doit pas se supprimer en silence) :
     // les fiches d'abord, l'antenne ensuite — sinon la suppression de l'antenne échoue.
@@ -278,21 +287,127 @@ describe('membresDesAntennes : correction de la troncature silencieuse (max_rows
     expect(membres.map((m) => m.nom)).toEqual(NOMS_LOT)
   })
 
-  it('un lot dont le compte est un multiple EXACT franchit la frontière sans lever (PGRST103 traité comme fin de parcours, pas comme une panne)', async () => {
+  it('un lot dont le compte est un multiple EXACT franchit la frontière sans lever (page hors bornes rendue vide sans erreur ; branche PGRST103 gardée en défense mais non atteinte ici)', async () => {
     // 4 fiches, tailleLot = 2 : page 1 rend 2 lignes (= tailleLot, continue), page 2 rend
     // 2 lignes (= tailleLot, continue encore) — total atteint, mais rien ne le dit encore
-    // à la boucle. La page 3 démarre à l'indice 4, exactement au nombre total de lignes :
-    // la plage est hors bornes et PostgREST répond PGRST103 (416) plutôt qu'une page
-    // vide. C'est la branche qui aurait fait REMONTER une erreur à l'appelant — donc
-    // `membresDesAntennes` aurait levé pour une antenne parfaitement valide — si elle
-    // n'était pas traitée comme une fin de parcours normale : contrôle direct de cette
-    // branche, pas seulement de son effet observable.
+    // à la boucle. La page 3 démarre à l'indice 4, exactement au nombre total de lignes.
     const membres = await membresDesAntennesParLots(clientSimple, [idAntenneLots], 2)
     expect(membres.map((m) => m.nom)).toEqual(NOMS_LOT)
+
+    // PRÉMISSE VÉRIFIÉE DIRECTEMENT (revue task-1-4, constat I3) — et PAS celle que la
+    // revue avait supposée. L'hypothèse initiale (« PostgREST refuse la plage entière
+    // avec PGRST103 quand le décalage égale le total ») s'est révélée FAUSSE à l'épreuve
+    // contre cette base réelle : vérifié ici via le client, et confirmé en HTTP brut
+    // (`Range: 4-5` sur 4 lignes → `206 Partial Content`, `Content-Range: */4`, corps
+    // `[]` — jamais `416`). `PGRST103` EST un code réel produit par cette version de
+    // PostgREST, mais seulement pour une plage STRUCTURELLEMENT invalide, début postérieur
+    // à fin (`range(5, 2)` → `416`, message « Limit should be greater than or equal to
+    // zero », vérifié de la même façon) — jamais le cas d'un décalage simplement épuisé.
+    // Cette assertion établit donc, dans les DEUX sens et sans supposition, que c'est
+    // `lot.length < tailleLot` (membres-lots.ts) — PAS la branche `error.code ===
+    // 'PGRST103'`, qui reste mort en pratique tant que `tailleLot` reste validé ≥ 1 — qui
+    // termine réellement le parcours à cette frontière. Sans cette assertion, la seule
+    // ligne ci-dessus resterait tout aussi verte même si PostgREST changeait un jour de
+    // comportement, sans que rien ne le signale.
+    const { error: erreurPremisse, data: dataPremisse } = await clientSimple
+      .from('membres')
+      .select('id')
+      .eq('etat', 'actif')
+      .in('antenne_id', [idAntenneLots])
+      .order('nom')
+      .order('prenom')
+      .order('id')
+      .range(4, 5)
+    expect(erreurPremisse).toBeNull()
+    expect(dataPremisse).toEqual([])
   })
 
   it("un lot plus grand que le total ne fait toujours qu'une seule page (comportement inchangé pour le cas courant, aucune régression)", async () => {
     const membres = await membresDesAntennesParLots(clientSimple, [idAntenneLots], 500)
     expect(membres.map((m) => m.nom)).toEqual(NOMS_LOT)
+  })
+})
+
+describe('membresDesAntennesParLots : tri total malgré des homonymes exacts (I2)', () => {
+  // (nom, prenom) n'est PAS unique : deux fiches strictement identiques sur ces deux
+  // colonnes (cas banal sur un fichier de membres d'église, pas une hypothèse d'école)
+  // n'ont aucun ordre relatif garanti entre deux exécutions séparées de la même requête
+  // (une par page). À cheval sur une frontière de page, l'une pourrait être rendue deux
+  // fois, l'autre jamais — le sinistre visé par toute cette correction. `.order('id')`
+  // (membres-lots.ts) rend le tri total ; ce bloc l'éprouve par une insertion réelle,
+  // pas par lecture du code. Bloc dédié, séparé de celui ci-dessus, pour ne pas fausser
+  // les assertions d'égalité stricte qui portent déjà sur les 4 fiches `NOMS_LOT`.
+  const NOM_HOMONYME = `ZZTestHomonymes-${crypto.randomUUID().slice(0, 8)}`
+  let idAntenneHomonymes: string
+  let idHomonyme1: string
+  let idHomonyme2: string
+
+  beforeAll(async () => {
+    const { data: antenne, error: erreurAntenne } = await admin
+      .from('antennes')
+      .insert({ nom: NOM_HOMONYME, pays: 'Test' })
+      .select('id')
+      .single()
+    if (erreurAntenne || !antenne) {
+      throw new Error(`création de l'antenne de test impossible : ${erreurAntenne?.message}`)
+    }
+    idAntenneHomonymes = antenne.id
+
+    // DEUX FICHES STRICTEMENT IDENTIQUES sur (nom, prenom) : seul terrain où l'ancien tri
+    // (nom, prenom), sans troisième critère, pouvait laisser filer une ligne.
+    const { data: cree, error: erreurMembres } = await admin
+      .from('membres')
+      .insert([
+        { nom: NOM_HOMONYME, prenom: 'Meme', etat: 'actif', antenne_id: idAntenneHomonymes },
+        { nom: NOM_HOMONYME, prenom: 'Meme', etat: 'actif', antenne_id: idAntenneHomonymes },
+      ])
+      .select('id')
+    if (erreurMembres || !cree || cree.length !== 2) {
+      throw new Error(`création des membres homonymes impossible : ${erreurMembres?.message}`)
+    }
+    idHomonyme1 = cree[0].id as string
+    idHomonyme2 = cree[1].id as string
+  })
+
+  afterAll(async () => {
+    if (!idAntenneHomonymes) {
+      // Même garde qu'au bloc précédent (revue task-1-4, constat M7) : si `beforeAll` a
+      // levé avant d'affecter `idAntenneHomonymes`, rien n'a été créé et les appels
+      // ci-dessous n'empileraient qu'une seconde erreur trompeuse sur la vraie cause.
+      return
+    }
+    const { error: erreurSuppressionMembres } = await admin
+      .from('membres')
+      .delete()
+      .eq('antenne_id', idAntenneHomonymes)
+    if (erreurSuppressionMembres) {
+      throw new Error(`nettoyage des membres homonymes impossible : ${erreurSuppressionMembres.message}`)
+    }
+    const { error: erreurSuppressionAntenne } = await admin
+      .from('antennes')
+      .delete()
+      .eq('id', idAntenneHomonymes)
+    if (erreurSuppressionAntenne) {
+      throw new Error(`nettoyage de l'antenne homonymes impossible : ${erreurSuppressionAntenne.message}`)
+    }
+    // Nettoyage vérifié par comptage, pas seulement par l'absence d'erreur de suppression.
+    const { count } = await admin
+      .from('membres')
+      .select('id', { count: 'exact', head: true })
+      .like('nom', `${NOM_HOMONYME}%`)
+    expect(count).toBe(0)
+  })
+
+  it('deux homonymes exacts à cheval sur une frontière de page sont rendus une fois chacun, jamais deux fois, jamais aucun', async () => {
+    // tailleLot = 1 place la frontière de page EXACTEMENT entre les deux homonymes :
+    // page 1 rend la première ligne triée (par id, seul critère qui les distingue encore
+    // une fois nom et prenom à égalité), page 2 la seconde, page 3 sort par PGRST103
+    // (2 lignes, multiple exact de 1 — la même branche qu'éprouve I3 plus haut).
+    const membres = await membresDesAntennesParLots(clientSimple, [idAntenneHomonymes], 1)
+    expect(membres).toHaveLength(2)
+    // Assertion par ENSEMBLE d'identifiants, pas seulement par longueur : une longueur de
+    // 2 obtenue par une ligne dupliquée ET l'autre absente passerait une simple assertion
+    // de longueur, mais pas celle d'ensemble ci-dessous.
+    expect(new Set(membres.map((m) => m.id))).toEqual(new Set([idHomonyme1, idHomonyme2]))
   })
 })

@@ -1,7 +1,7 @@
 import 'server-only'
 import type { EtatMembre, SituationMembre } from '@/lib/domaine/membre'
 import { clientServeur } from '@/lib/supabase/serveur'
-import { TAILLE_LOT_MEMBRES_ANTENNE, membresDesAntennesParLots } from './membres-lots'
+import { membresDesAntennesParLots } from './membres-lots'
 
 export type MembreListe = {
   id: string
@@ -315,8 +315,11 @@ export async function membreBrefParId(id: string): Promise<MembreBref | null> {
 // `./membres-lots`, un module SANS `import 'server-only'` — voir l'encadré en tête de
 // ce fichier-là pour pourquoi : c'est délibéré, pas un oubli d'import, et c'est ce qui
 // permet à `tests/rls/membres.test.ts` de faire tourner ce code contre la vraie base
-// sans passer par un Server Component. Réexportées ici pour les appelants de ce fichier.
-export { TAILLE_LOT_MEMBRES_ANTENNE, membresDesAntennesParLots }
+// sans passer par un Server Component. `membresDesAntennesParLots` n'est importée ICI
+// que pour l'usage interne de `membresDesAntennes` ci-dessous : aucun appelant de ce
+// fichier n'a besoin d'elle ni de la constante directement (recherche exhaustive du
+// dépôt, revue task-1-4, constat M1) — `tests/rls/membres.test.ts` les importe déjà
+// directement depuis `./membres-lots`. Une réexportation ici serait donc morte : retirée.
 
 /**
  * Membres ACTIFS dont l'antenne figure dans `antenneIds`, triés par nom puis prénom,
