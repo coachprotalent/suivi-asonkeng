@@ -307,8 +307,9 @@ describe('annuler_demande_membre', () => {
   })
 
   it("refuse d'annuler une demande déjà traitée", async () => {
-    const { demandeId } = await creerDemandeEtFiche(idDemandeurA)
-    await admin.from('demandes_membre').update({ etat: 'validee' }).eq('id', demandeId)
+    const { demandeId, ficheId } = await creerDemandeEtFiche(idDemandeurA)
+    const { error: erreurPreparation } = await admin.from('demandes_membre').update({ etat: 'validee' }).eq('id', demandeId)
+    if (erreurPreparation) throw new Error(`préparation (passage à validee) impossible : ${erreurPreparation.message}`)
 
     const { error } = await admin.rpc('annuler_demande_membre', {
       p_demande: demandeId,
@@ -316,9 +317,60 @@ describe('annuler_demande_membre', () => {
     })
     expect(error).not.toBeNull()
     expect(error?.details).toBe('demande_non_annulable')
+
+    // Contrôle complet (I3, revue) : ni l'état (déjà validee, PAS en_attente —
+    // c'est l'état préparé ci-dessus) ni la survie de la fiche ne doivent avoir
+    // bougé — pas seulement l'un des deux.
+    const { data } = await admin.from('demandes_membre').select('etat').eq('id', demandeId).single()
+    expect(data?.etat).toBe('validee')
+    const { data: ficheEncore } = await admin.from('membres').select('id').eq('id', ficheId)
+    expect(ficheEncore).toHaveLength(1)
   })
 
-  it('marque lues les notifications nouvelle_demande liées à cette demande (D41)', async () => {
+  // I2 (revue) : le DELETE sur membres doit être gardé par etat = 'en_attente'.
+  // Aucun des deux helpers existants (creerDemandeEtFiche, creerAutoInscription)
+  // ne peut éprouver ce défaut : ils créent toujours une fiche en_attente. Il faut
+  // donc sortir du helper et construire explicitement une demande en_attente qui
+  // référence une fiche dans un AUTRE état, exactement comme le beforeAll du
+  // fichier le fait déjà pour idMembreArchive.
+  it("NE SUPPRIME PAS une fiche référencée qui n'est plus en_attente (I2, revue)", async () => {
+    const { data: ficheArchivee, error: erreurFiche } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE_MEMBRE}-garde-annulation`, prenom: 'Test', etat: 'archive' })
+      .select('id')
+      .single()
+    if (erreurFiche || !ficheArchivee) throw new Error(`création de la fiche archivée impossible : ${erreurFiche?.message}`)
+
+    const { data: demande, error: erreurDemande } = await admin
+      .from('demandes_membre')
+      .insert({
+        origine: 'demande_suivi',
+        demandeur_profil_id: idDemandeurA,
+        membre_id: ficheArchivee.id,
+        etat: 'en_attente',
+      })
+      .select('id')
+      .single()
+    if (erreurDemande || !demande) throw new Error(`création de la demande impossible : ${erreurDemande?.message}`)
+
+    const { error } = await admin.rpc('annuler_demande_membre', {
+      p_demande: demande.id,
+      p_demandeur: idDemandeurA,
+    })
+    expect(error).toBeNull()
+
+    // La demande est bien annulée...
+    const { data: demandeRelue } = await admin.from('demandes_membre').select('etat').eq('id', demande.id).single()
+    expect(demandeRelue?.etat).toBe('annulee')
+
+    // ...mais la fiche ARCHIVÉE, elle, survit : ce n'était pas la fiche jetable
+    // en_attente que D42 vise.
+    const { data: ficheEncore } = await admin.from('membres').select('id, etat').eq('id', ficheArchivee.id)
+    expect(ficheEncore).toHaveLength(1)
+    expect(ficheEncore?.[0]?.etat).toBe('archive')
+  })
+
+  it('marque lues les notifications nouvelle_demande liées à cette demande (D41), et PAS une notification sans rapport (I3, revue)', async () => {
     const { demandeId } = await creerDemandeEtFiche(idDemandeurA)
     const { data: notif, error: erreurNotif } = await admin
       .from('notifications')
@@ -327,16 +379,44 @@ describe('annuler_demande_membre', () => {
         type: 'nouvelle_demande',
         titre: 'Test',
         corps: 'Corps de test',
-        lien: `/demandes/${demandeId}`,
+        lien: '/demandes',
       })
       .select('id')
       .single()
     if (erreurNotif || !notif) throw new Error(`création de la notification impossible : ${erreurNotif?.message}`)
 
+    // CONTRÔLE NÉGATIF (I3, revue) : une seconde notification, non liée à cette
+    // demande (lien différent), doit rester NON lue. Sans elle, un test qui ne
+    // constaterait que le marquage de la première ne distinguerait pas « le
+    // filtre agit » de « il n'y avait rien à filtrer » — si la clause `and lien
+    // = ...` sautait, la fonction marquerait lues TOUTES les nouvelle_demande de
+    // la base, et ce test resterait vert sans cette seconde ligne.
+    const { data: notifSansRapport, error: erreurNotifSansRapport } = await admin
+      .from('notifications')
+      .insert({
+        profil_id: idAdmin,
+        type: 'nouvelle_demande',
+        titre: 'Test sans rapport',
+        corps: 'Ne doit pas être touchée',
+        lien: '/autre-chose',
+      })
+      .select('id')
+      .single()
+    if (erreurNotifSansRapport || !notifSansRapport) {
+      throw new Error(`création de la notification sans rapport impossible : ${erreurNotifSansRapport?.message}`)
+    }
+
     await admin.rpc('annuler_demande_membre', { p_demande: demandeId, p_demandeur: idDemandeurA })
 
     const { data: notifRelue } = await admin.from('notifications').select('lu_le').eq('id', notif.id).single()
     expect(notifRelue?.lu_le).not.toBeNull()
+
+    const { data: notifSansRapportRelue } = await admin
+      .from('notifications')
+      .select('lu_le')
+      .eq('id', notifSansRapport.id)
+      .single()
+    expect(notifSansRapportRelue?.lu_le).toBeNull()
   })
 
   it('refuse son exécution à un compte authentifié ordinaire (42501)', async () => {
@@ -368,60 +448,132 @@ describe('valider_demande_rattachement (D26)', () => {
     return { ficheJetableId: fiche.id as string, demandeId: demande.id as string }
   }
 
-  it('rattache le compte, repointe la demande, ET supprime réellement la fiche jetable', async () => {
+  it('rattache le compte, repointe la demande, ET supprime réellement la fiche jetable — la notification va au BON destinataire (I1, revue)', async () => {
     const { ficheJetableId, demandeId } = await creerAutoInscription()
     const { data: ficheExistante, error: erreurExistante } = await admin
       .from('membres')
       .insert({ nom: `${PREFIXE_MEMBRE}-existante`, prenom: 'Test' })
       .select('id')
       .single()
-    if (erreurExistante || !ficheExistante) throw new Error(`création de la fiche existante impossible`)
+    if (erreurExistante || !ficheExistante) throw new Error(`création de la fiche existante impossible : ${erreurExistante?.message}`)
 
-    const { error } = await admin.rpc('valider_demande_rattachement', {
-      p_demande: demandeId,
-      p_membre_existant: ficheExistante.id,
-      p_admin: idAdmin,
-    })
-    expect(error).toBeNull()
+    try {
+      const { error } = await admin.rpc('valider_demande_rattachement', {
+        p_demande: demandeId,
+        p_membre_existant: ficheExistante.id,
+        p_admin: idAdmin,
+      })
+      expect(error).toBeNull()
 
-    const { data: demandeRelue } = await admin
-      .from('demandes_membre')
-      .select('etat, membre_id')
-      .eq('id', demandeId)
+      const { data: demandeRelue } = await admin
+        .from('demandes_membre')
+        .select('etat, membre_id')
+        .eq('id', demandeId)
+        .single()
+      expect(demandeRelue?.etat).toBe('validee')
+      expect(demandeRelue?.membre_id).toBe(ficheExistante.id)
+
+      const { data: profilRelu } = await admin.from('profils').select('membre_id').eq('id', idDemandeurA).single()
+      expect(profilRelu?.membre_id).toBe(ficheExistante.id)
+
+      // La fiche jetable a RÉELLEMENT disparu de la base — pas seulement « l'appel
+      // n'a pas levé d'erreur » (design 2b §10).
+      const { data: ficheJetableRelue } = await admin.from('membres').select('id').eq('id', ficheJetableId)
+      expect(ficheJetableRelue).toHaveLength(0)
+
+      // I1 (revue) : la notification demande_validee va au DEMANDEUR, jamais à
+      // l'administrateur qui valide — notifications n'étant lisible que par son
+      // propre destinataire, un mauvais destinataire serait resté silencieux et
+      // invisible à l'écran. Contrôle positif ET négatif dans le MÊME test :
+      // après une transaction RÉUSSIE (pas avortée, où un comptage à zéro ne
+      // prouverait rien pour personne).
+      const { data: notifDemandeur } = await admin
+        .from('notifications')
+        .select('id')
+        .eq('profil_id', idDemandeurA)
+        .eq('type', 'demande_validee')
+      expect(notifDemandeur).toHaveLength(1)
+
+      const { data: notifAdmin } = await admin
+        .from('notifications')
+        .select('id')
+        .eq('profil_id', idAdmin)
+        .eq('type', 'demande_validee')
+      expect(notifAdmin).toHaveLength(0)
+    } finally {
+      // Rétablir profils.membre_id à NULL : les tests suivants du fichier ne
+      // s'attendent pas à un demandeur déjà lié. Dans un `finally` (I1/revue) :
+      // sans lui, une assertion qui tombe AU-DESSUS laisserait le rattachement
+      // en place pour les tests suivants du fichier.
+      await admin.from('profils').update({ membre_id: null }).eq('id', idDemandeurA)
+    }
+  })
+
+  it('marque lues les notifications nouvelle_demande liées à cette demande (I4a, symétrie D41), et PAS une notification sans rapport', async () => {
+    const { demandeId } = await creerAutoInscription()
+    const { data: ficheExistante, error: erreurExistante } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE_MEMBRE}-existante-i4a`, prenom: 'Test' })
+      .select('id')
       .single()
-    expect(demandeRelue?.etat).toBe('validee')
-    expect(demandeRelue?.membre_id).toBe(ficheExistante.id)
+    if (erreurExistante || !ficheExistante) throw new Error(`création de la fiche existante impossible : ${erreurExistante?.message}`)
 
-    const { data: profilRelu } = await admin.from('profils').select('membre_id').eq('id', idDemandeurA).single()
-    expect(profilRelu?.membre_id).toBe(ficheExistante.id)
+    const { data: notif, error: erreurNotif } = await admin
+      .from('notifications')
+      .insert({ profil_id: idAdmin, type: 'nouvelle_demande', titre: 'Test', corps: 'Corps de test', lien: '/demandes' })
+      .select('id')
+      .single()
+    if (erreurNotif || !notif) throw new Error(`création de la notification impossible : ${erreurNotif?.message}`)
 
-    // La fiche jetable a RÉELLEMENT disparu de la base — pas seulement « l'appel
-    // n'a pas levé d'erreur » (design 2b §10).
-    const { data: ficheJetableRelue } = await admin.from('membres').select('id').eq('id', ficheJetableId)
-    expect(ficheJetableRelue).toHaveLength(0)
+    // CONTRÔLE NÉGATIF (même raisonnement que I3 sur l'annulation) : une
+    // notification sans rapport (lien différent) doit rester non lue.
+    const { data: notifSansRapport, error: erreurNotifSansRapport } = await admin
+      .from('notifications')
+      .insert({ profil_id: idAdmin, type: 'nouvelle_demande', titre: 'Sans rapport', corps: 'Ne doit pas être touchée', lien: '/autre-chose' })
+      .select('id')
+      .single()
+    if (erreurNotifSansRapport || !notifSansRapport) {
+      throw new Error(`création de la notification sans rapport impossible : ${erreurNotifSansRapport?.message}`)
+    }
 
-    // Rétablir profils.membre_id à NULL : les tests suivants du fichier ne
-    // s'attendent pas à un demandeur déjà lié.
-    await admin.from('profils').update({ membre_id: null }).eq('id', idDemandeurA)
+    try {
+      const { error } = await admin.rpc('valider_demande_rattachement', {
+        p_demande: demandeId,
+        p_membre_existant: ficheExistante.id,
+        p_admin: idAdmin,
+      })
+      expect(error).toBeNull()
+
+      const { data: notifRelue } = await admin.from('notifications').select('lu_le').eq('id', notif.id).single()
+      expect(notifRelue?.lu_le).not.toBeNull()
+
+      const { data: notifSansRapportRelue } = await admin
+        .from('notifications')
+        .select('lu_le')
+        .eq('id', notifSansRapport.id)
+        .single()
+      expect(notifSansRapportRelue?.lu_le).toBeNull()
+    } finally {
+      await admin.from('profils').update({ membre_id: null }).eq('id', idDemandeurA)
+    }
   })
 
   it("refuse une demande d'origine demande_suivi (le rattachement n'est proposé que pour auto_inscription)", async () => {
-    const { demandeId } = await (async () => {
-      const { data: fiche } = await admin
-        .from('membres')
-        .insert({ nom: `${PREFIXE_MEMBRE}-suivi`, prenom: 'Test', etat: 'en_attente' })
-        .select('id')
-        .single()
-      const { data: demande } = await admin
-        .from('demandes_membre')
-        .insert({ origine: 'demande_suivi', demandeur_profil_id: idDemandeurA, membre_id: fiche!.id, etat: 'en_attente' })
-        .select('id')
-        .single()
-      return { demandeId: demande!.id as string }
-    })()
+    const { data: fiche, error: erreurFiche } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE_MEMBRE}-suivi`, prenom: 'Test', etat: 'en_attente' })
+      .select('id')
+      .single()
+    if (erreurFiche || !fiche) throw new Error(`création de la fiche impossible : ${erreurFiche?.message}`)
+    const { data: demande, error: erreurDemande } = await admin
+      .from('demandes_membre')
+      .insert({ origine: 'demande_suivi', demandeur_profil_id: idDemandeurA, membre_id: fiche.id, etat: 'en_attente' })
+      .select('id')
+      .single()
+    if (erreurDemande || !demande) throw new Error(`création de la demande impossible : ${erreurDemande?.message}`)
 
     const { error } = await admin.rpc('valider_demande_rattachement', {
-      p_demande: demandeId,
+      p_demande: demande.id,
       p_membre_existant: idMembreA,
       p_admin: idAdmin,
     })
@@ -438,6 +590,147 @@ describe('valider_demande_rattachement (D26)', () => {
     })
     expect(error).not.toBeNull()
     expect(error?.details).toBe('membre_inconnu')
+  })
+
+  // I5 (revue) : rien n'empêchait de rattacher une demande à SA PROPRE fiche
+  // jetable — les deux clés étrangères étant on delete set null, la fonction
+  // « réussissait » en supprimant la seule fiche visée, laissant le demandeur
+  // rattaché à rien, silencieusement.
+  it('refuse de rattacher une demande à sa propre fiche jetable (I5, revue), avec un marqueur stable', async () => {
+    const { ficheJetableId, demandeId } = await creerAutoInscription()
+
+    const { error } = await admin.rpc('valider_demande_rattachement', {
+      p_demande: demandeId,
+      p_membre_existant: ficheJetableId,
+      p_admin: idAdmin,
+    })
+    expect(error).not.toBeNull()
+    expect(error?.details).toBe('rattachement_vers_fiche_jetable')
+
+    // Rien n'a bougé : la demande reste en_attente et la fiche jetable existe
+    // toujours.
+    const { data: demandeRelue } = await admin.from('demandes_membre').select('etat').eq('id', demandeId).single()
+    expect(demandeRelue?.etat).toBe('en_attente')
+    const { data: ficheEncore } = await admin.from('membres').select('id').eq('id', ficheJetableId)
+    expect(ficheEncore).toHaveLength(1)
+  })
+
+  // I2 (revue) : même défaut, même garde, que sur annuler_demande_membre — le
+  // DELETE sur membres doit être gardé par etat = 'en_attente'. Il faut sortir
+  // du helper creerAutoInscription (qui crée toujours une fiche en_attente) pour
+  // l'éprouver : ici, la fiche « jetable » référencée par la demande est en
+  // réalité déjà archivée au moment de la validation.
+  it("NE SUPPRIME PAS la fiche jetable si elle n'est plus en_attente (I2, revue)", async () => {
+    const { data: ficheArchivee, error: erreurFicheArchivee } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE_MEMBRE}-garde-validation`, prenom: 'Test', etat: 'archive' })
+      .select('id')
+      .single()
+    if (erreurFicheArchivee || !ficheArchivee) {
+      throw new Error(`création de la fiche archivée impossible : ${erreurFicheArchivee?.message}`)
+    }
+    const { data: demande, error: erreurDemande } = await admin
+      .from('demandes_membre')
+      .insert({
+        origine: 'auto_inscription',
+        demandeur_profil_id: idDemandeurA,
+        membre_id: ficheArchivee.id,
+        etat: 'en_attente',
+      })
+      .select('id')
+      .single()
+    if (erreurDemande || !demande) throw new Error(`création de la demande impossible : ${erreurDemande?.message}`)
+
+    const { data: ficheExistante, error: erreurExistante } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE_MEMBRE}-existante-i2`, prenom: 'Test' })
+      .select('id')
+      .single()
+    if (erreurExistante || !ficheExistante) throw new Error(`création de la fiche existante impossible : ${erreurExistante?.message}`)
+
+    try {
+      const { error } = await admin.rpc('valider_demande_rattachement', {
+        p_demande: demande.id,
+        p_membre_existant: ficheExistante.id,
+        p_admin: idAdmin,
+      })
+      expect(error).toBeNull()
+
+      const { data: demandeRelue } = await admin.from('demandes_membre').select('etat').eq('id', demande.id).single()
+      expect(demandeRelue?.etat).toBe('validee')
+
+      // La fiche ARCHIVÉE survit : ce n'était plus la fiche jetable en_attente
+      // que la fonction est censée nettoyer.
+      const { data: ficheEncore } = await admin.from('membres').select('id, etat').eq('id', ficheArchivee.id)
+      expect(ficheEncore).toHaveLength(1)
+      expect(ficheEncore?.[0]?.etat).toBe('archive')
+    } finally {
+      await admin.from('profils').update({ membre_id: null }).eq('id', idDemandeurA)
+    }
+  })
+
+  // I6 (revue) : profils.membre_id est UNIQUE (migration 20260811120000). Un
+  // rattachement en doublon (fiche déjà rattachée à un AUTRE compte) levait donc
+  // un 23505 nu ; désormais attrapé et rendu avec un marqueur homogène.
+  it('refuse un rattachement en doublon (fiche déjà rattachée à un AUTRE compte), avec un marqueur stable (I6, revue)', async () => {
+    const { demandeId: demandeAId } = await creerAutoInscription()
+    const { data: ficheCible, error: erreurCible } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE_MEMBRE}-cible-doublon`, prenom: 'Test' })
+      .select('id')
+      .single()
+    if (erreurCible || !ficheCible) throw new Error(`création de la fiche cible impossible : ${erreurCible?.message}`)
+
+    try {
+      // Premier rattachement (demandeurA → ficheCible) : réussit.
+      const { error: erreurA } = await admin.rpc('valider_demande_rattachement', {
+        p_demande: demandeAId,
+        p_membre_existant: ficheCible.id,
+        p_admin: idAdmin,
+      })
+      expect(erreurA).toBeNull()
+
+      // Second rattachement (demandeurB → LA MÊME ficheCible) : refusé.
+      const { data: ficheJetableB, error: erreurFicheB } = await admin
+        .from('membres')
+        .insert({ nom: `${PREFIXE_MEMBRE}-jetable-doublon`, prenom: 'Test', etat: 'en_attente' })
+        .select('id')
+        .single()
+      if (erreurFicheB || !ficheJetableB) throw new Error(`création de la fiche jetable B impossible : ${erreurFicheB?.message}`)
+      const { data: demandeB, error: erreurDemandeB } = await admin
+        .from('demandes_membre')
+        .insert({
+          origine: 'auto_inscription',
+          demandeur_profil_id: idDemandeurB,
+          membre_id: ficheJetableB.id,
+          etat: 'en_attente',
+        })
+        .select('id')
+        .single()
+      if (erreurDemandeB || !demandeB) throw new Error(`création de la demande B impossible : ${erreurDemandeB?.message}`)
+
+      const { error: erreurB } = await admin.rpc('valider_demande_rattachement', {
+        p_demande: demandeB.id,
+        p_membre_existant: ficheCible.id,
+        p_admin: idAdmin,
+      })
+      expect(erreurB).not.toBeNull()
+      expect(erreurB?.details).toBe('membre_deja_rattache')
+
+      // Rien n'a bougé côté B : la demande B reste en_attente, sa fiche jetable
+      // survit, et profils.membre_id de B reste NULL — l'échec du rattrapage a
+      // bien annulé la TRANSACTION ENTIÈRE de ce second appel, pas seulement
+      // l'UPDATE profils qui a levé.
+      const { data: demandeBRelue } = await admin.from('demandes_membre').select('etat').eq('id', demandeB.id).single()
+      expect(demandeBRelue?.etat).toBe('en_attente')
+      const { data: ficheJetableBEncore } = await admin.from('membres').select('id').eq('id', ficheJetableB.id)
+      expect(ficheJetableBEncore).toHaveLength(1)
+      const { data: profilBRelu } = await admin.from('profils').select('membre_id').eq('id', idDemandeurB).single()
+      expect(profilBRelu?.membre_id).toBeNull()
+    } finally {
+      await admin.from('profils').update({ membre_id: null }).eq('id', idDemandeurA)
+      await admin.from('profils').update({ membre_id: null }).eq('id', idDemandeurB)
+    }
   })
 
   it('refuse son exécution à un compte authentifié ordinaire (42501)', async () => {

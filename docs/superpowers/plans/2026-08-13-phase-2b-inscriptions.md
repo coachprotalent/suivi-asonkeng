@@ -106,7 +106,7 @@ du 2026-08-14) :
 | `supabase/migrations/20260815130000_tentatives_token_inscription.sql` | table `tentatives_token_inscription`, RLS sans aucune politique |
 | `supabase/migrations/20260815140000_membres_lecture_demandeur.sql` | `prive.est_demandeur_de`, amendement de `membres_lecture` |
 | `supabase/migrations/20260815150000_consommation_token_inscription.sql` | `consommer_token_inscription`, `relacher_token_inscription` |
-| `supabase/migrations/20260815160000_annulation_demande_membre.sql` | `annuler_demande_membre` |
+| `supabase/migrations/20260815200000_annulation_demande_membre.sql` | `annuler_demande_membre` |
 | `supabase/migrations/20260815170000_validation_rattachement_demande.sql` | `valider_demande_rattachement` |
 
 **Domaine** (fonctions pures, sans accès réseau ni base) :
@@ -1951,7 +1951,7 @@ git commit -m "feat: consommer un token d'inscription de facon atomique (D25 D27
 ### Task 9 : annulation atomique d'une demande de suivi
 
 **Fichiers :**
-- Créer : `supabase/migrations/20260815160000_annulation_demande_membre.sql`
+- Créer : `supabase/migrations/20260815200000_annulation_demande_membre.sql`
 - Modifier : `tests/rls/demandes-membre.test.ts` (ajout d'un bloc)
 
 **Interfaces :**
@@ -1978,7 +1978,7 @@ disparaîtrait silencieusement.
 
 - [ ] **Étape 1 : écrire la migration**
 
-Créer `supabase/migrations/20260815160000_annulation_demande_membre.sql` :
+Créer `supabase/migrations/20260815200000_annulation_demande_membre.sql` :
 
 ```sql
 -- Annulation d'une demande par son propre auteur (D40, D42, design 2b §7.2). Voir
@@ -2195,7 +2195,7 @@ npx tsc --noEmit && npm run lint && npm test && npm run test:rls && npm run test
 ```
 
 ```bash
-git add supabase/migrations/20260815160000_annulation_demande_membre.sql tests/rls/demandes-membre.test.ts
+git add supabase/migrations/20260815200000_annulation_demande_membre.sql tests/rls/demandes-membre.test.ts
 git commit -m "feat: annuler une demande de suivi de facon atomique (D40 D42)"
 ```
 
@@ -2229,7 +2229,7 @@ Créer `supabase/migrations/20260815170000_validation_rattachement_demande.sql` 
 ```sql
 -- Validation par rattachement à une fiche existante (D26, design 2b §7.3). Un des
 -- DEUX SEULS `delete` sur membres de tout le projet, avec annuler_demande_membre
--- (migration 20260815160000) : le reste de l'application archive et ne supprime
+-- (migration 20260815200000) : le reste de l'application archive et ne supprime
 -- jamais (cf. le commentaire de journal_statuts, phase 1b).
 
 create or replace function public.valider_demande_rattachement(
@@ -4684,7 +4684,7 @@ const DETAIL_DEMANDE_NON_ANNULABLE = 'demande_non_annulable'
 /**
  * Annulation par le demandeur lui-même (D40), tant que sa demande est
  * `en_attente` (design 2b §7.2). Passe par la fonction SECURITY DEFINER dédiée
- * (migration 20260815160000) : voir son en-tête pour la garantie d'atomicité.
+ * (migration 20260815200000) : voir son en-tête pour la garantie d'atomicité.
  * NE JAMAIS scinder cet appel en deux écritures PostgREST séparées — ce serait
  * rouvrir silencieusement l'atomicité que la fonction garantit.
  */
