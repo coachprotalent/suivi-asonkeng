@@ -5,6 +5,18 @@ export const MESSAGE_MEMBRE_INCONNU = "La fiche choisie pour le rattachement n'e
 export const MESSAGE_MOTIF_OBLIGATOIRE = 'Un motif est obligatoire pour rejeter une demande.'
 export const MESSAGE_ECHEC_REJET = "La demande n'a pas pu être rejetée."
 
+/**
+ * Accusé de réception affiché par `/demandes` après `?demandeCreee=1`.
+ *
+ * Mineur de la revue finale, traité parce que c'est LITTÉRALEMENT le défaut
+ * `?inscrit=1` que la ronde de la Task 14 avait traité en Important : une
+ * redirection qui PROMET une confirmation vers un écran qui ne lit jamais le
+ * paramètre. Deux verdicts pour un même défaut dans une même phase — celui-ci
+ * s'aligne sur l'autre. Voir `src/app/connexion/messages.ts` pour le jumeau.
+ */
+export const MESSAGE_DEMANDE_CREEE =
+  'Votre demande a bien été envoyée. Un administrateur la traitera prochainement.'
+
 // Les trois marqueurs suivants sont posés par valider_demande_rattachement
 // (migration 20260815230000/260000) via `using detail`. Chacun reçoit son PROPRE
 // message, distinct des trois autres : un texte générique commun les rendrait

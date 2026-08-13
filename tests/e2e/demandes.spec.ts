@@ -203,6 +203,72 @@ async function rejouerSousIdentite(
 }
 
 /**
+ * AJOUTE un champ absent du corps multipart capturé — le pendant de
+ * `remplacerChampMultipart` pour un champ que le formulaire ne rend PLUS (I6 de la
+ * revue finale : `rejeterDemande` ne reçoit plus `demandeurProfilId`). Ce que la
+ * page n'envoie pas, un attaquant peut toujours l'ajouter : c'est la seule façon
+ * d'éprouver que le SERVEUR ne le lit plus, et non simplement que le CLIENT ne
+ * l'envoie plus.
+ *
+ * Le préfixe des noms de champs (`_1_demandeId`) est repris du champ `demandeId`
+ * déjà présent, jamais deviné : React le fabrique et il changerait sans prévenir.
+ * Lève si ce champ témoin est introuvable.
+ *
+ * ET SURTOUT, LA PLACE COMPTE — constaté empiriquement, pas supposé. Le corps
+ * porte, APRÈS les champs, une partie `name="0"` de valeur `["$K1"]` : le modèle
+ * que React lit pour reconstruire l'argument FormData. Une partie ajoutée APRÈS
+ * ce modèle est parfaitement bien formée, traverse le serveur sans une erreur, et
+ * n'atteint JAMAIS l'action — vérifié en journalisant les clés reçues côté
+ * serveur : `["demandeId","motif"]`, sans le champ injecté. C'est la première
+ * version de ce test, et elle restait VERTE contre la version VULNÉRABLE de
+ * `rejeterDemande` (mutation faite, test passé) : elle aurait certifié une garde
+ * qu'elle n'éprouvait jamais — exactement le motif dominant du projet, contracté
+ * par l'outil de preuve lui-même. La partie est donc insérée AVANT le champ
+ * témoin, et la fonction VÉRIFIE qu'elle précède bien `name="0"`.
+ */
+function ajouterChampMultipart(
+  corpsBrut: Buffer,
+  entetes: Record<string, string>,
+  nomChamp: string,
+  valeur: string,
+): Buffer {
+  const texte = corpsBrut.toString('utf8')
+  const prefixe = /name="([^"]*)demandeId"/.exec(texte)?.[1]
+  if (prefixe === undefined) {
+    throw new Error('Capture invalide : champ témoin « demandeId » introuvable — le préfixe ne peut pas être déduit.')
+  }
+  const frontiere = /boundary=(.+)$/.exec(entetes['content-type'] ?? '')?.[1]
+  if (!frontiere) {
+    throw new Error(`Capture invalide : aucune frontière multipart dans « ${entetes['content-type']} ».`)
+  }
+  const delimiteurTemoin = `--${frontiere}\r\nContent-Disposition: form-data; name="${prefixe}demandeId"`
+  const position = texte.indexOf(delimiteurTemoin)
+  if (position < 0) {
+    throw new Error('Capture invalide : délimiteur du champ témoin introuvable — la frontière ne correspond pas au corps.')
+  }
+
+  const partie =
+    `--${frontiere}\r\n` +
+    `Content-Disposition: form-data; name="${prefixe}${nomChamp}"\r\n\r\n` +
+    `${valeur}\r\n`
+  const tampere = texte.slice(0, position) + partie + texte.slice(position)
+
+  // LE CONTRÔLE QUI EMPÊCHE CE TEST DE MENTIR SUR LUI-MÊME : le champ injecté DOIT
+  // précéder le modèle `name="0"`, sans quoi React ne le verra jamais et le test
+  // passerait en n'ayant rien éprouvé.
+  const positionInjectee = tampere.indexOf(`name="${prefixe}${nomChamp}"`)
+  const positionModele = tampere.indexOf('name="0"')
+  if (positionModele < 0) {
+    throw new Error("Capture invalide : modèle « 0 » introuvable — l'encodage des Server Actions a changé.")
+  }
+  if (positionInjectee > positionModele) {
+    throw new Error('Injection invalide : le champ ajouté suit le modèle « 0 » et serait ignoré par React.')
+  }
+
+  return Buffer.from(tampere, 'utf8')
+}
+
+/**
  * Falsifie la valeur d'un champ dans un corps multipart déjà capturé — sert à
  * éprouver une garde SERVEUR que le client empêche par construction (le
  * sélecteur exclut la fiche jetable de ses résultats de recherche), donc
@@ -281,6 +347,12 @@ test("un compte ordinaire propose une personne, la voit dans « mes demandes »,
   await page.getByLabel('Nom (obligatoire)', { exact: true }).fill(`${PREFIXE_MEMBRE}-suivi`)
   await page.getByRole('button', { name: 'Envoyer la demande' }).click()
   await expect(page).toHaveURL(/\/demandes\?demandeCreee=1/)
+  // L'ACCUSÉ EST RÉELLEMENT AFFICHÉ (mineur de la revue finale, jumeau exact de
+  // `?inscrit=1` traité en Important par la ronde de la Task 14) : `/demandes` ne
+  // lisait pas `searchParams`, la confirmation promise par la redirection
+  // n'atteignait donc jamais l'écran. Sans cette assertion, la redirection seule
+  // continuerait de passer pour un accusé de réception.
+  await expect(page.getByRole('status')).toContainText('demande a bien été envoyée')
 
   await expect(page.getByText('En attente')).toBeVisible()
 
@@ -501,6 +573,82 @@ test(
       .eq('demande_id', demandeRejet!.id)
       .maybeSingle()
     expect(notifOrigine?.lu_le).not.toBeNull()
+  },
+)
+
+// ═══ I6 DE LA REVUE FINALE DE BRANCHE ═══
+//
+// `rejeterDemande` prenait `demandeurProfilId` du FORMULAIRE, alors que sa sœur
+// `validerDemandeNouvellePersonne` avait été durcie dans le MÊME commit pour
+// relire ses valeurs depuis `demandes_membre`. Avec un `demandeId` réel et le
+// `demandeurProfilId` d'un tiers, la notification de rejet — MOTIF COMPRIS —
+// partait vers le mauvais compte : le vrai demandeur n'apprenait jamais son
+// rejet, et personne ne pouvait s'en apercevoir, `notifications` n'étant lisible
+// que par son destinataire.
+//
+// Le test ci-dessus ne pouvait pas l'attraper : le formulaire légitime y envoie
+// la BONNE valeur. Il faut donc en envoyer une fausse, ce que seule une requête
+// forgée permet — et, depuis le correctif, il faut même AJOUTER le champ, que le
+// formulaire ne rend plus. C'est exactement le point : ce test prouve que le
+// SERVEUR l'ignore, pas seulement que le client ne l'envoie plus.
+test(
+  "rejeterDemande IGNORE un demandeurProfilId injecté : le rejet notifie le VRAI demandeur, jamais le tiers",
+  async ({ page }) => {
+    await connecter(page, IDENTIFIANTS.a)
+    await page.goto('/demandes/nouvelle')
+    await page.getByLabel('Prénom (obligatoire)', { exact: true }).fill('Test')
+    await page.getByLabel('Nom (obligatoire)', { exact: true }).fill(`${PREFIXE_MEMBRE}-rejet-forge`)
+    await page.getByRole('button', { name: 'Envoyer la demande' }).click()
+    await expect(page).toHaveURL(/\/demandes\?demandeCreee=1/)
+    const idDemande = await idDemandeParNomMembre(`${PREFIXE_MEMBRE}-rejet-forge`)
+    idsDemandeCreees.push(idDemande)
+    await deconnecter(page)
+
+    await connecter(page, IDENTIFIANTS.admin)
+    await page.goto('/demandes')
+    const ligne = page.locator('li', { hasText: `${PREFIXE_MEMBRE}-rejet-forge` })
+    await ligne.getByLabel('Motif de rejet').fill('Motif détourné')
+
+    // La soumission légitime est CAPTURÉE PUIS AVORTÉE : le rejet ne doit avoir
+    // lieu qu'une fois, par la requête falsifiée ci-dessous.
+    const requete = await capturerRequeteAbandonnee(page, '**/demandes', () =>
+      ligne.getByRole('button', { name: 'Rejeter' }).click(),
+    )
+    const corpsTampere = ajouterChampMultipart(
+      requete.postData,
+      requete.headers,
+      'demandeurProfilId',
+      idsProfil.b,
+    )
+
+    await page.request.post(requete.url, {
+      headers: {
+        'next-action': requete.headers['next-action'],
+        'content-type': requete.headers['content-type'],
+        accept: requete.headers['accept'],
+      },
+      data: corpsTampere,
+    })
+
+    // CONTRÔLE POSITIF, et il n'est pas décoratif : sans lui, les deux assertions
+    // suivantes seraient satisfaites par une requête forgée qui n'aurait rien fait
+    // du tout — aucune notification nulle part, ce qui ressemble exactement à
+    // « le tiers n'a rien reçu ».
+    const { data: demandeApres } = await admin.from('demandes_membre').select('etat').eq('id', idDemande).single()
+    expect(demandeApres?.etat, 'le rejet forgé doit avoir ABOUTI : sinon rien ci-dessous ne prouve quoi que ce soit').toBe('rejetee')
+
+    const { data: notifs } = await admin
+      .from('notifications')
+      .select('profil_id, corps')
+      .eq('type', 'demande_rejetee')
+      .eq('demande_id', idDemande)
+    expect(notifs ?? []).toHaveLength(1)
+    // LE POINT DU TEST : le destinataire est le VRAI demandeur, pas le tiers
+    // injecté — et le motif, qui est du texte libre écrit par un administrateur,
+    // n'est donc pas parti chez quelqu'un d'autre.
+    expect(notifs![0].profil_id).toBe(idsProfil.a)
+    expect(notifs![0].profil_id).not.toBe(idsProfil.b)
+    expect(notifs![0].corps).toBe('Motif détourné')
   },
 )
 

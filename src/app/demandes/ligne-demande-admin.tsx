@@ -103,14 +103,17 @@ export function LigneDemandeAdmin({
         <FormulaireValidationSuivi
           demandeId={demande.id}
           membreId={demande.membreId ?? ''}
-          demandeurMembreId={demande.demandeurMembreId}
           dirigeantInitial={dirigeantInitial}
         />
       )}
 
       <form onSubmit={soumettreRejet} className="mt-3 flex flex-wrap items-end gap-3">
         <input type="hidden" name="demandeId" value={demande.id} />
-        <input type="hidden" name="demandeurProfilId" value={demande.demandeurProfilId} />
+        {/* `demandeurProfilId` N'EST PLUS TRANSMIS (I6 de la revue finale) :
+            `rejeterDemande` le relit depuis `demandes_membre`. Le laisser ici
+            laisserait croire que le serveur s'en sert, et rouvrirait la porte à
+            un formulaire falsifié qui ferait partir le motif de rejet vers le
+            compte d'un tiers. */}
         <label className="flex flex-1 flex-col gap-1.5">
           <span className="text-sm font-medium">Motif de rejet</span>
           <input name="motif" required className="rounded-md border border-neutral-300 px-3 py-2" />

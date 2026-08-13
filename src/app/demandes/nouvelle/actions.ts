@@ -66,7 +66,30 @@ export async function creerDemandeSuivi(
     })
     // Fiche jetable, jamais validée : la supprimer ne perd rien (même raisonnement
     // que D26/D42, appliqué ici à un échec technique plutôt qu'à une annulation).
-    await admin.from('membres').delete().eq('id', fiche.id)
+    //
+    // `etat = 'en_attente'` : la MÊME garde que les deux `delete` SQL des
+    // migrations 20260815220000/230000, absente jusqu'ici des deux `delete`
+    // APPLICATIFS (mineur de la revue finale). La fiche vient d'être créée
+    // `en_attente`, donc la garde ne change rien aujourd'hui — mais la sûreté
+    // cesse de dépendre de cette seule construction, et la suppression d'une
+    // fiche `actif` (dont la cascade emporterait `journal_statuts`) devient
+    // impossible par ce chemin.
+    const { data: supprimee, error: erreurSuppression } = await admin
+      .from('membres')
+      .delete()
+      .eq('id', fiche.id)
+      .eq('etat', 'en_attente')
+      .select('id')
+    if (erreurSuppression || !supprimee || supprimee.length === 0) {
+      // Best-effort assumé (la demande a déjà échoué, on ne change pas le message
+      // rendu), mais plus SILENCIEUX : une fiche orpheline laissée derrière est
+      // désormais journalisée pour qu'un administrateur puisse la retrouver.
+      console.error("creerDemandeSuivi : la fiche jetable n'a PAS été supprimée", {
+        ficheId: fiche.id,
+        code: erreurSuppression?.code,
+        message: erreurSuppression?.message,
+      })
+    }
     return { erreur: MESSAGE_ECHEC_DEMANDE }
   }
 

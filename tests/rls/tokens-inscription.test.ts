@@ -557,8 +557,15 @@ describe('consommer_token_inscription', () => {
       expect(avant?.utilise_le).not.toBeNull()
       expect(avant?.utilise_par_profil_id).toBeNull()
 
-      const { error: erreurRelache } = await admin.rpc('relacher_token_inscription', { p_token_id: id })
+      const { data: relachee, error: erreurRelache } = await admin.rpc('relacher_token_inscription', {
+        p_token_id: id,
+        p_profil_id: null,
+      })
       expect(erreurRelache).toBeNull()
+      // La fonction REND son effet depuis la migration 20260815270000 : `true`
+      // signifie qu'une ligne a bien été relâchée. Avant elle, `returns void` ne
+      // distinguait pas ce succès d'une relâche entièrement sans effet.
+      expect(relachee).toBe(true)
 
       const { data: apres, error: erreurLecture } = await admin
         .from('tokens_inscription')
@@ -573,14 +580,18 @@ describe('consommer_token_inscription', () => {
 
     // LA GARDE, PROUVÉE DIRECTEMENT (I3) : un token déjà rattaché à un compte RÉEL
     // (utilise_par_profil_id renseigné, comme après une création de compte réussie
-    // — Task 14) ne doit JAMAIS être dé-consommé par cet appel. Avant la migration
-    // 20260815180000, l'UPDATE d'origine n'avait AUCUNE condition sur
-    // utilise_par_profil_id : ce même appel aurait remis utilise_le à NULL et
-    // rendu ce token de nouveau utilisable, alors qu'il a réellement servi. La
-    // garde `and utilise_par_profil_id is null` restreint l'effet à la seule
-    // fenêtre de compensation légitime (compte JAMAIS créé) — ici, elle doit
-    // laisser les deux colonnes intactes.
-    it('refuse de relâcher un token déjà rattaché à un profil réel : aucune ligne modifiée', async () => {
+    // — Task 14) ne doit JAMAIS être dé-consommé par un appel qui ne nomme PAS ce
+    // compte. Avant la migration 20260815180000, l'UPDATE d'origine n'avait AUCUNE
+    // condition sur utilise_par_profil_id : ce même appel aurait remis utilise_le
+    // à NULL et rendu ce token de nouveau utilisable, alors qu'il a réellement
+    // servi.
+    //
+    // DEUX APPELS, PAS UN (I1 de la revue finale) : `p_profil_id` NULL (« aucun
+    // compte à excuser ») ET `p_profil_id` d'un AUTRE compte. Le second est celui
+    // qui compte : la garde de 20260815270000 n'est plus absolue, elle est
+    // DISCRIMINANTE — il fallait donc prouver qu'elle discrimine bien, et ne se
+    // contente pas d'accepter tout `p_profil_id` non nul.
+    it("refuse de relâcher un token rattaché à un AUTRE compte, que p_profil_id soit NULL ou celui d'un tiers", async () => {
       const { id } = await creerTokenValide('generique', null)
       // Simule une consommation suivie d'une création de compte RÉUSSIE (Task 14) :
       // utilise_le ET utilise_par_profil_id sont tous deux renseignés.
@@ -591,30 +602,122 @@ describe('consommer_token_inscription', () => {
         .eq('id', id)
       if (erreurPreparation) throw new Error(`préparation du token rattaché impossible : ${erreurPreparation.message}`)
 
-      const { error: erreurRelache } = await admin.rpc('relacher_token_inscription', { p_token_id: id })
-      expect(erreurRelache).toBeNull()
+      for (const [cas, profil] of [
+        ['aucun compte à excuser (NULL)', null],
+        ["le compte d'un tiers", idSimple],
+      ] as const) {
+        const { data: relachee, error: erreurRelache } = await admin.rpc('relacher_token_inscription', {
+          p_token_id: id,
+          p_profil_id: profil,
+        })
+        expect(erreurRelache, cas).toBeNull()
+        // AUCUNE ligne touchée, et la fonction le DIT — c'est précisément ce que
+        // `returns void` taisait.
+        expect(relachee, cas).toBe(false)
 
-      const { data: apres, error: erreurLecture } = await admin
+        const { data: apres, error: erreurLecture } = await admin
+          .from('tokens_inscription')
+          .select('utilise_le, utilise_par_profil_id')
+          .eq('id', id)
+          .single()
+        expect(erreurLecture, cas).toBeNull()
+        expect(apres, cas).not.toBeNull()
+        // La garde a bloqué l'UPDATE : les deux colonnes restent renseignées, à
+        // l'identique de ce qui a été posé ci-dessus.
+        expect(apres!.utilise_par_profil_id, cas).toBe(idAdmin)
+        expect(new Date(apres!.utilise_le as string).toISOString(), cas).toBe(utiliseLeOrigine)
+      }
+    })
+
+    // ═══ I1 DE LA REVUE FINALE DE BRANCHE, PROUVÉ ICI ═══
+    //
+    // LE CAS EXACT : `compenserInscription` (src/app/inscription/actions.ts) tente
+    // de supprimer la fiche, PUIS le compte, PUIS de relâcher le token. Si
+    // `deleteUser` échoue — limitation connue et documentée de ce projet —, LE
+    // COMPTE SURVIT, donc `profils` survit, donc la cascade `on delete set null`
+    // ne joue PAS et `tokens_inscription.utilise_par_profil_id` reste renseignée.
+    //
+    // Avec la garde absolue de 20260815180000, la relâche ne touchait alors AUCUNE
+    // ligne, et `returns void` ne le disait pas : le token était perdu à jamais
+    // pour son destinataire, sans erreur et sans trace. Le test ci-dessus (« refuse
+    // de relâcher ») décrit exactement ce blocage — ce qui suit prouve qu'il ne
+    // s'applique plus au compte que l'on est précisément en train de compenser.
+    //
+    // L'ASSERTION DÉCISIVE N'EST PAS « les colonnes sont à NULL » mais « le token
+    // se CONSOMME de nouveau » : c'est la seule qui constate ce qui importe
+    // réellement à la personne à qui le code avait été remis. Deux colonnes remises
+    // à NULL par une écriture qui aurait cassé autre chose (revoque_le posé,
+    // expiration touchée) laisseraient le token tout aussi inutilisable.
+    it('un compte qui a SURVÉCU à sa suppression (deleteUser en échec) : nommer ce compte relâche le token, qui redevient CONSOMMABLE', async () => {
+      const { id, codeHash } = await creerTokenValide('generique', null)
+
+      const { data: premiere, error: erreurPremiere } = await admin.rpc('consommer_token_inscription', {
+        p_code_hash: codeHash,
+        p_adresse: adresseFraiche(),
+      })
+      expect(erreurPremiere).toBeNull()
+      expect(premiere![0].statut).toBe('ok')
+      expect(premiere![0].token_id).toBe(id)
+
+      // Reproduit à l'identique ce que fait `sInscrire` juste après avoir créé le
+      // compte : le marquage `utilise_par_profil_id`. `idSimple` est un compte RÉEL
+      // de cette suite, et il RESTERA en vie jusqu'à l'`afterAll` — c'est
+      // exactement l'état laissé par un `deleteUser` en échec.
+      const { error: erreurMarquage } = await admin
+        .from('tokens_inscription')
+        .update({ utilise_par_profil_id: idSimple })
+        .eq('id', id)
+      if (erreurMarquage) throw new Error(`marquage du token impossible : ${erreurMarquage.message}`)
+
+      // CONTRÔLE : le compte est bien toujours là. Sans lui, la relâche pourrait
+      // réussir par la cascade `on delete set null` — c'est-à-dire pour la MÊME
+      // mauvaise raison que la preuve par injection de faute de la Task 14, qui
+      // était passée parce que `deleteUser` avait réussi ce jour-là.
+      const { data: compteSurvivant } = await admin.from('profils').select('id').eq('id', idSimple).maybeSingle()
+      expect(
+        compteSurvivant?.id,
+        "le compte doit AVOIR SURVÉCU pour que ce test prouve ce qu'il annonce",
+      ).toBe(idSimple)
+
+      const { data: relachee, error: erreurRelache } = await admin.rpc('relacher_token_inscription', {
+        p_token_id: id,
+        p_profil_id: idSimple,
+      })
+      expect(erreurRelache).toBeNull()
+      expect(relachee).toBe(true)
+
+      const { data: apres } = await admin
         .from('tokens_inscription')
         .select('utilise_le, utilise_par_profil_id')
         .eq('id', id)
         .single()
-      expect(erreurLecture).toBeNull()
-      expect(apres).not.toBeNull()
-      // La garde a bloqué l'UPDATE : les deux colonnes restent renseignées, à
-      // l'identique de ce qui a été posé ci-dessus.
-      expect(apres!.utilise_par_profil_id).toBe(idAdmin)
-      expect(new Date(apres!.utilise_le as string).toISOString()).toBe(utiliseLeOrigine)
+      expect(apres!.utilise_le).toBeNull()
+      expect(apres!.utilise_par_profil_id).toBeNull()
+
+      // LE POINT DU TEST : le token REDEVIENT UTILISABLE pour son destinataire.
+      const { data: seconde, error: erreurSeconde } = await admin.rpc('consommer_token_inscription', {
+        p_code_hash: codeHash,
+        p_adresse: adresseFraiche(),
+      })
+      expect(erreurSeconde).toBeNull()
+      expect(seconde![0].statut, 'le token relâché doit se consommer de nouveau').toBe('ok')
+      expect(seconde![0].token_id).toBe(id)
     })
 
     it('refuse son exécution à un compte authentifié ordinaire (42501)', async () => {
-      const { error } = await clientSimple.rpc('relacher_token_inscription', { p_token_id: crypto.randomUUID() })
+      const { error } = await clientSimple.rpc('relacher_token_inscription', {
+        p_token_id: crypto.randomUUID(),
+        p_profil_id: null,
+      })
       expect(error).not.toBeNull()
       expect(error?.code).toBe('42501')
     })
 
     it('refuse son exécution au rôle anon (42501)', async () => {
-      const { error } = await anon.rpc('relacher_token_inscription', { p_token_id: crypto.randomUUID() })
+      const { error } = await anon.rpc('relacher_token_inscription', {
+        p_token_id: crypto.randomUUID(),
+        p_profil_id: null,
+      })
       expect(error).not.toBeNull()
       expect(error?.code).toBe('42501')
     })

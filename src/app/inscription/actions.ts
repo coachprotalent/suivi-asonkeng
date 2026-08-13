@@ -96,6 +96,59 @@ async function adresseAppelant(): Promise<string> {
 }
 
 /**
+ * Relâche un token consommé (D27) ET VÉRIFIE QUE LA RELÂCHE A MORDU.
+ *
+ * `relacher_token_inscription` rend, depuis la migration 20260815270000, un
+ * BOOLÉEN : `true` si une ligne a été relâchée, `false` si aucune. Avant elle, la
+ * fonction rendait `void` — une relâche sans effet ne produisait NI erreur NI
+ * trace, et l'appelant croyait avoir relâché un token qui restait consommé. Ce
+ * seul point rendait le défaut I1 invisible ; d'où la vérification ci-dessous,
+ * commune aux QUATRE sites de relâche de ce fichier.
+ *
+ * `profilId` nomme le compte que l'on est en train de compenser, et NULL signifie
+ * « aucun compte à excuser » (la garde stricte : seuls les tokens dont le compte
+ * n'a jamais été créé sont relâchables). Le paramètre est obligatoire côté SQL
+ * exprès : l'oublier échoue franchement au lieu de retomber en silence sur
+ * l'ancien comportement.
+ */
+async function relacherToken(
+  admin: ReturnType<typeof clientAdmin>,
+  tokenId: string,
+  profilId: string | null,
+  contexte: string,
+): Promise<boolean> {
+  const { data, error } = await admin.rpc('relacher_token_inscription', {
+    p_token_id: tokenId,
+    p_profil_id: profilId,
+  })
+
+  if (error) {
+    console.error(`${contexte} : échec technique de la relâche du token`, {
+      tokenId,
+      profilId,
+      code: error.code,
+      message: error.message,
+    })
+    return false
+  }
+
+  if (data !== true) {
+    // AUCUNE LIGNE TOUCHÉE. Le token reste consommé alors que l'inscription a
+    // échoué : il est perdu pour la personne à qui il était destiné, et seul ce
+    // journal permettra à un administrateur d'en émettre un nouveau. C'est
+    // exactement le cas qui, jusqu'à la migration 20260815270000, ne laissait
+    // aucune trace.
+    console.error(
+      `${contexte} : relâche du token SANS EFFET — aucune ligne touchée, le token reste consommé et son destinataire ne peut plus s'en servir`,
+      { tokenId, profilId },
+    )
+    return false
+  }
+
+  return true
+}
+
+/**
  * RETOUR EN ARRIÈRE après un échec survenu APRÈS la création du compte, sur le
  * parcours générique (fiche `en_attente` ou demande). Sans lui, l'écran annonçait
  * « L'inscription n'a pas pu aboutir » alors que le compte EXISTAIT, que le token
@@ -107,11 +160,25 @@ async function adresseAppelant(): Promise<string> {
  * 1. la fiche `en_attente` d'abord — `demandes_membre.membre_id` est
  *    `on delete set null`, elle ne partirait donc JAMAIS avec le compte ;
  * 2. le compte d'authentification, dont la suppression cascade sur `profils` ;
- * 3. la relâche du token (D27).
+ * 3. la relâche du token (D27), EN NOMMANT `profilId`.
+ *
+ * POURQUOI L'ÉTAPE 3 NOMME LE PROFIL — et c'était le défaut I1 de la revue finale.
+ * À ce stade, `utilise_par_profil_id` vient d'être posée sur le token (voir le
+ * marquage qui suit la création du compte, plus bas). La garde de la migration
+ * 20260815180000 (`and utilise_par_profil_id is null`) bloquait donc la relâche :
+ * elle ne mordait QUE si la cascade `deleteUser -> profils -> set null` avait déjà
+ * remis cette colonne à NULL, c'est-à-dire uniquement si l'étape 2 avait réussi.
+ * Or l'échec silencieux de `deleteUser` est une limitation connue de ce projet
+ * (README, « Attention ») : quand il se produisait, le token était perdu à jamais,
+ * sans erreur et sans trace, pendant que ce commentaire promettait le contraire.
+ * Depuis la migration 20260815270000, passer `profilId` autorise explicitement la
+ * relâche DE CE COMPTE-LÀ — sans jamais rouvrir la dé-consommation du token d'un
+ * AUTRE compte, qui reste refusée.
  *
  * Aucun échec n'interrompt les suivants : même si le compte survit, relâcher le
  * token vaut mieux que le perdre — la personne pourra réessayer, fût-ce avec un
- * autre identifiant. Rend `true` seulement si les TROIS ont réussi.
+ * autre identifiant. Cette phrase est désormais tenue par le code, elle ne l'était
+ * pas. Rend `true` seulement si les TROIS ont réussi.
  */
 async function compenserInscription(
   admin: ReturnType<typeof clientAdmin>,
@@ -120,7 +187,20 @@ async function compenserInscription(
   let complete = true
 
   if (ficheId !== null) {
-    const { error } = await admin.from('membres').delete().eq('id', ficheId)
+    // `etat = 'en_attente'` : la MÊME garde que la ronde I2 des Tasks 9-10 a
+    // imposée aux deux `delete` SQL (migrations 20260815220000/230000). Elle était
+    // absente des deux `delete` APPLICATIFS (mineur de la revue finale) : la
+    // sûreté n'y tenait qu'à la construction — la fiche vient d'être créée — et
+    // non à un contrat. Or la cascade d'une suppression de `membres` emporte
+    // `journal_statuts`, que 20260813170000 désigne comme la seule voie
+    // d'effacement complet d'une personne. Le contrat est désormais écrit ici
+    // aussi.
+    const { data, error } = await admin
+      .from('membres')
+      .delete()
+      .eq('id', ficheId)
+      .eq('etat', 'en_attente')
+      .select('id')
     if (error) {
       complete = false
       console.error('compenserInscription : suppression de la fiche en_attente impossible', {
@@ -128,6 +208,13 @@ async function compenserInscription(
         code: error.code,
         message: error.message,
       })
+    } else if (!data || data.length === 0) {
+      // Aucune ligne supprimée : la fiche a disparu entre-temps, ou elle n'est
+      // plus `en_attente`. Un `delete` qui ne touche rien ne rend AUCUNE erreur —
+      // sans ce contrôle, la compensation se déclarerait complète en laissant une
+      // fiche derrière elle.
+      complete = false
+      console.error('compenserInscription : aucune fiche en_attente supprimée', { ficheId })
     }
   }
 
@@ -140,15 +227,9 @@ async function compenserInscription(
     })
   }
 
-  const { error: erreurRelache } = await admin.rpc('relacher_token_inscription', {
-    p_token_id: tokenId,
-  })
-  if (erreurRelache) {
+  const relachee = await relacherToken(admin, tokenId, profilId, 'compenserInscription')
+  if (!relachee) {
     complete = false
-    console.error('compenserInscription : relâche du token impossible', {
-      tokenId,
-      message: erreurRelache.message,
-    })
   }
 
   return complete
@@ -354,15 +435,11 @@ export async function sInscrire(
     // ne l'est pas, la perte est journalisée plutôt que masquée par un appel qui
     // n'aurait aucune chance d'aboutir.
     if (typeof ligne.token_id === 'string') {
-      const { error: erreurRelache } = await admin.rpc('relacher_token_inscription', {
-        p_token_id: ligne.token_id,
-      })
-      if (erreurRelache) {
-        console.error('sInscrire : échec de la relâche du token après forme inattendue', {
-          tokenId: ligne.token_id,
-          message: erreurRelache.message,
-        })
-      }
+      // `profilId` NULL : aucun compte n'a encore été créé à ce stade, donc
+      // `utilise_par_profil_id` est encore NULL sur ce token (le marquage n'a lieu
+      // qu'après la création du compte). La garde stricte suffit, et la nommer
+      // ainsi dit qu'il n'y a ici aucun compte à excuser.
+      await relacherToken(admin, ligne.token_id, null, 'sInscrire (forme inattendue)')
     } else {
       console.error(
         'sInscrire : token consommé mais NON relâchable (token_id inexploitable) — intervention manuelle requise',
@@ -390,15 +467,9 @@ export async function sInscrire(
     // D27 : le token est RELÂCHÉ, jamais laissé consommé sans compte au-delà de
     // cette fenêtre. La fenêtre résiduelle assumée par D27 (interruption entre la
     // consommation et cette relâche) reste possible mais jamais un double usage.
-    const { error: erreurRelache } = await admin.rpc('relacher_token_inscription', {
-      p_token_id: tokenId,
-    })
-    if (erreurRelache) {
-      console.error(
-        'sInscrire : échec de la relâche du token après échec de création du compte',
-        { tokenId, message: erreurRelache.message },
-      )
-    }
+    // `profilId` NULL : la création du compte vient d'échouer, il n'existe donc
+    // aucun profil à excuser et `utilise_par_profil_id` est encore NULL.
+    await relacherToken(admin, tokenId, null, 'sInscrire (échec de création du compte)')
     return {
       erreur:
         erreurCompte?.code === CODE_AUTH_EMAIL_PRIS
@@ -413,16 +484,18 @@ export async function sInscrire(
 
   if (erreurProfil) {
     const { error: erreurNettoyage } = await admin.auth.admin.deleteUser(compteCree.user.id)
-    const { error: erreurRelache } = await admin.rpc('relacher_token_inscription', {
-      p_token_id: tokenId,
-    })
+    // `profilId` NULL, et ce n'est pas un oubli : le marquage
+    // `utilise_par_profil_id` n'a lieu qu'APRÈS l'insertion du profil, qui vient
+    // justement d'échouer — la colonne est donc encore NULL et la garde stricte
+    // laisse passer, que le compte auth ait été supprimé ou non.
+    const relachee = await relacherToken(admin, tokenId, null, "sInscrire (échec d'insertion du profil)")
     console.error("sInscrire : échec de l'insertion du profil, nettoyage tenté", {
       identifiant,
       code: erreurProfil.code,
       details: erreurProfil.details,
       message: erreurProfil.message,
       nettoyageCompte: erreurNettoyage ? `ÉCHOUÉ : ${erreurNettoyage.message}` : 'compte auth supprimé',
-      nettoyageToken: erreurRelache ? `ÉCHOUÉ : ${erreurRelache.message}` : 'token relâché',
+      nettoyageToken: relachee ? 'token relâché' : 'ÉCHOUÉ (voir le journal ci-dessus)',
     })
     return {
       erreur:

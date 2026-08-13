@@ -7,9 +7,23 @@ import { rolesDuProfil } from '@/lib/donnees/profils'
 import { exigerProfilActif } from '@/lib/securite/garde'
 import { LigneDemandeAdmin } from './ligne-demande-admin'
 import { LigneDemandePersonnelle } from './ligne-demande-personnelle'
+import { MESSAGE_DEMANDE_CREEE } from './messages'
 
-export default async function PageDemandes() {
+/**
+ * `searchParams` est lu pour l'accusé `?demandeCreee=1` posé par
+ * `creerDemandeSuivi` (mineur de la revue finale : la redirection promettait une
+ * confirmation qu'aucun écran n'affichait — le jumeau exact de `?inscrit=1`, traité
+ * en Important par la ronde de la Task 14). Aucun coût de rendu à l'arrivée : cette
+ * route était déjà dynamique, comme toutes les autres, `exigerProfilActif()` lisant
+ * les cookies.
+ */
+export default async function PageDemandes({
+  searchParams,
+}: {
+  searchParams: Promise<{ demandeCreee?: string }>
+}) {
   const profil = await exigerProfilActif()
+  const { demandeCreee } = await searchParams
   const roles = await rolesDuProfil(profil.id)
   const estAdmin = roles.includes('administrateur')
 
@@ -38,6 +52,15 @@ export default async function PageDemandes() {
         Retour au tableau de bord
       </Link>
       <h1 className="mt-4 mb-8 text-2xl font-semibold">Demandes</h1>
+
+      {demandeCreee === '1' ? (
+        <p
+          role="status"
+          className="mb-8 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800"
+        >
+          {MESSAGE_DEMANDE_CREEE}
+        </p>
+      ) : null}
 
       {estAdmin ? (
         <section className="mb-10">

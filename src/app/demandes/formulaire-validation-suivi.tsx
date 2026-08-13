@@ -8,16 +8,10 @@ import { validerDemandeNouvellePersonne } from './actions'
 type Props = {
   demandeId: string
   membreId: string
-  demandeurMembreId: string | null
   dirigeantInitial: MembreBref | null
 }
 
-export function FormulaireValidationSuivi({
-  demandeId,
-  membreId,
-  demandeurMembreId,
-  dirigeantInitial,
-}: Props) {
+export function FormulaireValidationSuivi({ demandeId, membreId, dirigeantInitial }: Props) {
   const [dirigeant, setDirigeant] = useState<MembreBref | null>(dirigeantInitial)
   // Accepter la proposition laisse dirigeantForce à false ; toute correction
   // manuelle le passe à true — même sémantique que l'écran /membres/[id]/arbre
@@ -49,7 +43,10 @@ export function FormulaireValidationSuivi({
   return (
     <form onSubmit={soumettre} className="mt-3 flex flex-col gap-3 rounded-md border border-neutral-200 p-3">
       <input type="hidden" name="demandeId" value={demandeId} />
-      <input type="hidden" name="demandeurMembreId" value={demandeurMembreId ?? ''} />
+      {/* `demandeurMembreId` N'EST PLUS TRANSMIS : `validerDemandeNouvellePersonne`
+          relit la fiche du demandeur depuis `profils`. C'est un FAIT, pas une
+          décision de l'administrateur ; le transmettre laissait un formulaire
+          falsifié écrire dans l'arbre une filiation qui n'a jamais eu lieu. */}
       <input type="hidden" name="dirigeantForce" value={dirigeantForce ? '1' : '0'} />
       <SelecteurMembre
         nom="dirigeantId"

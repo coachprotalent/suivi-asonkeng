@@ -15,7 +15,6 @@ import {
   MESSAGE_RATTACHEMENT_VERS_FICHE_JETABLE,
 } from './messages'
 
-const DETAIL_DEMANDE_NON_ANNULABLE = 'demande_non_annulable'
 const DETAIL_MEMBRE_INCONNU = 'membre_inconnu'
 const DETAIL_DEMANDE_NON_VALIDABLE = 'demande_non_validable'
 const DETAIL_RATTACHEMENT_VERS_FICHE_JETABLE = 'rattachement_vers_fiche_jetable'
@@ -104,9 +103,14 @@ export async function annulerDemandeSuivi(donnees: FormData): Promise<ResultatDe
       details: error.details,
       message: error.message,
     })
-    if (error.details === DETAIL_DEMANDE_NON_ANNULABLE) {
-      return { erreur: MESSAGE_ECHEC_ANNULATION }
-    }
+    // BRANCHE MORTE SUPPRIMÉE (mineur de la revue finale) : le `if
+    // (error.details === DETAIL_DEMANDE_NON_ANNULABLE)` qui se trouvait ici
+    // retournait EXACTEMENT le même message que le cas général. Il suggérait une
+    // discrimination qui n'existait pas — et une discrimination affichée n'aurait
+    // rien apporté ici : que la demande ait déjà été traitée ou qu'une panne
+    // technique soit survenue, le geste attendu du demandeur est le même
+    // (recharger la liste). Le marqueur reste JOURNALISÉ ci-dessus, via
+    // `error.details`, là où il sert vraiment : au diagnostic.
     return { erreur: MESSAGE_ECHEC_ANNULATION }
   }
 
@@ -121,9 +125,12 @@ export async function annulerDemandeSuivi(donnees: FormData): Promise<ResultatDe
  * - auto_inscription : fiche -> actif, profils.membre_id du demandeur posé sur
  *   cette fiche. Aucune écriture d'arbre.
  * - demande_suivi : fiche -> actif, faiseur_de_disciple_id = la fiche du
- *   demandeur (demandeurMembreId, PEUT être NULL si le demandeur n'a pas de
- *   fiche liée — cas du compte racine, registre 1c piège n°3 : traité en
- *   silence, pas en échec), dirigeant_id et dirigeant_force selon le formulaire.
+ *   demandeur, RELUE depuis `profils.membre_id` et non prise du formulaire
+ *   (mineur de la revue finale — le commentaire l'annonçait déjà ainsi, le code
+ *   ne le faisait pas). PEUT être NULL si le demandeur n'a pas de fiche liée —
+ *   cas du compte racine, registre 1c piège n°3 : traité en silence, pas en
+ *   échec. `dirigeant_id` et `dirigeant_force` restent, EUX, lus du formulaire :
+ *   ce sont les seules valeurs que l'administrateur décide sur cet écran.
  *
  * NON ATOMIQUE À TRAVERS SES TROIS ÉCRITURES (membres, éventuellement profils,
  * demandes_membre) : voir la Task 17 du plan pour la justification de ce choix.
@@ -176,8 +183,36 @@ export async function validerDemandeNouvellePersonne(donnees: FormData): Promise
 
   const colonnesMembre: Record<string, unknown> = { etat: 'actif' }
   if (origine === 'demande_suivi') {
-    const demandeurMembreId = String(donnees.get('demandeurMembreId') ?? '') || null
-    colonnesMembre.faiseur_de_disciple_id = demandeurMembreId
+    // `faiseur_de_disciple_id` est un FAIT, pas un choix : c'est la fiche du
+    // demandeur. Il était pris du formulaire (`demandeurMembreId`), alors que le
+    // commentaire de tête le décrivait déjà comme « la fiche du demandeur » —
+    // mineur de la revue finale, et la même faille que I6 sous un autre visage :
+    // un formulaire falsifié pouvait désigner N'IMPORTE QUELLE fiche comme
+    // faiseur de disciple de la personne validée, c'est-à-dire écrire dans
+    // l'arbre une filiation qui n'a jamais eu lieu. Relu depuis `profils`,
+    // exactement la source dont `listerDemandesEnAttente` tire l'affichage.
+    //
+    // `dirigeant_id` et `dirigeant_force`, EUX, restent lus du formulaire, et
+    // c'est délibéré : ce sont les seules valeurs de cet écran que
+    // l'administrateur DÉCIDE (il corrige la proposition automatique). Un fait se
+    // relit, une décision se soumet.
+    const { data: profilDemandeur, error: erreurProfilDemandeur } = await admin
+      .from('profils')
+      .select('membre_id')
+      .eq('id', demandeurProfilId)
+      .maybeSingle()
+    if (erreurProfilDemandeur) {
+      console.error('validerDemandeNouvellePersonne : lecture de la fiche du demandeur impossible', {
+        demandeurProfilId,
+        code: erreurProfilDemandeur.code,
+        message: erreurProfilDemandeur.message,
+      })
+      return { erreur: MESSAGE_ECHEC_VALIDATION }
+    }
+    // NULL toléré, pas un échec : le compte racine n'a aucune fiche liée (spec
+    // D11, registre 1c piège n°3). Le membre validé n'a alors pas de faiseur de
+    // disciple, ce qui est l'état exact de la réalité.
+    colonnesMembre.faiseur_de_disciple_id = profilDemandeur?.membre_id ?? null
     colonnesMembre.dirigeant_id = String(donnees.get('dirigeantId') ?? '') || null
     colonnesMembre.dirigeant_force = donnees.get('dirigeantForce') === '1'
   }
@@ -306,15 +341,32 @@ export async function validerDemandeRattachement(donnees: FormData): Promise<Res
   return { erreur: null }
 }
 
-/** Rejette une demande, motif obligatoire, demandeur notifié (design 2b §7.3). */
+/**
+ * Rejette une demande, motif obligatoire, demandeur notifié (design 2b §7.3).
+ *
+ * I6 (revue finale de branche) : `demandeurProfilId` était pris du FORMULAIRE,
+ * alors que sa sœur `validerDemandeNouvellePersonne` avait été durcie dans le même
+ * commit pour relire ses valeurs depuis `demandes_membre`. Le raisonnement de ce
+ * durcissement s'appliquait mot pour mot ici : avec un `demandeId` réel et le
+ * `demandeurProfilId` d'un TIERS, la notification de rejet — MOTIF COMPRIS —
+ * partait vers le mauvais compte, le vrai demandeur n'apprenait jamais son rejet,
+ * et la ligne créée portait un `demande_id` correct associé à un `profil_id`
+ * incohérent. Aucune élévation de privilège (l'action est réservée aux
+ * administrateurs), mais c'est la règle du projet : quand un défaut est trouvé,
+ * balayer le motif entier, pas la seule occurrence.
+ *
+ * `demandeur_profil_id` est donc RELU depuis la demande, sous la même garde
+ * `etat = 'en_attente'` que l'écriture qui suit. La lecture n'est pas une
+ * pré-validation redondante : elle est la SOURCE de la valeur employée pour
+ * notifier, et le formulaire n'en fournit plus aucune.
+ */
 export async function rejeterDemande(donnees: FormData): Promise<ResultatDemande> {
   const adminProfil = await exigerAdministrateur()
 
   const demandeId = String(donnees.get('demandeId') ?? '')
-  const demandeurProfilId = String(donnees.get('demandeurProfilId') ?? '')
   const motif = String(donnees.get('motif') ?? '').trim()
-  if (demandeId.length === 0 || demandeurProfilId.length === 0) {
-    console.error('rejeterDemande : champs manquants', { demandeId, demandeurProfilId })
+  if (demandeId.length === 0) {
+    console.error('rejeterDemande : identifiant de demande manquant dans le formulaire')
     return { erreur: MESSAGE_ECHEC_REJET }
   }
   if (motif.length === 0) {
@@ -322,6 +374,25 @@ export async function rejeterDemande(donnees: FormData): Promise<ResultatDemande
   }
 
   const admin = clientAdmin()
+
+  const { data: demandeLue, error: erreurLecture } = await admin
+    .from('demandes_membre')
+    .select('id, demandeur_profil_id')
+    .eq('id', demandeId)
+    .eq('etat', 'en_attente')
+    .maybeSingle()
+
+  if (erreurLecture || !demandeLue || !demandeLue.demandeur_profil_id) {
+    console.error('rejeterDemande : demande introuvable, déjà traitée, ou sans demandeur', {
+      demandeId,
+      code: erreurLecture?.code,
+      message: erreurLecture?.message,
+    })
+    return { erreur: MESSAGE_ECHEC_REJET }
+  }
+
+  const demandeurProfilId = demandeLue.demandeur_profil_id
+
   const { data, error } = await admin
     .from('demandes_membre')
     .update({ etat: 'rejetee', motif_rejet: motif, traite_par: adminProfil.id, traite_le: new Date().toISOString() })

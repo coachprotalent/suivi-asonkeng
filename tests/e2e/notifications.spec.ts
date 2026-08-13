@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { expect, test, type Page } from '@playwright/test'
 import { identifiantVersEmail } from '../../src/lib/domaine/identifiant'
+import { MESSAGE_ECHEC_NOTIFICATION } from '../../src/app/notifications/messages'
 
 const admin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -106,6 +107,56 @@ test("un compte ne voit JAMAIS la notification d'un autre compte, cloche compris
   await page.goto('/notifications')
   await expect(page.getByText('Notification privée de A')).toHaveCount(0)
   await expect(page.getByText('Aucune notification.')).toBeVisible()
+})
+
+// ═══ I3 DE LA REVUE FINALE DE BRANCHE ═══
+//
+// `MESSAGE_ECHEC_NOTIFICATION` était LEVÉ par `marquerNotificationLue`, depuis une
+// action liée à un `<form action={…}>` NU. Une exception levée là part dans
+// `src/app/error.tsx`, dont le texte est STATIQUE et ne lit jamais
+// `error.message` : ce message n'avait JAMAIS pu s'afficher, dans aucun mode.
+// L'action le RETOURNE désormais, et `FormulaireMarquage` (`useActionState`)
+// l'affiche.
+//
+// LE TEST CONSTATE LE TEXTE À L'ÉCRAN — pas l'absence d'écriture, pas un code
+// HTTP. C'est la seule observation qui distingue « le refus est prononcé » de
+// « le refus est DIT à la personne », et c'est précisément la seconde qui
+// manquait.
+test("le refus de marquage ATTEINT L'ÉCRAN (le message n'est plus perdu dans error.tsx)", async ({ page }) => {
+  const { data: profilA } = await admin.from('profils').select('id').eq('identifiant', IDENT_A).single()
+  await admin.from('notifications').delete().eq('profil_id', profilA!.id)
+  const { error: erreurPreparation } = await admin.from('notifications').insert({
+    profil_id: profilA!.id,
+    type: 'demande_validee',
+    titre: 'Notification refus visible',
+    corps: 'Corps',
+  })
+  if (erreurPreparation) throw new Error(`préparation impossible : ${erreurPreparation.message}`)
+
+  await connecter(page, IDENT_A)
+  await page.goto('/notifications')
+  await expect(page.getByText('Notification refus visible')).toBeVisible()
+
+  // On falsifie le champ caché dans le DOM, comme le fait déjà
+  // `tests/e2e/inscription.spec.ts` pour l'antenne : l'identifiant tiré au hasard
+  // ne désigne AUCUNE notification, l'`update` ne touche donc aucune ligne — le
+  // seul chemin de refus que l'interface légitime ne peut pas produire.
+  const inexistant = crypto.randomUUID()
+  await page.evaluate((valeur) => {
+    document.querySelector<HTMLInputElement>('input[name="notificationId"]')!.value = valeur
+  }, inexistant)
+
+  await page.getByRole('button', { name: 'Marquer comme lue' }).click()
+
+  const alerte = page.locator('form p[role="alert"]')
+  await expect(alerte).toBeVisible()
+  await expect(alerte).toHaveText(MESSAGE_ECHEC_NOTIFICATION)
+
+  // CONTRÔLE : la vraie notification n'a pas été marquée au passage. Sans lui, un
+  // refus affiché sur un écran qui aurait quand même écrit resterait invisible.
+  const { data: apres } = await admin.from('notifications').select('lu_le').eq('profil_id', profilA!.id)
+  expect(apres ?? []).toHaveLength(1)
+  expect(apres![0].lu_le).toBeNull()
 })
 
 test('la cloche ne rend rien sur /connexion et /inscription (aucune session)', async ({ page }) => {

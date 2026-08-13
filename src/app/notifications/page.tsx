@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { mesNotifications } from '@/lib/donnees/notifications'
 import { exigerProfilActif } from '@/lib/securite/garde'
-import { marquerNotificationLue } from './actions'
+import { FormulaireMarquage } from './formulaire-marquage'
 
 export default async function PageNotifications() {
   const profil = await exigerProfilActif()
@@ -25,14 +25,7 @@ export default async function PageNotifications() {
                 <span className={notification.luLe ? 'text-neutral-500' : 'font-medium'}>
                   {notification.titre}
                 </span>
-                {!notification.luLe ? (
-                  <form action={marquerNotificationLue}>
-                    <input type="hidden" name="notificationId" value={notification.id} />
-                    <button type="submit" className="text-sm underline underline-offset-4">
-                      Marquer comme lue
-                    </button>
-                  </form>
-                ) : null}
+                {!notification.luLe ? <FormulaireMarquage notificationId={notification.id} /> : null}
               </div>
               <p className="mt-1 text-sm text-neutral-600">{notification.corps}</p>
               {notification.lien ? (
