@@ -309,3 +309,41 @@ export async function membreBrefParId(id: string): Promise<MembreBref | null> {
   }
   return { id: data.id as string, nom: data.nom as string, prenom: data.prenom as string }
 }
+
+/**
+ * Membres ACTIFS dont l'antenne figure dans `antenneIds`, triés par nom puis prénom,
+ * SANS PAGINATION.
+ *
+ * Deux appelants distincts, une seule fonction (D51) : l'écran de gestion d'une antenne
+ * (Task 4, un seul identifiant dans le tableau) et le pointage d'une séance (Task 16,
+ * plusieurs antennes ciblées par `seances_ael_antennes`). Sans limite ni `range` : D29 et
+ * D53 l'exigent toutes deux, pour deux raisons distinctes — voir le design de la phase 3.
+ *
+ * `antenneIds` vide rend `[]` sans requête : `.in('antenne_id', [])` interrogerait la
+ * base pour une réponse déjà connue.
+ */
+export async function membresDesAntennes(antenneIds: string[]): Promise<MembreBref[]> {
+  if (antenneIds.length === 0) {
+    return []
+  }
+
+  const supabase = await clientServeur()
+  const { data, error } = await supabase
+    .from('membres')
+    .select('id, nom, prenom')
+    .eq('etat', 'actif')
+    .in('antenne_id', antenneIds)
+    .order('nom')
+    .order('prenom')
+
+  if (error) {
+    // Un échec ne doit pas être indistinguable d'une antenne vide : sans ceci, une
+    // panne de lecture laisserait croire qu'une antenne active n'a personne rattaché.
+    throw new Error(`Lecture des membres de l'antenne impossible : ${error.message}`)
+  }
+  return (data ?? []).map((l) => ({
+    id: l.id as string,
+    nom: l.nom as string,
+    prenom: l.prenom as string,
+  }))
+}
