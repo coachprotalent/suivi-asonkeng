@@ -322,6 +322,7 @@ Cette règle est implémentée par une fonction unique `peutModifier(profil, mem
 | Créer et tenir une séance AEL, pointer les présences | ❌ | ✅ | ✅ |
 | Modifier l'arbre (faiseur de disciple, dirigeant) | ❌ | ❌ | ✅ |
 | Créer statuts, groupes, antennes, types d'événement | ❌ | ❌ | ✅ |
+| Rattacher ou détacher un membre d'une antenne | ❌ | ✅ | ✅ |
 | Créer un événement et saisir les trois désirs | ❌ | ✅ | ✅ |
 | Convertir un participant externe en membre | ❌ | ❌ | ✅ |
 | Valider ou rejeter une demande de suivi | ❌ | ❌ | ✅ |
@@ -336,6 +337,13 @@ Cette règle est implémentée par une fonction unique `peutModifier(profil, mem
 > engendre ces séances, et en réserver le réglage à un administrateur obligerait la
 > personne qui anime à demander une intervention pour déplacer une date. Sans effet sur
 > les phases 0 à 1c, qui ne livrent aucun AEL — **à appliquer au plan de la phase 3.**
+>
+> **Amendement du 2026-08-13 (D50).** La ligne « Rattacher ou détacher un membre d'une
+> antenne » est **nouvelle** : la matrice ne la portait pas. Sa ligne voisine sur les antennes
+> couvre la **création** de l'entité, pas l'affectation d'un membre existant — le silence était
+> réel, il est comblé ici plutôt que réinterprété. Le geste est ouvert au modérateur parce que
+> D29 tire la liste de pointage de ce même rattachement : le lui refuser l'obligerait à demander
+> une intervention pour corriger une donnée qui bloque son propre travail.
 >
 > **Amendement du 2026-08-12 (D23).** La création d'un événement et la saisie des trois
 > désirs sont ouvertes au modérateur. **Conséquence assumée, tirée en même temps :** la
