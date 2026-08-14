@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
-import { participantsATraiter, totalATraiter } from '@/lib/donnees/evenements'
+import { participantsATraiter } from '@/lib/donnees/evenements'
 import { TAILLE_PAGE_A_TRAITER } from '@/lib/donnees/evenements-lots'
 import { estAdministrateur, exigerModerateurOuAdministrateur } from '@/lib/securite/garde'
 import { LigneATraiter } from './ligne-a-traiter'
@@ -16,29 +16,36 @@ export default async function PageATraiter({
   await exigerModerateurOuAdministrateur()
 
   const { page: pageBrute } = await searchParams
-  const page = Math.max(1, Number(pageBrute ?? '1') || 1)
+  // `Number.parseInt` et non `Number(...)` : `Number('2.5') || 1` vaut `2.5`, un nombre non
+  // entier qui franchit le garde `page > pages` ci-dessous (`2.5 > 2` est vrai, mais une
+  // fois redirigé vers une page entière il ne redéclenche plus jamais rien) et s'affiche
+  // sous l'étiquette « Page 2.5 sur N » tout en rendant le contenu de la page 1 — M5 de la
+  // ronde du 2026-08-14. Même garde que `src/app/membres/page.tsx:32-33`.
+  const pageDemandee = Number.parseInt(pageBrute ?? '1', 10)
+  const page = Number.isFinite(pageDemandee) && pageDemandee > 0 ? pageDemandee : 1
 
-  // BORNE HAUTE DE LA PAGINATION — EN DEUX TEMPS. `totalATraiter()` (décalage 0, toujours
-  // satisfiable) calcule `pages` et décide d'une redirection AVANT tout `.range()` sur la
-  // page réellement demandée. MÊME DÉFAUT, MÊME CORRECTIF que `/evenements/[id]` (Task 19) :
-  // lire directement la page demandée ferait renvoyer par PostgREST une erreur 416
-  // (`Requested range not satisfiable`, `PGRST103`) dès que le décalage dépasse le nombre de
-  // lignes réellement présentes — TOUJOURS LE CAS quand ce garde doit se déclencher.
-  // Vérifié empiriquement : `range(2450, 2474)` sur cette vue à zéro ligne -> `PGRST103`.
+  // BORNE HAUTE DE LA PAGINATION — UN SEUL ALLER-RETOUR, PAS DEUX (I1, ronde du
+  // 2026-08-14). Le correctif initial de la Task 19 précalculait cette borne par un
+  // aller-retour séparé (`totalATraiter()`) AVANT de lire la page demandée — plus fragile
+  // que le motif qu'il imitait : une conversion ou un classement concurrent, entre les deux
+  // appels, périmait la borne déjà calculée et faisait échouer la lecture elle-même
+  // (`PGRST103`, non attrapée là), plantant l'écran au lieu de rediriger — précisément sur
+  // l'écran où deux modérateurs travaillent ensemble. `participantsATraiter` lit
+  // directement la page demandée et attrape `PGRST103` SUR CETTE LECTURE (evenements-lots.ts),
+  // retombant sur un comptage sans `range` si besoin — un seul aller-retour dans le cas
+  // normal. `pages` est calculé APRÈS coup depuis le `total` REÇU DE CETTE MÊME LECTURE.
   // PAS DE BOUCLE POSSIBLE : `pages` vaut toujours au moins 1, et la cible de la
   // redirection est `pages` lui-même. HORS DE TOUT `try` (aucun `try` dans ce fichier).
-  const total = await totalATraiter()
-  const pages = Math.max(1, Math.ceil(total / TAILLE_PAGE_A_TRAITER))
-  if (page > pages) {
-    redirect(`/evenements/a-traiter?page=${pages}`)
-  }
-
-  const [{ lignes }, peutAgir] = await Promise.all([
+  const [{ lignes, total }, peutAgir] = await Promise.all([
     participantsATraiter(page),
     // DÉCIDE D'AFFICHER les deux gestes réservés à l'administrateur (D55) ; la protection
     // est `exigerAdministrateur`, première instruction des deux actions.
     estAdministrateur(),
   ])
+  const pages = Math.max(1, Math.ceil(total / TAILLE_PAGE_A_TRAITER))
+  if (page > pages) {
+    redirect(`/evenements/a-traiter?page=${pages}`)
+  }
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-10">

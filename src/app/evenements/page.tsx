@@ -17,7 +17,11 @@ export default async function PageEvenements({
   await exigerProfilActif()
 
   const { page: pageBrute, typeId } = await searchParams
-  const page = Math.max(1, Number(pageBrute ?? '1') || 1)
+  // `Number.parseInt`, pas `Number(...)` : `Number('2.5') || 1` vaut `2.5`, non entier, qui
+  // franchit le garde de borne haute plus bas et s'afficherait sous l'étiquette « Page 2.5
+  // sur N » (M5, ronde du 2026-08-14). Même garde que `src/app/membres/page.tsx:32-33`.
+  const pageBrut = Number.parseInt(pageBrute ?? '1', 10)
+  const page = Number.isFinite(pageBrut) && pageBrut > 0 ? pageBrut : 1
 
   const [{ lignes, total }, typesActifs, tousTypes, peutGerer] = await Promise.all([
     listerEvenements({ page, typeId }),

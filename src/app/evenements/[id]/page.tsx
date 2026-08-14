@@ -1,11 +1,6 @@
 import Link from 'next/link'
 import { notFound, redirect } from 'next/navigation'
-import {
-  evenementParId,
-  participantsDEvenement,
-  totalParticipantsDEvenement,
-  typesEvenementActifs,
-} from '@/lib/donnees/evenements'
+import { evenementParId, participantsDEvenement, typesEvenementActifs } from '@/lib/donnees/evenements'
 import { TAILLE_PAGE_PARTICIPANTS, type PageLue, type ParticipantLigne } from '@/lib/donnees/evenements-lots'
 import { formaterDateSeule } from '@/lib/format/date'
 import { estModerateurOuAdministrateur, exigerProfilActif } from '@/lib/securite/garde'
@@ -35,7 +30,13 @@ export default async function PageEvenement({
   ])
 
   const { pageParticipants: pageBrute } = await searchParams
-  const pageParticipants = Math.max(1, Number(pageBrute ?? '1') || 1)
+  // `Number.parseInt`, pas `Number(...)` : `Number('2.5') || 1` vaut `2.5`, non entier,
+  // qui franchit le garde de borne haute plus bas et s'afficherait sous l'étiquette
+  // « Page 2.5 sur N » (M5, ronde du 2026-08-14). Même garde que
+  // `src/app/membres/page.tsx:32-33`.
+  const pageParticipantsBrute = Number.parseInt(pageBrute ?? '1', 10)
+  const pageParticipants =
+    Number.isFinite(pageParticipantsBrute) && pageParticipantsBrute > 0 ? pageParticipantsBrute : 1
 
   // LA LECTURE N'EST PAS FAITE DU TOUT hors modérateur et administrateur, et ce n'est pas
   // une optimisation. Un compte ordinaire lit `participations` sous RLS et obtient ZÉRO
@@ -44,20 +45,23 @@ export default async function PageEvenement({
   // participant » — c'est le pendant exact du mode de défaillance de D71, dans l'autre
   // sens : une lecture VIDÉE PAR LA RLS ne doit jamais être affichée comme un résultat.
   //
-  // BORNE HAUTE DE LA PAGINATION — EN DEUX TEMPS, ET C'EST ESSENTIEL, PAS UN CHOIX DE
-  // STYLE. Une adresse pointant au-delà de la dernière page réelle est un signet périmé
-  // (ou une liste qui a rétréci depuis une suppression, D78) : sans garde, l'écran
-  // afficherait EN MÊME TEMPS trois vérités contradictoires (total, « aucun participant »,
-  // et un numéro de page qui n'existe pas). Le brief décalquait le patron de
-  // `src/app/membres/page.tsx` — lire la page DEMANDÉE, PUIS comparer au nombre réel de
-  // pages — mais CE PATRON PLANTE ICI : constaté À L'EXÉCUTION (vérification manuelle de
-  // cette tâche, `?pageParticipants=99` sur un évènement à deux participants), PostgREST
-  // renvoie une erreur 416 (`Requested range not satisfiable`, marqueur `PGRST103`) dès que
-  // le décalage demandé dépasse le nombre de lignes présentes — CE QUI EST TOUJOURS LE CAS
-  // quand ce garde doit justement se déclencher. La page ne redirigeait pas : elle
-  // PLANTAIT. `compterParticipantsDEvenement` lit le compte SEUL (décalage 0, toujours
-  // satisfiable) pour calculer `pagesParticipants` et décider d'une redirection AVANT tout
-  // `.range()`, qui n'est alors plus jamais hors bornes.
+  // BORNE HAUTE DE LA PAGINATION — UN SEUL ALLER-RETOUR, PAS DEUX. Une adresse pointant
+  // au-delà de la dernière page réelle est un signet périmé (ou une liste qui a rétréci
+  // depuis une suppression, D78) : sans garde, l'écran afficherait EN MÊME TEMPS trois
+  // vérités contradictoires (total, « aucun participant », et un numéro de page qui
+  // n'existe pas). UN PREMIER CORRECTIF (Task 19) précalculait la borne par un aller-retour
+  // séparé AVANT de lire la page — plus fragile que le motif qu'il imitait : une
+  // suppression ou une conversion concurrente ENTRE les deux appels périmait la borne déjà
+  // calculée, et le second appel (la lecture elle-même) échouait à son tour avec
+  // `PGRST103`, non attrapé ici, faisant PLANTER l'écran au lieu de rediriger — sur cet
+  // écran précis, où deux modérateurs travaillent ensemble. CORRIGÉ (I1, ronde du
+  // 2026-08-14) en reprenant le motif éprouvé de `listerMembres` (membres.ts:185-188) :
+  // `participantsDEvenement` lit directement la page DEMANDÉE, et attrape `PGRST103`
+  // SUR CETTE LECTURE ELLE-MÊME (evenements-lots.ts) pour retomber sur un comptage sans
+  // `range`, toujours satisfiable — un seul aller-retour dans le cas normal, deux
+  // uniquement dans le cas déjà en échec, sans jamais rouvrir de fenêtre entre les deux.
+  // `pagesParticipants` est calculé APRÈS coup, à partir du `total` REÇU DE CETTE MÊME
+  // LECTURE — jamais d'un second calcul séparé qui pourrait diverger.
   // PAS DE BOUCLE POSSIBLE : `pagesParticipants` vaut toujours au moins 1, et la cible de
   // la redirection est `pagesParticipants` lui-même — la page rechargée aura donc
   // `pageParticipants === pagesParticipants`, qui ne redéclenche pas la condition.
@@ -68,12 +72,11 @@ export default async function PageEvenement({
   let participants: PageLue<ParticipantLigne> | null = null
   let pagesParticipants = 1
   if (peutGerer) {
-    const totalParticipants = await totalParticipantsDEvenement(evenement.id)
-    pagesParticipants = Math.max(1, Math.ceil(totalParticipants / TAILLE_PAGE_PARTICIPANTS))
+    participants = await participantsDEvenement(evenement.id, pageParticipants)
+    pagesParticipants = Math.max(1, Math.ceil(participants.total / TAILLE_PAGE_PARTICIPANTS))
     if (pageParticipants > pagesParticipants) {
       redirect(`/evenements/${evenement.id}?pageParticipants=${pagesParticipants}`)
     }
-    participants = await participantsDEvenement(evenement.id, pageParticipants)
   }
 
   const lignes: Array<[string, string | null]> = [

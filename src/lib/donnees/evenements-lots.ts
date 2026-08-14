@@ -125,11 +125,41 @@ membres(id, nom, prenom), \
 participants_externes(id, nom, prenom, converti_en_membre_id)'
 
 /**
+ * Compte les événements visibles par l'appelant, même filtre que `evenementsParPage` mais
+ * sans `range` — sert de REPLI quand PostgREST refuse la requête paginée elle-même
+ * (`PGRST103`, voir `evenementsParPage`), cas où son `count` normal n'arrive jamais. Motif
+ * de `compterMembresActifs` (membres.ts) : filtres CENTRALISÉS avec la lecture paginée, pour
+ * qu'un futur filtre ajouté à l'une ne puisse pas diverger de l'autre en silence.
+ */
+async function compterEvenements(supabase: SupabaseClient, typeId?: string): Promise<number> {
+  let requete = supabase.from('evenements').select('id', { count: 'exact', head: true })
+  if (typeId) {
+    requete = requete.eq('type_id', typeId)
+  }
+  const { count, error } = await requete
+  if (error) {
+    throw new Error(`Comptage des événements impossible : ${error.message}`)
+  }
+  return totalObligatoire(count, 'compterEvenements')
+}
+
+/**
  * Une page d'événements, les plus récents en tête. Tri TOTAL : `date_debut desc` puis `id`
  * — `date_debut` n'est PAS unique (plusieurs événements le même jour), et deux ex æquo à
  * cheval sur une frontière de page seraient rendus deux fois ou JAMAIS sous une pagination
  * par décalage. C'est le défaut que `listerMembres` a dû fermer après coup (I4 de la revue
  * finale de la 1c).
+ *
+ * PGRST103 ATTRAPÉE ICI, SUR LA LECTURE ELLE-MÊME — motif éprouvé de `listerMembres`
+ * (membres.ts:185-188), PAS le motif fragile qu'il a remplacé (I1 de la ronde du
+ * 2026-08-14) : calculer la borne haute par un premier aller-retour puis lire par un
+ * second ouvre une fenêtre de course — une suppression ou une conversion concurrente entre
+ * les deux fait toujours échouer le second appel, sur un écran où deux modérateurs
+ * travaillent précisément ensemble. Un seul aller-retour : si le décalage demandé dépasse
+ * le nombre réel de lignes (signet périmé, ou liste qui a rétréci depuis), PostgREST refuse
+ * la requête ENTIÈRE (416, `count` absent) — on retombe alors sur un comptage SANS `range`
+ * (toujours satisfiable) pour rendre un total à jour à l'appelant, qui décide seul de
+ * rediriger ou non.
  */
 export async function evenementsParPage(
   supabase: SupabaseClient,
@@ -153,6 +183,10 @@ export async function evenementsParPage(
 
   const { data, error, count } = await requete
   if (error) {
+    if (error.code === 'PGRST103') {
+      const total = await compterEvenements(supabase, options?.typeId)
+      return { lignes: [], total }
+    }
     // Un échec ne doit pas être indistinguable d'une liste vide : annoncer « aucun
     // événement » alors que la requête a échoué est un mensonge silencieux.
     throw new Error(`Lecture des événements impossible : ${error.message}`)
@@ -183,20 +217,13 @@ export async function evenementsParPage(
 }
 
 /**
- * Nombre TOTAL de participants d'un évènement, sans lire aucune ligne — sert à BORNER la
- * pagination AVANT de lire une page, jamais après.
- *
- * DÉFAUT RÉEL DÉCOUVERT PAR L'EXÉCUTION à la vérification manuelle de la Task 19
- * (`?pageParticipants=99` sur un évènement à deux participants), absent du brief : lire la
- * page DEMANDÉE avant de connaître le total — le patron que `src/app/membres/page.tsx`
- * emploie et que ce brief décalquait — fait renvoyer par PostgREST une erreur 416
- * (`Requested range not satisfiable`, marqueur `PGRST103`) dès que le décalage demandé
- * dépasse le nombre de lignes réellement présentes, CE QUI EST TOUJOURS LE CAS quand le
- * garde de borne haute doit justement se déclencher. Résultat observé : la page ne
- * redirigeait pas, elle PLANTAIT (digest Next.js), pour l'exemple même que l'étape de
- * vérification du brief demande de rejouer. Cette fonction lit le compte seul (décalage 0,
- * toujours satisfiable) pour calculer `pagesParticipants` et décider d'une redirection
- * AVANT tout `.range()`, qui n'est alors plus jamais hors bornes.
+ * Nombre TOTAL de participants d'un évènement, sans lire aucune ligne — REPLI de
+ * `participantsDEvenementParPage` quand PostgREST refuse sa lecture paginée (`PGRST103`),
+ * jamais appelée en amont pour précalculer une borne (voir l'encadré de cette fonction : le
+ * correctif initial de la Task 19 faisait exactement cela, EN DEUX ALLERS-RETOURS séparés,
+ * et ouvrait une fenêtre de course qu'une suppression ou une conversion concurrente pouvait
+ * franchir entre les deux — corrigé par la ronde I1 du 2026-08-14, motif repris de
+ * `listerMembres`/`compterMembresActifs`).
  */
 export async function compterParticipantsDEvenement(
   supabase: SupabaseClient,
@@ -223,6 +250,14 @@ export async function compterParticipantsDEvenement(
  * SÉPARÉMENT, jamais confondues — sur le modèle de `libelleFiliation` (1c) et de
  * `seanceParId` (phase 3) : « aucun membre » et « fiche non consultable » sont deux faits
  * différents, et les confondre ferait mentir l'écran.
+ *
+ * PGRST103 ATTRAPÉE ICI, SUR LA LECTURE ELLE-MÊME, PAS PRÉCALCULÉE PAR UN APPEL SÉPARÉ EN
+ * AMONT (I1 de la ronde du 2026-08-14) : un décalage demandé au-delà du nombre réel de
+ * lignes (signet périmé, ou liste qui a rétréci depuis une suppression) fait refuser la
+ * requête ENTIÈRE par PostgREST (416, `count` absent). Le repli — `compterParticipantsDEvenement`,
+ * SANS `range`, donc toujours satisfiable — ne s'exécute alors QU'APRÈS l'échec de CETTE
+ * lecture, jamais avant : aucune fenêtre entre un comptage et une lecture où une écriture
+ * concurrente pourrait périmer une borne déjà calculée.
  */
 export async function participantsDEvenementParPage(
   supabase: SupabaseClient,
@@ -243,6 +278,10 @@ export async function participantsDEvenementParPage(
     .range(debut, debut + taillePage - 1)
 
   if (error) {
+    if (error.code === 'PGRST103') {
+      const total = await compterParticipantsDEvenement(supabase, evenementId)
+      return { lignes: [], total }
+    }
     throw new Error(`Lecture des participants impossible : ${error.message}`)
   }
 
@@ -271,16 +310,12 @@ export async function participantsDEvenementParPage(
 }
 
 /**
- * Nombre TOTAL de personnes dans la liste « à traiter », sans lire aucune ligne — sert à
- * BORNER la pagination AVANT de lire une page, jamais après. MÊME MOTIF, MÊME DÉFAUT ET
- * MÊME CORRECTIF que `compterParticipantsDEvenement` : lire directement la page demandée,
- * puis comparer au total, fait renvoyer par PostgREST une erreur 416 (`Requested range not
- * satisfiable`, `PGRST103`) dès que le décalage demandé dépasse le nombre de lignes de la
- * vue — REPRODUIT ET VÉRIFIÉ EMPIRIQUEMENT (requête directe, `range(2450, 2474)` sur une vue
- * à zéro ligne : `PGRST103`, « An offset of 2450 was requested, but there are only 0
- * rows. »). `/evenements/a-traiter` porte le MÊME garde de borne haute que
- * `/evenements/[id]` (Task 19) ; sans ce comptage préalable, il PLANTERAIT au lieu de
- * rediriger, exactement comme la fiche d'évènement avant sa correction.
+ * Nombre TOTAL de personnes dans la liste « à traiter », sans lire aucune ligne — REPLI de
+ * `participantsATraiterParPage` quand PostgREST refuse sa lecture paginée (`PGRST103`), au
+ * même titre que `compterParticipantsDEvenement` ci-dessus. PAS un précalcul de borne en
+ * amont : voir l'encadré de `participantsATraiterParPage`, et I1 de la ronde du
+ * 2026-08-14 pour le défaut que cette forme corrige (fenêtre de course entre un comptage
+ * séparé et une lecture, sur l'écran même où deux modérateurs travaillent ensemble).
  */
 export async function compterATraiter(supabase: SupabaseClient): Promise<number> {
   const { count, error } = await supabase
@@ -301,10 +336,15 @@ export async function compterATraiter(supabase: SupabaseClient): Promise<number>
  * RECONTACTER : « disparue » n'est pas un défaut d'affichage.
  *
  * `count` sur une vue AGRÉGÉE : PostgREST le calcule bien, la vue étant interrogée comme
- * une relation ordinaire — VÉRIFIÉ contre la base (voir `compterATraiter` ci-dessus, dont
- * le comptage sert de garde à `/evenements/a-traiter` AVANT tout appel à cette fonction).
- * Cette fonction elle-même doit toujours être appelée avec une `page` déjà bornée par
- * l'appelant — jamais avec une valeur brute venue de l'adresse.
+ * une relation ordinaire — VÉRIFIÉ contre la base.
+ *
+ * PGRST103 ATTRAPÉE ICI, SUR LA LECTURE ELLE-MÊME (I1 de la ronde du 2026-08-14), pas
+ * précalculée par un comptage séparé exécuté avant tout `.range()` : cette dernière forme
+ * — celle du correctif initial de la Task 19 — laissait une fenêtre où une conversion ou un
+ * classement concurrent, entre le comptage et la lecture, périmait la borne déjà calculée
+ * et faisait échouer la lecture elle-même, plantant l'écran au lieu de rediriger. Le repli
+ * (`compterATraiter`, sans `range`) ne s'exécute désormais qu'APRÈS l'échec de cette
+ * lecture.
  */
 export async function participantsATraiterParPage(
   supabase: SupabaseClient,
@@ -333,6 +373,10 @@ export async function participantsATraiterParPage(
     .range(debut, debut + taillePage - 1)
 
   if (error) {
+    if (error.code === 'PGRST103') {
+      const total = await compterATraiter(supabase)
+      return { lignes: [], total }
+    }
     throw new Error(`Lecture de la liste à traiter impossible : ${error.message}`)
   }
 

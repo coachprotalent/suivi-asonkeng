@@ -1,8 +1,6 @@
 import 'server-only'
 import { clientServeur } from '@/lib/supabase/serveur'
 import {
-  compterATraiter,
-  compterParticipantsDEvenement,
   evenementsParPage,
   participantsATraiterParPage,
   participantsDEvenementParPage,
@@ -148,26 +146,6 @@ export async function participantsDEvenement(
 ): Promise<PageLue<ParticipantLigne>> {
   const supabase = await clientServeur()
   return participantsDEvenementParPage(supabase, evenementId, { page })
-}
-
-/**
- * Nombre total de participants — voir l'encadré de `compterParticipantsDEvenement`
- * (evenements-lots.ts) : à appeler AVANT `participantsDEvenement` pour borner la
- * pagination, jamais après.
- */
-export async function totalParticipantsDEvenement(evenementId: string): Promise<number> {
-  const supabase = await clientServeur()
-  return compterParticipantsDEvenement(supabase, evenementId)
-}
-
-/**
- * Nombre total de personnes « à traiter » — voir l'encadré de `compterATraiter`
- * (evenements-lots.ts) : à appeler AVANT `participantsATraiter` pour borner la pagination,
- * jamais après.
- */
-export async function totalATraiter(): Promise<number> {
-  const supabase = await clientServeur()
-  return compterATraiter(supabase)
 }
 
 export async function participantsATraiter(page?: number): Promise<PageLue<ATraiterLigne>> {
