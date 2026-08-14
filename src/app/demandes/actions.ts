@@ -119,9 +119,9 @@ export async function annulerDemandeSuivi(donnees: FormData): Promise<ResultatDe
 }
 
 /**
- * Valide une demande comme NOUVELLE PERSONNE (design 2b §7.3) — les deux origines
- * partagent cette action, avec un comportement différent selon l'`origine` de la
- * demande, RELUE depuis `demandes_membre` (voir plus bas — I2, revue post-Task-17) :
+ * Valide une demande comme NOUVELLE PERSONNE (design 2b §7.3, D66 de la phase 4) — les
+ * TROIS ORIGINES partagent cette action, avec un comportement différent selon l'`origine`
+ * de la demande, RELUE depuis `demandes_membre` (voir plus bas — I2, revue post-Task-17) :
  * - auto_inscription : fiche -> actif, profils.membre_id du demandeur posé sur
  *   cette fiche. Aucune écriture d'arbre.
  * - demande_suivi : `faiseur_de_disciple_id`, `dirigeant_id` et `dirigeant_force`
@@ -129,6 +129,12 @@ export async function annulerDemandeSuivi(donnees: FormData): Promise<ResultatDe
  *   « arbre » (20260814,1) — voir le commentaire dans le corps. PUIS fiche -> actif.
  *   L'ordre compte. `faiseur_de_disciple_id` est RELU depuis `profils.membre_id` et
  *   non pris du formulaire ; il PEUT être NULL (compte racine, D11).
+ * - conversion_participant (D66, phase 4, ajoutée après la rédaction initiale de ce
+ *   docblock — I4 de la revue des Tasks 22-24, qui disait encore « les deux origines ») :
+ *   fiche -> actif SEUL, RIEN D'AUTRE. Ni `profils.membre_id` (le demandeur est
+ *   l'administrateur qui a converti, pas la personne convertie), ni écriture d'arbre (le
+ *   chemin 1 de la conversion n'en pose pas — le rattachement se fait ensuite, séparément,
+ *   depuis `/membres/<id>/arbre`). Voir le bloc dédié plus bas dans le corps de la fonction.
  *
  * NON ATOMIQUE À TRAVERS SES TROIS ÉCRITURES (membres, éventuellement profils,
  * demandes_membre) : voir la Task 17 du plan pour la justification de ce choix.

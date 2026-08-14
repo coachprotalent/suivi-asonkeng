@@ -66,10 +66,12 @@ function versDemandeListe(ligne: any): DemandeListe {
 }
 
 /**
- * Demandes en_attente, les deux origines confondues (design 2b §4, écran
- * `/demandes`). Sous RLS : réservée à l'administrateur par la politique
- * `demandes_membre_lecture`, l'écran est de toute façon derrière
- * `exigerAdministrateur`.
+ * Demandes en_attente, les TROIS origines confondues (design 2b §4 pour
+ * auto_inscription/demande_suivi, D66 de la phase 4 pour conversion_participant ajoutée
+ * depuis — écran `/demandes`, I4 de la revue des Tasks 22-24 : ce commentaire disait encore
+ * « les deux origines », motif du même écart qui a fait dériver le §4.4 de la spec maîtresse
+ * pendant deux phases). Sous RLS : réservée à l'administrateur par la politique
+ * `demandes_membre_lecture`, l'écran est de toute façon derrière `exigerAdministrateur`.
  */
 export async function listerDemandesEnAttente(): Promise<DemandeListe[]> {
   const supabase = await clientServeur()
