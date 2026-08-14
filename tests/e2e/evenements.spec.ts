@@ -34,6 +34,14 @@ let idExterneCanari: string
 // commentaire le dit : « il les reproduit, il ne les observe pas »). Sans ce test, révoquer
 // entièrement la Task 22 laisserait 191 tests RLS et 105 tests e2e verts.
 let idExterneChemin1: string
+// I2 (revue FINALE de branche) : deux cibles DÉDIÉES aux canaris qui rejouent la forge
+// depuis le rôle autorisé. Elles ne peuvent pas être partagées avec `idExterneAConvertir` :
+// convertir celui-ci le ferait DISPARAÎTRE de `participants_a_traiter` (la vue exclut les
+// convertis, D74) et la capture du formulaire de classement, faite depuis cette liste,
+// n'aurait plus de ligne où s'accrocher ; et `classer_participant_externe` refuse un
+// participant déjà converti (`participant_deja_converti`, 20260818230000:52).
+let idExterneCanariConversion: string
+let idExterneCanariClassement: string
 
 async function supprimerCompte(identifiant: string) {
   const { data } = await admin.from('profils').select('id').eq('identifiant', identifiant).maybeSingle()
@@ -113,7 +121,30 @@ function verifierCaptureAction(champs: Record<string, string>): void {
   }
 }
 
-async function nettoyer() {
+/**
+ * M10 / revue finale — DEUX CORRECTIONS ICI, et la seconde est la moins évidente.
+ *
+ * 1. CHAQUE `delete` VÉRIFIE SON ERREUR. Huit suppressions passaient auparavant sans le
+ *    moindre contrôle : une seule refusée (`on delete restrict`, ordre changé) laissait des
+ *    lignes en base de PRODUCTION sans que rien ne le dise.
+ *
+ * 2. `demandes_membre` ET `notifications` N'ONT AUCUNE COLONNE PRÉFIXABLE : une fois les
+ *    membres supprimés, plus rien ne permet de retrouver a posteriori les lignes que ce
+ *    fichier a créées — le comptage de résidus serait INVÉRIFIABLE APRÈS COUP. D'où le
+ *    retour : les identifiants des demandes visées sont capturés AVANT la suppression et
+ *    rendus à l'appelant, qui recompte dessus. C'est la discipline « un marqueur qui vit en
+ *    base » appliquée à deux tables qui n'en ont pas.
+ *
+ * Le chemin 1, emprunté par le test I2, crée une demande ET notifie TOUS les administrateurs
+ * actifs, LE COMPTE RACINE COMPRIS (`convertirParticipant`, actions.ts, le dit nommément) :
+ * on peut polluer le compte racine sans jamais le toucher.
+ */
+async function nettoyer(): Promise<{ idsDemandes: string[] }> {
+  async function verifier(libelle: string, promesse: PromiseLike<{ error: { message: string } | null }>) {
+    const { error } = await promesse
+    if (error) throw new Error(`nettoyage impossible (${libelle}) : ${error.message}`)
+  }
+
   const { data: evts } = await admin.from('evenements').select('id').like('titre', `${FAMILLE}%`)
   const idsEvts = (evts ?? []).map((l) => l.id as string)
   const { data: externes } = await admin.from('participants_externes').select('id').like('nom', `${FAMILLE}%`)
@@ -126,23 +157,32 @@ async function nettoyer() {
     ['participant_externe_id', idsExternes],
     ['membre_id', idsMembres],
   ] as const) {
-    if (ids.length > 0) await admin.from('participations').delete().in(colonne, ids)
-  }
-  // Demandes AVANT les membres (`on delete set null` effacerait la prise), et
-  // notifications avant les demandes : le chemin 1 emprunté par le test I2 en émet, et le
-  // compte racine ne doit pas rester pollué — on peut le polluer sans jamais le toucher.
-  if (idsMembres.length > 0) {
-    const { data: demandes } = await admin.from('demandes_membre').select('id').in('membre_id', idsMembres)
-    const idsDemandes = (demandes ?? []).map((l) => l.id as string)
-    if (idsDemandes.length > 0) {
-      await admin.from('notifications').delete().in('demande_id', idsDemandes)
-      await admin.from('demandes_membre').delete().in('id', idsDemandes)
+    if (ids.length > 0) {
+      await verifier(`participations.${colonne}`, admin.from('participations').delete().in(colonne, ids))
     }
   }
-  if (idsExternes.length > 0) await admin.from('participants_externes').delete().in('id', idsExternes)
-  if (idsMembres.length > 0) await admin.from('membres').delete().in('id', idsMembres)
-  if (idsEvts.length > 0) await admin.from('evenements').delete().in('id', idsEvts)
-  await admin.from('types_evenement').delete().like('libelle', `${FAMILLE}%`)
+  // Demandes AVANT les membres (`on delete set null` effacerait la prise), et
+  // notifications avant les demandes (`demande_id` en clé étrangère).
+  let idsDemandes: string[] = []
+  if (idsMembres.length > 0) {
+    const { data: demandes, error: erreurDemandes } = await admin
+      .from('demandes_membre')
+      .select('id')
+      .in('membre_id', idsMembres)
+    if (erreurDemandes) throw new Error(`lecture des demandes impossible : ${erreurDemandes.message}`)
+    idsDemandes = (demandes ?? []).map((l) => l.id as string)
+    if (idsDemandes.length > 0) {
+      await verifier('notifications', admin.from('notifications').delete().in('demande_id', idsDemandes))
+      await verifier('demandes_membre', admin.from('demandes_membre').delete().in('id', idsDemandes))
+    }
+  }
+  if (idsExternes.length > 0) {
+    await verifier('participants_externes', admin.from('participants_externes').delete().in('id', idsExternes))
+  }
+  if (idsMembres.length > 0) await verifier('membres', admin.from('membres').delete().in('id', idsMembres))
+  if (idsEvts.length > 0) await verifier('evenements', admin.from('evenements').delete().in('id', idsEvts))
+  await verifier('types_evenement', admin.from('types_evenement').delete().like('libelle', `${FAMILLE}%`))
+  return { idsDemandes }
 }
 
 test.beforeAll(async () => {
@@ -177,35 +217,42 @@ test.beforeAll(async () => {
   if (erreurMembre || !membre) throw new Error(`création du membre impossible : ${erreurMembre?.message}`)
   idMembre = membre.id as string
 
-  // Trois externes avec désir : l'un servira la tentative FORGÉE du modérateur, l'autre le
-  // CANARI de l'administrateur, le troisième la preuve I2 du chemin 1 par le vrai parcours.
-  // Trois cibles distinctes, sans quoi les tests se coupleraient et l'un échouerait sur la
-  // précondition de l'autre plutôt que sur l'assertion qu'il vise.
+  // Cinq externes avec désir, CINQ CIBLES DISTINCTES : la tentative FORGÉE du modérateur,
+  // le CANARI par interface de l'administrateur, la preuve I2 du chemin 1 par le vrai
+  // parcours, puis les deux cibles des canaris PAR LA FORGE (conversion et classement).
+  // Sans cette séparation, les tests se coupleraient et l'un échouerait sur la précondition
+  // de l'autre plutôt que sur l'assertion qu'il vise.
   const { data: externes, error: erreurExternes } = await admin
     .from('participants_externes')
     .insert([
       { nom: `${PREFIXE}-x-forge`, prenom: 'Test' },
       { nom: `${PREFIXE}-x-canari`, prenom: 'Test' },
       { nom: `${PREFIXE}-x-chemin1`, prenom: 'Test' },
+      { nom: `${PREFIXE}-x-canforge-conv`, prenom: 'Test' },
+      { nom: `${PREFIXE}-x-canforge-clas`, prenom: 'Test' },
     ])
     .select('id, nom')
-  if (erreurExternes || !externes || externes.length !== 3) {
+  if (erreurExternes || !externes || externes.length !== 5) {
     throw new Error(`création des externes impossible : ${erreurExternes?.message}`)
   }
   idExterneAConvertir = externes.find((x) => (x.nom as string).endsWith('-x-forge'))!.id as string
   idExterneCanari = externes.find((x) => (x.nom as string).endsWith('-x-canari'))!.id as string
   idExterneChemin1 = externes.find((x) => (x.nom as string).endsWith('-x-chemin1'))!.id as string
+  idExterneCanariConversion = externes.find((x) => (x.nom as string).endsWith('-x-canforge-conv'))!.id as string
+  idExterneCanariClassement = externes.find((x) => (x.nom as string).endsWith('-x-canforge-clas'))!.id as string
 
   const { error: erreurParts } = await admin.from('participations').insert([
     { evenement_id: idEvenement, participant_externe_id: idExterneAConvertir, desir_suivi_spirituel: true },
     { evenement_id: idEvenement, participant_externe_id: idExterneCanari, desir_suivi_spirituel: true },
     { evenement_id: idEvenement, participant_externe_id: idExterneChemin1, desir_suivi_spirituel: true },
+    { evenement_id: idEvenement, participant_externe_id: idExterneCanariConversion, desir_suivi_spirituel: true },
+    { evenement_id: idEvenement, participant_externe_id: idExterneCanariClassement, desir_suivi_spirituel: true },
   ])
   if (erreurParts) throw new Error(`participations impossibles : ${erreurParts.message}`)
 })
 
 test.afterAll(async () => {
-  await nettoyer()
+  const { idsDemandes } = await nettoyer()
   // NETTOYAGE VÉRIFIÉ PAR COMPTAGE, sur la MÊME famille que la suppression.
   for (const [table, colonne] of [
     ['evenements', 'titre'],
@@ -218,6 +265,21 @@ test.afterAll(async () => {
       .select('id', { count: 'exact', head: true })
       .like(colonne, `${FAMILLE}%`)
     expect(count, `résidu dans ${table}`).toBe(0)
+  }
+  // LES DEUX TABLES QUE LE CHEMIN 1 ALIMENTE, recomptées sur les identifiants capturés
+  // avant la suppression — voir l'encadré de `nettoyer()`. Aucun préfixe n'existe ici, et
+  // `notifications` atteint le compte racine.
+  if (idsDemandes.length > 0) {
+    const { count: residuDemandes } = await admin
+      .from('demandes_membre')
+      .select('id', { count: 'exact', head: true })
+      .in('id', idsDemandes)
+    expect(residuDemandes, 'résidu dans demandes_membre').toBe(0)
+    const { count: residuNotifs } = await admin
+      .from('notifications')
+      .select('id', { count: 'exact', head: true })
+      .in('demande_id', idsDemandes)
+    expect(residuNotifs, 'résidu dans notifications').toBe(0)
   }
   for (const identifiant of IDENTS) await supprimerCompte(identifiant)
 })
@@ -256,7 +318,12 @@ test('compte modérateur : la section participants et le bloc de modification so
   await expect(page.getByText("Modifier l'évènement")).toBeVisible()
 })
 
-test('compte administrateur : même visibilité que le modérateur, plus le lien vers le catalogue', async ({ page }) => {
+// M4 — INTITULÉ CORRIGÉ. Il annonçait « plus le lien vers le catalogue », laissant croire que
+// ce lien distingue l'administrateur du modérateur. C'est faux : `/evenements` le rend sous
+// `peutGerer` (page.tsx:83-102), donc au modérateur AUSSI. Ce test vérifie que
+// l'administrateur a la même visibilité que le modérateur, rien de plus — et le lien du
+// catalogue en fait partie.
+test('compte administrateur : même visibilité que le modérateur, lien vers le catalogue compris', async ({ page }) => {
   await seConnecter(page, IDENT_ADMIN)
   await page.goto(`/evenements/${idEvenement}`)
   await expect(page.getByRole('heading', { name: /^Participants/ })).toBeVisible()
@@ -326,6 +393,17 @@ test("un compte SIMPLE ne peut pas créer d'évènement par une requête forgée
     .select('id', { count: 'exact', head: true })
     .eq('titre', TITRE_FORGE)
   expect(apres).toBe(0)
+
+  // CANARI PAR LE MÊME CANAL — voir l'encadré « POURQUOI LE CANARI DOIT EMPRUNTER LA
+  // FORGE » plus bas. Exactement le même `request.post`, depuis la session qui a le droit.
+  await page.request.post('/evenements', {
+    multipart: { ...champs, titre: TITRE_FORGE, typeId: idType, dateDebut: '2026-09-02' },
+  })
+  const { count: canari } = await admin
+    .from('evenements')
+    .select('id', { count: 'exact', head: true })
+    .eq('titre', TITRE_FORGE)
+  expect(canari, "la forge n'atteint plus l'action : le refus ci-dessus ne prouve plus rien").toBe(1)
 })
 
 test("un compte SIMPLE ne peut pas ajouter une participation par une requête forgée", async ({ page, browser, baseURL }) => {
@@ -361,6 +439,20 @@ test("un compte SIMPLE ne peut pas ajouter une participation par une requête fo
     .eq('evenement_id', idEvenement)
     .eq('membre_id', idMembre)
   expect(apres).toBe(0)
+
+  // CANARI PAR LE MÊME CANAL. C'est ici qu'il manquait le plus : avant cette correction, ce
+  // test n'avait AUCUN contrôle positif d'aucune sorte — ni forge autorisée, ni geste
+  // équivalent par l'interface —, et `expect(apres).toBe(0)` était une assertion purement
+  // négative que rien n'accompagnait.
+  await page.request.post(`/evenements/${idEvenement}`, {
+    multipart: { ...champs, evenementId: idEvenement, membreId: idMembre },
+  })
+  const { count: canari } = await admin
+    .from('participations')
+    .select('id', { count: 'exact', head: true })
+    .eq('evenement_id', idEvenement)
+    .eq('membre_id', idMembre)
+  expect(canari, "la forge n'atteint plus l'action : le refus ci-dessus ne prouve plus rien").toBe(1)
 })
 
 test("un compte MODÉRATEUR ne peut pas convertir par une requête forgée (D55)", async ({ page, browser, baseURL }) => {
@@ -409,6 +501,29 @@ test("un compte MODÉRATEUR ne peut pas convertir par une requête forgée (D55)
     .eq('id', idExterneAConvertir)
     .single()
   expect(apres!.converti_en_membre_id).toBeNull()
+
+  // CANARI PAR LE MÊME CANAL, sur la garde LA PLUS CRITIQUE de la phase : `.rpc()` passant
+  // par `clientAdmin()`, `exigerAdministrateur` est la SEULE protection de ce chemin, et la
+  // conversion est IRRÉVERSIBLE. Même `request.post`, mêmes champs `$ACTION_*`, seule la
+  // cible change (voir la déclaration d'`idExterneCanariConversion`).
+  await page.request.post('/evenements/a-traiter', {
+    multipart: {
+      ...champs,
+      participantId: idExterneCanariConversion,
+      chemin: 'membre_existant',
+      membreCibleId: idMembre,
+    },
+  })
+  await expect
+    .poll(async () => {
+      const { data } = await admin
+        .from('participants_externes')
+        .select('converti_en_membre_id')
+        .eq('id', idExterneCanariConversion)
+        .single()
+      return data?.converti_en_membre_id ?? null
+    }, { message: "la forge n'atteint plus l'action : le refus ci-dessus ne prouve plus rien" })
+    .toBe(idMembre)
 })
 
 test("un compte MODÉRATEUR ne peut pas classer sans suite par une requête forgée (D55)", async ({ page, browser, baseURL }) => {
@@ -453,14 +568,56 @@ test("un compte MODÉRATEUR ne peut pas classer sans suite par une requête forg
     .single()
   expect(apres!.classe_le).toBeNull()
   expect(apres!.motif_classement).toBeNull()
+
+  // CANARI PAR LE MÊME CANAL, sur une cible dédiée.
+  await page.request.post('/evenements/a-traiter', {
+    multipart: { ...champs, participantId: idExterneCanariClassement, motif: 'Canari de forge' },
+  })
+  await expect
+    .poll(async () => {
+      const { data } = await admin
+        .from('participants_externes')
+        .select('classe_le')
+        .eq('id', idExterneCanariClassement)
+        .single()
+      return data?.classe_le ?? null
+    }, { message: "la forge n'atteint plus l'action : le refus ci-dessus ne prouve plus rien" })
+    .not.toBeNull()
 })
 
-test("CANARI 1 : un MODÉRATEUR RÉEL crée bien un évènement, dans un contexte neuf", async ({ page }) => {
-  // Sans ce canari, les quatre refus ci-dessus pourraient venir d'une requête MAL FORMÉE
-  // (encodage `$ACTION_*` changé, vérification d'origine durcie, formulaire remanié) et non
-  // du garde — indiscernable, et vert pour toujours. Ici, le geste passe par l'INTERFACE,
-  // depuis le rôle qui y a droit : s'il tombe, c'est l'application qui est en cause, pas la
-  // sécurité, et personne ne pourra confondre les deux.
+// ————————————————————————————————————————————————————————————————
+// POURQUOI LE CANARI DOIT EMPRUNTER LA FORGE, ET PAS L'INTERFACE
+//
+// AFFIRMATION FAUSSE CORRIGÉE ICI (revue finale de branche, I2). Ce bloc disait : « Sans ce
+// canari, les quatre refus ci-dessus pourraient venir d'une requête MAL FORMÉE (encodage
+// `$ACTION_*` changé, VÉRIFICATION D'ORIGINE DURCIE, formulaire remanié) et non du garde […]
+// ICI, LE GESTE PASSE PAR L'INTERFACE ». Passer par l'interface est PRÉCISÉMENT ce qui rend
+// un canari incapable d'exclure ce qu'il nommait :
+//  - l'interface soumet par le canal JavaScript de `useActionState` (en-tête `Next-Action`) ;
+//  - la forge soumet un `multipart` reconstitué depuis les champs `$ACTION_*`.
+// DEUX CANAUX DIFFÉRENTS. Qu'un durcissement d'origine côté Next fasse échouer les quatre
+// POST forgés POUR CE MOTIF-LÀ, et les quatre assertions « rien n'a été écrit » restent
+// vertes, ces deux canaris-ci restent verts eux aussi — pendant que plus RIEN n'éprouve
+// `exigerAdministrateur` devant `convertirParticipant`, seule protection d'un geste
+// IRRÉVERSIBLE puisque le `.rpc()` passe par `clientAdmin()`.
+//
+// C'est le motif que le registre a nommé à propos de la preuve n°5 : le canal de
+// vérification doit être capable de distinguer ce qu'on lui demande de distinguer. Le bon
+// standard existait déjà dans cette branche (`evenements-liste.spec.ts:271-275`,
+// `evenements-types.spec.ts:238` et `:275`, `evenements-detail.spec.ts:267` — ce dernier
+// documentant que ce mode de défaillance S'EST DÉJÀ PRODUIT dans cette phase) ; les quatre
+// forges ci-dessus le reprennent désormais.
+//
+// `verifierCaptureAction` ne comble pas ce trou : elle vérifie qu'un champ `$ACTION*` EXISTE
+// dans le HTML, pas que le POST reconstitué est ACCEPTÉ.
+//
+// CE QUE LES DEUX CANARIS CI-DESSOUS PROUVENT RÉELLEMENT, et qui reste utile : que le geste
+// aboutit par LE VRAI PARCOURS UTILISATEUR, formulaire compris. C'est une autre question que
+// celle de la forge, et ils sont conservés pour elle — sous un intitulé qui ne promet plus
+// de couvrir la première.
+// ————————————————————————————————————————————————————————————————
+
+test("PARCOURS RÉEL 1 : un MODÉRATEUR crée bien un évènement PAR L'INTERFACE, dans un contexte neuf", async ({ page }) => {
   await seConnecter(page, IDENT_MODERATEUR)
   await page.goto('/evenements')
   await page.getByText('Nouvel évènement').click()
@@ -483,7 +640,7 @@ test("CANARI 1 : un MODÉRATEUR RÉEL crée bien un évènement, dans un context
   expect(count).toBe(1)
 })
 
-test("CANARI 2 : un ADMINISTRATEUR RÉEL convertit bien un participant, dans un contexte neuf", async ({ page }) => {
+test("PARCOURS RÉEL 2 : un ADMINISTRATEUR convertit bien un participant PAR L'INTERFACE, dans un contexte neuf", async ({ page }) => {
   await seConnecter(page, IDENT_ADMIN)
   await page.goto('/evenements/a-traiter')
   const ligne = page.locator('li').filter({ hasText: `${PREFIXE}-x-canari` })
