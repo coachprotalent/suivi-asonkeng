@@ -216,6 +216,87 @@ refus métier ; elle ne le lève pas. Un `throw` reste acceptable pour une panne
 technique dont aucun texte n'aiderait l'utilisateur — mais jamais pour un message
 qu'on veut lui montrer.
 
+### Les champs effacés : React vide un formulaire non contrôlé même quand l'action REFUSE
+
+**Découverte de la phase 4, à l'exécution, et elle déborde très largement cette phase — le
+défaut est DÉPLOYÉ AUJOURD'HUI, y compris sur le seul écran public de l'application.**
+C'est le frère jumeau de la section précédente : là, un message n'atteignait pas
+l'utilisateur ; ici, c'est **sa saisie** qui disparaît.
+
+Une action liée à un `<form action={…}>` fait **remonter le formulaire** — React
+réinitialise les champs **non contrôlés** dès que l'action se termine **sans lever**. Y
+compris quand elle **retourne un refus métier**. L'utilisateur dont la saisie est refusée
+lit son message d'erreur au-dessus d'un formulaire **vide**, et doit tout retaper.
+
+**Ce qui rend ce piège particulièrement perfide : c'est LA BONNE PRATIQUE DU PROJET QUI LE
+DÉCLENCHE.** La règle de la section précédente — « une action **retourne** son refus, elle
+ne le lève pas », posée pour que le message survive au build de production — est exactement
+ce qui fait passer l'action par le chemin « complétion normale », donc par la remise à zéro.
+Une action qui **lève** ne vide rien : elle part dans la limite d'erreur. Corriger le premier
+défaut a créé le second, et aucun brief, aucune conception, aucune revue ne l'avait vu.
+
+**Cartographie, vérifiée fichier par fichier contre le code** (balayage des composants
+portant un `<form action={…}>` et comptage des champs porteurs d'un `name` sans `value={…}`
+ni `checked={…}`) — **quatorze** composants atteints, sur trente-quatre qui portent un
+`<form action>` :
+
+| Gravité | Composant | Champs libres |
+|---|---|---|
+| **CRITIQUE** | `inscription/formulaire-inscription.tsx` — **écran PUBLIC**, aucun rattrapage | **8** |
+| **CRITIQUE** | `membres/formulaire-membre.tsx` | **9** |
+| **CRITIQUE** | `demandes/nouvelle/page.tsx` | 4 |
+| Élevé | `statuts/formulaire-catalogue.tsx` | 4 |
+| Élevé | `membres/[id]/statuts/formulaire-statut.tsx` (note de 500 caractères) | 3 |
+| Élevé | `ael/calendriers/formulaire-calendrier.tsx` | 3 |
+| Élevé | `ael/seances/formulaire-seance-manuelle.tsx` | 2 |
+| Élevé | `ael/seances/[id]/formulaire-seance.tsx` | 2 |
+| Moyen | `antennes/formulaire-antenne.tsx` | 2 |
+| Moyen | `changer-mot-de-passe/page.tsx` | 2 |
+| Moyen | `comptes/formulaire-compte.tsx` | 2 |
+| Moyen | `connexion/formulaire-connexion.tsx` | 2 |
+| Faible | `tokens/formulaire-generation.tsx` | 1 |
+| Faible | `membres/[id]/statuts/page.tsx` (motif de retrait) | 1 |
+
+**Le pire cas est le premier, et il est en production** : une personne saisit son identité,
+son contact et son antenne, se trompe de code d'inscription, **et perd les huit champs**.
+Elle n'a par ailleurs aucun moyen de comprendre son erreur — le §7 impose à cet écran un
+message indifférencié.
+
+**La dernière ligne du tableau ne figurait pas au relevé d'origine**, qui en comptait treize :
+`membres/[id]/statuts/page.tsx` porte un `<form action={retirerStatut}>` avec un motif libre
+de 500 caractères. Sa gravité est faible — au succès, la ligne disparaît de toute façon —
+mais son omission est le motif « balayage à moitié », une fois de plus.
+
+**Deux composants ont été soupçonnés à tort, et pour une raison qu'il faut connaître.**
+`comptes/ligne-compte.tsx` porte bien deux cases non contrôlées, mais dans un
+`<form onSubmit={…}>` et non `<form action={…}>` : **le mécanisme ne s'y applique pas.**
+`membres/[id]/arbre/formulaire-arbre.tsx` et `antennes/[id]/formulaire-rattachement.tsx`
+emploient `SelecteurMembre`, **déjà contrôlé** — le bon motif existait déjà dans le dépôt
+avant qu'on nomme le défaut.
+
+**Remède, éprouvé sur les cinq formulaires de la phase 4** : rendre les champs **contrôlés**
+(`value={…}` + `onChange`). Quand une remise à zéro **au succès** est voulue (formulaire de
+création qui doit se vider), elle se garde par un `useRef` :
+
+```tsx
+const enCoursPrecedent = useRef(enCours)
+useEffect(() => {
+  if (enCoursPrecedent.current && !enCours && etat.erreur === null) {
+    // vider ici : une VRAIE soumission vient de réussir
+  }
+  enCoursPrecedent.current = enCours
+}, [enCours, etat])
+```
+
+**Pourquoi ce `useRef` ferme la course au montage PAR CONSTRUCTION, et ne la déplace pas** :
+il est initialisé avec la valeur du **premier** rendu, nécessairement `false`. La passe de
+montage ne peut donc jamais satisfaire `enCoursPrecedent.current && !enCours`, quel que soit
+le timing. Tester `etat.erreur === null` seul ne suffirait pas : c'est aussi vrai de l'état
+initial, et l'effet se déclencherait dès le montage.
+
+**Statut : connu, mesuré, non corrigé hors phase 4.** À traiter en phase 5 (refonte UI/UX),
+et **le cas public mérite d'être traité avant les autres**.
+
 **`admin.auth.admin.listUsers()` n'est paginé que dans DEUX fichiers du dépôt.**
 Vingt-six fichiers de test l'appellent, pour retrouver un compte de test par
 identifiant, plus `scripts/creer-compte-racine.ts`, pour vérifier qu'aucun compte
@@ -780,3 +861,106 @@ au démontage la route courante est déjà la NOUVELLE — ce serait la mauvaise
 
 **Ce qui n'est toujours pas couvert, et ne l'était pas davantage avant** : un second onglet
 ouvert sur la même séance ne se met pas à jour tout seul ; son utilisateur doit recharger.
+
+## Phase 4 : les évènements, les participants externes et leur conversion
+
+La phase 4 livre le suivi des évènements (webinaires, séminaires académiques, pic-nics,
+retraites spirituelles), le recueil des **trois désirs** exprimés par ceux qui y participent,
+et la conversion d'un participant externe en membre de l'équipe.
+
+**Quatre écrans nouveaux** :
+
+- **`/evenements`** — liste paginée (25 par page), filtre par type, création par un
+  modérateur ou un administrateur.
+- **`/evenements/[id]`** — la fiche : modification de l'évènement, et la liste paginée des
+  participants (50 par page). On y ajoute un membre de l'équipe par recherche
+  (`SelecteurMembre`, réutilisé tel quel de la 1c) **ou** un participant externe créé à la
+  volée, sans quitter l'écran.
+- **`/evenements/a-traiter`** — les participants externes ayant exprimé un désir de suivi
+  spirituel, ni convertis ni classés. **Une ligne par personne**, quel que soit le nombre
+  d'évènements concernés. Consultable par un modérateur ; les deux gestes qui la vident sont
+  réservés à l'administrateur.
+- **`/evenements/types`** — le catalogue des types, réservé à l'administrateur. Les types se
+  désactivent, ils ne se suppriment jamais : un évènement passé doit rester lisible avec son
+  type (même régime que `statuts`, d'où le `on delete restrict`).
+
+**Deux écrans déjà livrés changent** : `/demandes` accepte une troisième origine de demande
+(`conversion_participant`) et l'étiquette comme telle ; `/membres/[id]` porte une section
+**« Séminaires assistés »**.
+
+**En base : quatre tables** (`types_evenement`, `evenements`, `participants_externes`,
+`participations`), **deux vues**, et **19 migrations** (`20260818100000` à `20260818280000`).
+
+### Les trois désirs ne quittent jamais le périmètre modérateur/administrateur
+
+`participations` porte trois booléens — **mentorat académique**, **suivi spirituel**,
+**CPEAP** — plus une note libre. Ce sont des confidences, et le projet les traite comme
+telles : la politique `participations_lecture` exige `est_actif() and
+est_moderateur_ou_admin()`, et l'écran ne **lit pas du tout** ces colonnes hors de ce
+périmètre. C'est délibéré : une lecture vidée par la RLS et affichée quand même montrerait
+un évènement à cent participants comme désert — **un mensonge, pas une protection**.
+
+### Les deux vues, et pourquoi elles sont l'inverse l'une de l'autre
+
+C'est le point le plus subtil de la phase, et il vaut d'être lu avant toute retouche.
+
+- **`seminaires_assistes`** est la **seule vue du projet en `security_invoker = false`**.
+  Elle contourne délibérément la RLS de `participations` pour rendre le **seul fait** d'avoir
+  assisté à un séminaire lisible de **tout compte actif** : le partage à faire est
+  **colonne à colonne** là où la RLS est **ligne à ligne**. Elle expose **cinq colonnes**,
+  aucune ne portant un désir, une note ni une identité externe. Elle ne contourne **pas** la
+  RLS de `membres` : `prive.peut_lire_membre` la réimpose, dans une définition **unique**
+  partagée avec la politique `membres_lecture`.
+- **`participants_a_traiter`** est en `security_invoker = true`, **l'inverse exact**, et tout
+  aussi délibérément : ses lecteurs légitimes ont déjà le droit de lire les tables jointes,
+  elle hérite donc de leur RLS. **Y écrire `false` ouvrirait la liste des confidences à tout
+  compte actif.**
+
+**Le mode de défaillance à connaître** : si l'hypothèse `BYPASSRLS` du propriétaire de
+`seminaires_assistes` était fausse, elle ne lèverait **aucune erreur** — elle rendrait zéro
+ligne **pour tout le monde**, et les étiquettes de séminaires disparaîtraient de toutes les
+fiches membres **sans la moindre trace**. Si cette section est vide sur toutes les fiches, la
+première chose à regarder est `reloptions` de la vue.
+
+### La conversion, et pourquoi elle est irréversible
+
+Un participant externe se convertit par **trois chemins** au choix, tous servis par une seule
+passerelle SQL (`convertir_participant_externe`), donc **atomiques par construction** :
+
+1. **fiche `en_attente`** — elle rejoint le circuit de validation de `/demandes`. Le bouton
+   « Valider comme nouvelle personne » est **le seul geste de toute l'application** qui la
+   fasse passer à `actif`, et il ne pose **aucun faiseur de disciple** : l'administrateur qui
+   convertit n'est pas le faiseur de disciple de la personne convertie. Le rattachement à
+   l'arbre est un geste **séparé**, depuis `/membres/<id>/arbre`.
+2. **fiche `actif` immédiate**, avec faiseur de disciple **obligatoire** — sans lui, la fiche
+   naîtrait active et **détachée de l'arbre**, sans le moindre signal.
+3. **rattachement à une fiche existante** — aucune fiche créée ; le séminaire rejoint
+   l'historique de la fiche cible, qui doit être **active**.
+
+**Elle ne se défait pas.** Le déclencheur `participants_externes_liens_definitifs` refuse
+toute seconde écriture du lien, y compris une remise à `NULL` — sans quoi un participant se
+**déconvertirait silencieusement**. C'est pourquoi le bouton porte une confirmation qui nomme
+le chemin choisi : c'est là que se joue l'erreur coûteuse.
+
+**L'historique d'un converti n'est pas réécrit.** `participations.membre_id` n'est jamais
+repointé : la seconde branche de `seminaires_assistes` résout le lien **à la lecture**.
+Repointer effacerait le fait que cette personne est entrée par un séminaire — précisément ce
+que le projet veut mesurer.
+
+### Le classement sans suite, et la limite qu'il faut connaître
+
+L'autre façon de vider la liste « à traiter » est le **classement sans suite**, avec un motif
+**obligatoire**. Il n'y a **pas de réouverture** : le **même** déclencheur qu'au paragraphe
+précédent (`participants_externes_liens_definitifs`, dont la fonction est
+`prive.refuser_reouverture_participant` — un seul déclencheur porte les **deux** invariants)
+refuse de modifier `classe_le` une fois posé, **y compris pour le remettre à `NULL`**, même
+par écriture directe.
+
+**Ce que l'application ne permet pas, et il faut le savoir avant de classer quelqu'un** : la
+passerelle SQL laisse convertir un participant déjà classé (« quelqu'un classé il y a deux
+ans qui reprend contact »), mais **aucun écran ne liste les classés** — la vue « à traiter »
+les exclut par construction. En pratique, un classé se **reconnaît** là où il apparaît (sa
+mention et son motif sont affichés sur la fiche de chaque évènement où il figure), mais il ne
+se **retrouve pas** : il n'existe aucun écran « qui ai-je classé ». Pour reprendre le suivi
+d'une personne classée, il faut la **ressaisir** comme nouveau participant — ce qui crée une
+autre ligne et ne rattache pas l'ancienne participation. À traiter en phase 5.
