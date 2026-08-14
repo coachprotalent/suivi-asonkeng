@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
+import { compteurAelMembre } from '@/lib/donnees/ael'
 import { disciplesDe } from '@/lib/donnees/arbre'
 import { etatCompteLie } from '@/lib/donnees/comptes'
 import { membreBrefParId, membreParId } from '@/lib/donnees/membres'
@@ -35,7 +36,7 @@ export default async function PageFicheMembre({
     notFound()
   }
 
-  const [roles, statuts, disciples, faiseur, dirigeant, peutEcrireStatuts, compteLie] =
+  const [roles, statuts, disciples, faiseur, dirigeant, peutEcrireStatuts, compteLie, compteurAel] =
     await Promise.all([
       rolesDuProfil(profil.id),
       statutsDuMembre(membre.id),
@@ -46,6 +47,7 @@ export default async function PageFicheMembre({
       membre.dirigeantId ? membreBrefParId(membre.dirigeantId) : Promise.resolve(null),
       aAutoriteSur(membre.id),
       etatCompteLie(membre.id),
+      compteurAelMembre(membre.id),
     ])
   const estAdmin = roles.includes('administrateur')
 
@@ -57,7 +59,13 @@ export default async function PageFicheMembre({
     ["Domaine d'étude", membre.domaineEtude],
     ['Téléphone', membre.telephone],
     ['Contact', membre.emailContact],
-    ['AEL déjà suivis', String(membre.reportInitialAel)],
+    // Le TOTAL calculé (D4, D44), pas le seul report initial : `compteurAel` vaut
+    // `null` si la ligne de la vue `compteurs_ael` n'est pas visible par ce compte —
+    // en pratique jamais atteignable ici, puisque la vue part de `membres` et que
+    // cette fiche est déjà visible par l'appelant (même politique de lecture). Le
+    // repli existe quand même, plutôt que de crasher sur une garantie qu'aucune
+    // preuve locale à ce fichier n'établit.
+    ['Compteur AEL', compteurAel !== null ? String(compteurAel) : '—'],
   ]
 
   const nomOuTiret = (bref: { prenom: string; nom: string } | null) =>

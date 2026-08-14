@@ -78,3 +78,18 @@ export async function listerAntennesPubliques(): Promise<Antenne[]> {
   }
   return (data ?? []) as Antenne[]
 }
+
+/** Une antenne par son identifiant, active ou non, ou `null` si elle n'existe pas. */
+export async function antenneParId(id: string): Promise<Antenne | null> {
+  const supabase = await clientServeur()
+  const { data, error } = await supabase
+    .from('antennes')
+    .select('id, nom, pays, actif')
+    .eq('id', id)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Lecture de l'antenne impossible : ${error.message}`)
+  }
+  return data as Antenne | null
+}

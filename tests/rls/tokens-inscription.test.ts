@@ -17,7 +17,16 @@ const MDP = `Test-${crypto.randomUUID()}`
 const PREFIXE = 'test.rls.tokens.'
 const IDENT_ADMIN = `${PREFIXE}admin`
 const IDENT_SIMPLE = `${PREFIXE}simple`
-const PREFIXE_MEMBRE = `ZZTokens-${crypto.randomUUID().slice(0, 8)}`
+// IMPORTANT 3 de la revue de la Task 19 — LE BALAYAGE I6 S'ETAIT ARRÊTÉ À `tests/e2e/`.
+// Les tests RLS écrivent dans LES MÊMES TABLES, sur la MÊME base (qui sert aussi de
+// production), et reproduisaient le défaut à l'identique : le préfixe balayé embarquait
+// l'UUID tiré PAR EXÉCUTION, si bien qu'une suite interrompue laissait des lignes que
+// PLUS RIEN ne retrouvait — ni cette exécution-ci, qui ne connaît que son propre
+// suffixe, ni aucune autre. Même remède que I6 : une partie STABLE (`FAMILLE_*`) sert au
+// balayage de RATTRAPAGE, la partie aléatoire ne distingue plus que les noms individuels
+// de CETTE exécution.
+const FAMILLE_MEMBRE = 'ZZTokens-'
+const PREFIXE_MEMBRE = `${FAMILLE_MEMBRE}${crypto.randomUUID().slice(0, 8)}`
 
 let idAdmin: string
 let idSimple: string
@@ -61,7 +70,7 @@ async function creerCompte(identifiant: string, administrateur: boolean): Promis
 }
 
 beforeAll(async () => {
-  await admin.from('membres').delete().like('nom', `${PREFIXE_MEMBRE}%`)
+  await admin.from('membres').delete().like('nom', `${FAMILLE_MEMBRE}%`)
   await supprimerCompte(IDENT_ADMIN)
   await supprimerCompte(IDENT_SIMPLE)
 
@@ -142,7 +151,16 @@ afterAll(async () => {
   // Purge des tokens de test créés par le bloc consommer_token_inscription
   // (préfixe test-consommation-), distincts du idToken créé ci-dessus.
   await admin.from('tokens_inscription').delete().like('code_hash', 'test-consommation-%')
-  await admin.from('membres').delete().like('nom', `${PREFIXE_MEMBRE}%`)
+  await admin.from('membres').delete().like('nom', `${FAMILLE_MEMBRE}%`)
+
+  // Nettoyage VÉRIFIÉ PAR COMPTAGE, sur la FAMILLE (voir l'encadré du préfixe) : le
+  // fichier comptait déjà ses tentatives résiduelles, jamais ses membres.
+  const { count: membresRestants, error: erreurMembresRestants } = await admin
+    .from('membres')
+    .select('id', { count: 'exact', head: true })
+    .like('nom', `${FAMILLE_MEMBRE}%`)
+  expect(erreurMembresRestants).toBeNull()
+  expect(membresRestants).toBe(0)
   await supprimerCompte(IDENT_ADMIN)
   await supprimerCompte(IDENT_SIMPLE)
 })

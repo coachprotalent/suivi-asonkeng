@@ -78,7 +78,11 @@ async function deciderAutorite(
 }
 
 /**
- * A-t-on autorité sur ce membre ? Rend un booléen, ne redirige pas.
+ * A-t-on autorité sur ce membre ? Rend un booléen pour la DÉCISION D'AUTORITÉ elle-même
+ * — elle ne redirige jamais pour départager autorisé/refusé. Elle PEUT néanmoins
+ * rediriger en amont, vers `/deconnexion`, via `exigerProfilActif` (`deciderAutorite`
+ * plus haut) si aucun profil actif n'existe : ce n'est pas une décision d'autorité, c'est
+ * le même barrage de session que devant toute page ou action de l'application.
  *
  * À n'employer que pour DÉCIDER D'AFFICHER quelque chose. Il ne protège rien : masquer
  * un formulaire n'empêche personne d'appeler l'action qu'il déclenche. La protection,
@@ -102,6 +106,51 @@ export async function aAutoriteSur(membreId: string): Promise<boolean> {
  */
 export async function exigerAutoriteSur(membreId: string): Promise<Profil> {
   const { profil, autorise } = await deciderAutorite(membreId)
+  if (!autorise) {
+    redirect('/tableau-de-bord')
+  }
+  return profil
+}
+
+/**
+ * Décision « ce compte gère-t-il le calendrier AEL, les séances, le pointage, ou le
+ * rattachement d'un membre à une antenne ? », écrite une seule fois. Les deux fonctions
+ * exportées ci-dessous en dérivent, sur le modèle de `deciderAutorite` plus haut.
+ */
+async function deciderModerateurOuAdministrateur(): Promise<{ profil: Profil; autorise: boolean }> {
+  const profil = await exigerProfilActif()
+  const roles = await rolesDuProfil(profil.id)
+  const autorise = roles.includes('administrateur') || roles.includes('moderateur')
+  return { profil, autorise }
+}
+
+/**
+ * Le compte connecté gère-t-il le calendrier AEL, les séances ou le rattachement d'une
+ * antenne ? Rend un booléen pour cette décision de rôle précise — elle ne redirige jamais
+ * pour la départager. Elle PEUT néanmoins rediriger en amont, vers `/deconnexion`, via
+ * `exigerProfilActif` (`deciderModerateurOuAdministrateur` plus haut) si aucun profil
+ * actif n'existe : ce n'est pas un verdict de rôle, c'est le même barrage de session que
+ * devant toute page ou action de l'application (revue task-1-4, constat M2).
+ *
+ * À n'employer que pour DÉCIDER D'AFFICHER un formulaire ou un bouton (D22, D50). La
+ * protection réelle, c'est `exigerModerateurOuAdministrateur`, et elle seule.
+ */
+export async function estModerateurOuAdministrateur(): Promise<boolean> {
+  const { autorise } = await deciderModerateurOuAdministrateur()
+  return autorise
+}
+
+/**
+ * Réserve une action au modérateur et à l'administrateur (D22, D42, D50).
+ *
+ * Contrairement à `exigerAutoriteSur`, l'autorisation ici est PAR RÔLE, pas par portée
+ * sur un membre précis : le calendrier, la génération, la tenue d'une séance, le
+ * pointage et le rattachement d'un membre à une antenne ne dépendent d'aucune
+ * arborescence de faiseurs de disciple. `exigerAutoriteSur` répond à une question
+ * différente et ne s'applique pas ici.
+ */
+export async function exigerModerateurOuAdministrateur(): Promise<Profil> {
+  const { profil, autorise } = await deciderModerateurOuAdministrateur()
   if (!autorise) {
     redirect('/tableau-de-bord')
   }

@@ -24,3 +24,9 @@ Thumbs.db
 coverage/
 playwright-report/
 test-results/
+
+# Empreinte des séances AEL prise par tests/e2e/ael-preuves.spec.ts (IMPORTANT 6 de la
+# revue de la Task 19). Écrite au démarrage de la suite, effacée après un nettoyage
+# vérifié : sa présence atteste une exécution non close, dont le delta reste à rattraper.
+# Propre à une machine et à un instant — jamais versionnée.
+.ael-preuves-empreinte.json

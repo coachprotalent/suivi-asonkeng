@@ -21,9 +21,9 @@ export default async function PageAntennes() {
       <ul className="mb-10 divide-y divide-neutral-200">
         {antennesActives.map((antenne) => (
           <li key={antenne.id} className="flex items-center justify-between gap-4 py-3">
-            <span>
+            <Link href={`/antennes/${antenne.id}`} className="hover:underline">
               {antenne.nom} <span className="text-sm text-neutral-500">· {antenne.pays}</span>
-            </span>
+            </Link>
             <form action={desactiverAntenne}>
               <input type="hidden" name="id" value={antenne.id} />
               <BoutonBasculeAntenne nom={antenne.nom} desactiver />
@@ -44,9 +44,9 @@ export default async function PageAntennes() {
           <ul className="mb-10 divide-y divide-neutral-200">
             {antennesInactives.map((antenne) => (
               <li key={antenne.id} className="flex items-center justify-between gap-4 py-3">
-                <span className="text-neutral-500">
+                <Link href={`/antennes/${antenne.id}`} className="text-neutral-500 hover:underline">
                   {antenne.nom} <span className="text-sm">· {antenne.pays}</span>
-                </span>
+                </Link>
                 <form action={reactiverAntenne}>
                   <input type="hidden" name="id" value={antenne.id} />
                   <BoutonBasculeAntenne nom={antenne.nom} desactiver={false} />

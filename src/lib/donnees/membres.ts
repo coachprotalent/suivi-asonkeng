@@ -1,6 +1,7 @@
 import 'server-only'
 import type { EtatMembre, SituationMembre } from '@/lib/domaine/membre'
 import { clientServeur } from '@/lib/supabase/serveur'
+import { membresDesAntennesParLots } from './membres-lots'
 
 export type MembreListe = {
   id: string
@@ -155,6 +156,19 @@ export async function listerMembres(filtres?: {
       .select(COLONNES_LISTE, { count: 'exact' })
       .order('nom')
       .order('prenom')
+      // I4 de la revue finale de branche — TRI TOTAL, troisième critère obligatoire.
+      // `(nom, prenom)` n'est pas unique : deux HOMONYMES EXACTS à cheval sur une
+      // frontière de page peuvent, sous une pagination par décalage, être rendus DEUX
+      // FOIS ou JAMAIS — « jamais » étant la disparition silencieuse d'un membre de
+      // l'annuaire, l'écran le plus fréquenté de l'application. Sur une liste de membres
+      // d'église, les homonymes ne sont pas une hypothèse d'école. C'est mot pour mot le
+      // défaut corrigé sur `membresDesAntennesParLots` (`membres-lots.ts:146`), qui
+      // survivait ici, dans le fichier qui IMPORTE le module corrigé.
+      // Doctrine du registre (ronde Q1-Q7, Q4) : `.order('id')` est correct EN TOUTE
+      // GÉNÉRALITÉ — aucune spécification SQL ne garantit l'ordre des ex æquo sans tri
+      // total —, même quand une mutation sur deux lignes ne parvient pas à mettre le
+      // défaut en évidence sur un plan Postgres donné.
+      .order('id')
       .range(debut, debut + TAILLE_PAGE_ANNUAIRE - 1),
     filtres,
   )
@@ -308,4 +322,86 @@ export async function membreBrefParId(id: string): Promise<MembreBref | null> {
     return null
   }
   return { id: data.id as string, nom: data.nom as string, prenom: data.prenom as string }
+}
+
+// `TAILLE_LOT_MEMBRES_ANTENNE` et `membresDesAntennesParLots` vivent dans
+// `./membres-lots`, un module SANS `import 'server-only'` — voir l'encadré en tête de
+// ce fichier-là pour pourquoi : c'est délibéré, pas un oubli d'import, et c'est ce qui
+// permet à `tests/rls/membres.test.ts` de faire tourner ce code contre la vraie base
+// sans passer par un Server Component. `membresDesAntennesParLots` n'est importée ICI
+// que pour l'usage interne de `membresDesAntennes` ci-dessous : aucun appelant de ce
+// fichier n'a besoin d'elle ni de la constante directement (recherche exhaustive du
+// dépôt, revue task-1-4, constat M1) — `tests/rls/membres.test.ts` les importe déjà
+// directement depuis `./membres-lots`. Une réexportation ici serait donc morte : retirée.
+
+/**
+ * Membres ACTIFS dont l'antenne figure dans `antenneIds`, triés par nom puis prénom,
+ * SANS PAGINATION CÔTÉ APPELANT — mais parcourue par lots en interne pour rester
+ * complète quel que soit l'effectif (voir `membresDesAntennesParLots` dans
+ * `./membres-lots`, dont le commentaire détaille pourquoi : le plafond `max_rows` de
+ * PostgREST tronque silencieusement toute lecture non paginée au-delà de 1000 lignes,
+ * y compris sans `.range()` explicite).
+ *
+ * Deux appelants distincts, une seule fonction (D51) : l'écran de gestion d'une antenne
+ * (Task 4, un seul identifiant dans le tableau) et le pointage d'une séance (Task 16,
+ * plusieurs antennes ciblées par `seances_ael_antennes`). Aucune pagination visible de
+ * l'appelant : D29 et D53 l'exigent toutes deux, pour deux raisons distinctes — voir le
+ * design de la phase 3.
+ *
+ * `antenneIds` vide rend `[]` sans requête : `.in('antenne_id', [])` interrogerait la
+ * base pour une réponse déjà connue.
+ */
+export async function membresDesAntennes(antenneIds: string[]): Promise<MembreBref[]> {
+  if (antenneIds.length === 0) {
+    return []
+  }
+  const supabase = await clientServeur()
+  return membresDesAntennesParLots(supabase, antenneIds)
+}
+
+/**
+ * Fiches brèves pour un ensemble d'identifiants — correction I1 de la ronde : le
+ * pointage d'une séance (`/ael/seances/[id]`) croise les présences déjà enregistrées
+ * (`presencesDeSeance`, qui ne filtre ni sur l'antenne ni sur l'état du membre) avec
+ * `membresDesAntennes` (qui ne rend que les membres ACTIFS des antennes ciblées). Un
+ * identifiant présent dans les présences mais absent de cette seconde liste — ajouté
+ * hors antenne (D47), archivé depuis (D48 : sa présence RESTE), ou déplacé vers une
+ * autre antenne — disparaissait donc entièrement de l'écran : ni case, ni nom, ni
+ * total. Cette fonction retrouve le nom de ces identifiants « hors liste courante ».
+ *
+ * RLS SEULE JUGE de ce qui est retourné, jamais contournée : un identifiant archivé,
+ * lu par un compte non administrateur, est simplement ABSENT du tableau rendu (même
+ * discipline que `compteurAelMembre` — jamais un nom inventé). L'appelant traite cette
+ * absence comme `libelleIntervenant` le fait déjà pour l'enseignant/le modérateur
+ * d'une séance : « Fiche non consultable », pas un silence.
+ *
+ * Découpée en lots de 500 : `.in('id', lot)` avec `id` la clé primaire ne peut jamais
+ * rendre plus de lignes que `lot.length`, donc AUCUN `.range()` n'est nécessaire ici
+ * (contrairement à `membresDesAntennesParLots`/`presencesDeSeanceParLots`, qui filtrent
+ * sur une colonne non unique) — mais un `ids` un jour plus long que `max_rows` (1000,
+ * `supabase/config.toml`) resterait quand même tronqué par PostgREST sans ce
+ * découpage, d'où sa présence malgré tout.
+ */
+export async function membresBrefsParIds(ids: string[]): Promise<MembreBref[]> {
+  if (ids.length === 0) {
+    return []
+  }
+  const supabase = await clientServeur()
+  const TAILLE_LOT = 500
+  const resultat: MembreBref[] = []
+  for (let debut = 0; debut < ids.length; debut += TAILLE_LOT) {
+    const lot = ids.slice(debut, debut + TAILLE_LOT)
+    const { data, error } = await supabase.from('membres').select('id, nom, prenom').in('id', lot)
+    if (error) {
+      throw new Error(`Lecture des fiches brèves impossible : ${error.message}`)
+    }
+    resultat.push(
+      ...(data ?? []).map((l) => ({
+        id: l.id as string,
+        nom: l.nom as string,
+        prenom: l.prenom as string,
+      })),
+    )
+  }
+  return resultat
 }
