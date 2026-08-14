@@ -124,21 +124,40 @@ export default async function PageSeanceAel({ params }: { params: Promise<{ id: 
         </dl>
       )}
 
+      {/*
+        I1 de la revue finale de branche — `annulee` ÉTAIT UN ÉTAT TERMINAL, ET RIEN NE LE
+        DISAIT. Cette condition externe (`!== 'prevue'`) couvre `tenue` ET `annulee` ; la
+        condition interne la rétrécissait à `tenue`, si bien qu'une séance annulée ne se
+        voyait offrir AUCUN retour : `remettrePrevue` existait et faisait exactement le
+        travail, elle n'était jamais proposée. Et la génération ne la recréait pas non
+        plus — son `on conflict (calendrier_id, genere_pour_le) do nothing`
+        (`20260817140000:38`) la voit déjà présente, quel que soit son état. Un clic de
+        trop sur « Annuler la séance » détruisait donc l'occurrence définitivement, la
+        seule sortie restante étant de la déclarer TENUE.
+        DIRECTION RETENUE : rendre l'annulation RÉVERSIBLE plutôt que documenter son
+        irréversibilité. Une donnée détruite par un clic mal placé coûte plus cher qu'un
+        bouton de plus, la Server Action existe déjà, et D49 pose la réversibilité comme
+        la règle de cet écran — la restreindre à `tenue` était l'exception non dite. Le
+        déclencheur de complétude ne s'y oppose pas : il ne surveille que le sens VERS
+        `tenue` (`20260817120000`, `is distinct from`).
+      */}
       {peutGerer && seance.etat !== 'prevue' ? (
         <div className="mt-6 flex flex-wrap gap-4">
-          {seance.etat === 'tenue' ? (
-            <form action={remettrePrevue}>
-              <input type="hidden" name="seanceId" value={seance.id} />
-              <BoutonTransitionEtat
-                libelle="Repasser à prévue"
-                message={
-                  'Repasser cette séance à « prévue » ?\n\n' +
-                  "Le pointage déjà fait n'est pas effacé : il redevient visible si vous " +
-                  'remarquez la séance « tenue » ensuite.'
-                }
-              />
-            </form>
-          ) : null}
+          <form action={remettrePrevue}>
+            <input type="hidden" name="seanceId" value={seance.id} />
+            <BoutonTransitionEtat
+              libelle="Repasser à prévue"
+              message={
+                seance.etat === 'tenue'
+                  ? 'Repasser cette séance à « prévue » ?\n\n' +
+                    "Le pointage déjà fait n'est pas effacé : il redevient visible si vous " +
+                    'remarquez la séance « tenue » ensuite.'
+                  : 'Repasser cette séance à « prévue » ?\n\n' +
+                    "La séance redevient modifiable et pointable, et le pointage déjà fait, " +
+                    "s'il y en a, n'est pas effacé."
+              }
+            />
+          </form>
         </div>
       ) : null}
 
@@ -146,9 +165,18 @@ export default async function PageSeanceAel({ params }: { params: Promise<{ id: 
         <div className="mt-2 flex flex-wrap gap-4">
           <form action={annulerSeance}>
             <input type="hidden" name="seanceId" value={seance.id} />
+            {/*
+              Le texte rassurait sur le point qui ne risquait rien (le pointage) et taisait
+              celui qui était irréversible. La seconde phrase dit désormais ce que le bouton
+              ci-dessus rend vrai — sans elle, un modérateur n'aurait aucun moyen de savoir
+              que le geste se défait.
+            */}
             <BoutonTransitionEtat
               libelle="Annuler la séance"
-              message="Annuler cette séance ? Le pointage déjà fait, s'il y en a, n'est pas effacé."
+              message={
+                "Annuler cette séance ? Le pointage déjà fait, s'il y en a, n'est pas effacé.\n\n" +
+                'Ce geste se défait : « Repasser à prévue » reste offert sur une séance annulée.'
+              }
               accent
             />
           </form>

@@ -315,4 +315,26 @@ test('réversibilité : marquer tenue, repasser à prévue, puis annuler — le 
     const { data } = await admin.from('seances_ael').select('etat').eq('id', idSeance).single()
     expect(data!.etat).toBe('annulee')
   }).toPass()
+
+  // I1 DE LA REVUE FINALE DE BRANCHE — CE TEST S'ARRÊTAIT EXACTEMENT ICI, c'est-à-dire
+  // là où le piège commençait : `annulee` était un état SANS RETOUR à l'écran (la
+  // condition interne de `page.tsx` ne rendait « Repasser à prévue » que sur `tenue`),
+  // et la génération ne recrée jamais une occurrence déjà générée. Le troisième
+  // passage ci-dessous est la moitié manquante, et il DISCRIMINE : il exige que le
+  // bouton soit OFFERT (sans quoi le clic échoue), que la base repasse à `prevue`, et
+  // que le thème ait survécu aux TROIS transitions.
+  await expect(page.getByRole('button', { name: 'Repasser à prévue' })).toBeVisible()
+  page.once('dialog', (dialogue) => dialogue.accept())
+  await page.getByRole('button', { name: 'Repasser à prévue' }).click()
+
+  await expect(async () => {
+    const { data } = await admin.from('seances_ael').select('etat, theme').eq('id', idSeance).single()
+    expect(data!.etat).toBe('prevue')
+    expect(data!.theme).toBe(`${PREFIXE}-theme-reversible`)
+  }).toPass()
+
+  // L'écran est réellement revenu à un état pointable : « Annuler la séance » est de
+  // nouveau offert (il ne l'est pas sur une séance annulée), et « Marquer tenue » aussi.
+  await expect(page.getByRole('button', { name: 'Annuler la séance' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Marquer tenue' })).toBeVisible()
 })
