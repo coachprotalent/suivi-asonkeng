@@ -203,7 +203,7 @@ Task 1) :
 
 | Fichier | Tâche |
 |---|---|
-| `src/app/demandes/actions.ts` (modifié) | T3 — `validerDemandeNouvellePersonne` prend le verrou « arbre » |
+| `src/app/demandes/actions.ts` (modifié) | T3 — `validerDemandeNouvellePersonne` prend le verrou « arbre » ; **T22 — sa garde d'origine accepte `conversion_participant` (D66)**. Deux tâches, deux endroits disjoints du même fichier : T3 réécrit le bloc `colonnesMembre` et l'`update` de `membres`, T22 la condition de refus qui suit la lecture de la demande |
 
 **Domaine et données :**
 
@@ -402,22 +402,35 @@ const admin = createClient(
   { auth: { autoRefreshToken: false, persistSession: false } },
 )
 
-// `service_role` n'a PAS le droit d'exécuter cette fonction (revoke ci-dessus) : on ne
-// peut donc pas l'appeler pour prouver son existence. On interroge le catalogue.
+// `service_role` n'a PAS le droit d'exécuter cette fonction (revoke ci-dessus), et le
+// schéma `prive` n'est de toute façon PAS exposé à PostgREST : l'appel n'atteint jamais le
+// contrôle de privilège, il échoue AVANT, à la résolution du nom. On ne peut donc pas
+// l'appeler pour prouver son existence — ce contrôle prouve seulement que l'appel est
+// FERMÉ depuis l'extérieur.
 const { data, error } = await admin.rpc('est_moderateur_ou_admin')
-console.log('appel direct (attendu : ERREUR 42501 ou introuvable) :', error?.code, error?.message)
+console.log('appel direct (attendu : ERREUR de résolution PostgREST) :', error?.code, error?.message)
 ```
 
 ```bash
 npx dotenv -e .env.local -- node scripts/.tmp-verif/verifier-primitive.mjs
 ```
 
-**Attendu :** une erreur, et **pas** un succès — la fonction vit dans le schéma `prive`,
-qui n'est pas exposé à PostgREST, et `service_role` n'a de toute façon pas `execute`. Ce
-contrôle prouve seulement que l'appel est fermé ; **l'existence réelle de la fonction est
-prouvée par la Task 23**, dont la politique de `participations` ne pourrait pas exister
-si la primitive manquait (`create policy` échouerait à l'application de la migration de
-la Task 7 — c'est **ce** signal-là, bruyant et immédiat, qui referme le piège n°2).
+**Attendu : une erreur de RÉSOLUTION PostgREST — `PGRST202`, « aucune fonction de ce nom
+pour ces arguments »** (le même code que documente déjà
+`supabase/migrations/20260815270000_relacher_token_inscription_rend_son_effet.sql`).
+**Consigner le code réellement observé**, jamais celui qu'on attendait.
+
+**CE CONTRÔLE NE PROUVE PAS L'EXISTENCE DE LA FONCTION**, et il ne faut pas lire son
+échec comme une alternative informative entre deux causes : le schéma `prive` n'étant pas
+exposé à PostgREST, **exactement la même erreur surviendrait si la fonction n'existait
+pas**. Un `42501` de privilège n'est pas atteignable ici, et l'attendre laisserait croire
+qu'on saurait distinguer « existe mais fermée » de « n'existe pas ».
+
+**L'existence réelle de la fonction est prouvée ailleurs, et bruyamment** : la politique de
+`participations` (Task 7) ne pourrait pas être créée si la primitive manquait — son
+`create policy` échouerait à l'application de la migration, immédiatement et sans
+ambiguïté. C'est **ce** signal-là qui referme le piège n°2, et la Task 23 l'éprouve
+ensuite par le comportement.
 
 ```bash
 rm -rf scripts/.tmp-verif
@@ -2045,7 +2058,9 @@ fiches, et personne ne la validerait jamais.
 
 ```sql
 -- D66 — nouvelle origine de demande : la conversion d'un participant externe par le
--- chemin 1 (fiche en_attente rejoignant le circuit de validation de la 2b).
+-- chemin 1 (fiche en_attente rejoignant le circuit de validation de /demandes, où elle est
+-- passée à `actif` par le bouton « Valider comme nouvelle personne » — le SEUL geste de
+-- l'application qui active une fiche en_attente).
 --
 -- ⚠️ CE FICHIER NE CONTIENT QUE CETTE INSTRUCTION, ET C'EST OBLIGATOIRE.
 -- `alter type ... add value` ajoute une valeur qui NE PEUT PAS ÊTRE EMPLOYÉE dans la même
@@ -2254,7 +2269,18 @@ begin
   -- pas l'absence de contrôle en croyant combler un oubli.
 
   if p_chemin = 'fiche_en_attente' then
-    -- CHEMIN 1 — fiche en_attente rejoignant le circuit de validation de la 2b.
+    -- CHEMIN 1 — fiche en_attente rejoignant le circuit de validation de /demandes.
+    -- CE QUI LA FAIT PASSER À `actif`, ET C'EST LE SEUL GESTE QUI LE FASSE : le bouton
+    -- « Valider comme nouvelle personne » de /demandes, servi par
+    -- `validerDemandeNouvellePersonne` (src/app/demandes/actions.ts), dont la garde
+    -- d'origine accepte `conversion_participant` au même titre que `auto_inscription` et
+    -- `demande_suivi`. Cette validation écrit `etat = 'actif'` ET RIEN D'AUTRE pour cette
+    -- origine : elle ne pose AUCUN faiseur de disciple, l'administrateur qui convertit
+    -- n'étant pas le faiseur de disciple de la personne convertie. Le rattachement à
+    -- l'arbre se fait ensuite, depuis /membres/<id>/arbre.
+    -- NE PAS croire qu'un autre geste activerait cette fiche : `definir_arbre` n'écrit
+    -- que les trois colonnes de filiation et JAMAIS `etat` ; `rejeterDemande` n'écrit que
+    -- `demandes_membre.etat` et ne touche pas la fiche.
     insert into public.membres (nom, prenom, telephone, email_contact, ville, pays, etat, cree_par)
     values (
       p_nom,
@@ -2913,8 +2939,13 @@ export function motifClassementValide(motif: string | null): boolean {
 export type ChampConversion = 'nom' | 'prenom' | 'faiseur' | 'membreCible'
 
 const REQUIS: Record<CheminConversion, readonly ChampConversion[]> = {
-  // Chemin 1 : la fiche `en_attente` sera complétée par le circuit de validation de la 2b,
-  // qui pose le faiseur de disciple. Rien d'autre n'est exigé ici.
+  // Chemin 1 : la fiche naît `en_attente` et une ligne `demandes_membre` d'origine
+  // `conversion_participant` la fait entrer dans le circuit de validation de `/demandes`.
+  // Elle y est validée par le bouton « Valider comme nouvelle personne », qui la passe à
+  // `actif` — et à `actif` SEULEMENT : cette validation NE POSE AUCUN faiseur de disciple
+  // pour cette origine, parce que l'administrateur qui convertit n'est pas le faiseur de
+  // disciple de la personne convertie. Le rattachement à l'arbre est un geste SÉPARÉ, fait
+  // ensuite depuis `/membres/<id>/arbre`. C'est pour cela qu'aucun faiseur n'est exigé ici.
   fiche_en_attente: ['nom', 'prenom'],
   // Chemin 2 : la fiche naît ACTIVE. Sans faiseur de disciple, elle naîtrait DÉTACHÉE de
   // l'arbre — visible dans l'annuaire, hors de toute portée d'autorité, et sans le moindre
@@ -3455,10 +3486,17 @@ export async function participantsATraiterParPage(
   const page = Math.max(1, options?.page ?? 1)
   const debut = (page - 1) * taillePage
 
+  // `cree_le` existe bien sur la vue mais N'EST PAS SÉLECTIONNÉE : ni `ATraiterLigne` ni le
+  // mapping ci-dessous ne l'exposent, et une colonne lue que personne ne rend est une
+  // colonne morte — elle laisse croire à un implémenteur qu'un écran l'affiche quelque
+  // part. Ce qui date la ligne à l'écran, c'est `premiere_expression` (la première fois que
+  // la personne a exprimé le désir), pas la date de création de sa fiche d'externe. Pour
+  // l'ajouter un jour, il faut TROIS gestes ensemble : le `select`, le champ de
+  // `ATraiterLigne`, et le mapping.
   const { data, error, count } = await supabase
     .from('participants_a_traiter')
     .select(
-      'participant_externe_id, nom, prenom, telephone, email, ville, pays, cree_le, premiere_expression, evenements_concernes',
+      'participant_externe_id, nom, prenom, telephone, email, ville, pays, premiere_expression, evenements_concernes',
       { count: 'exact' },
     )
     .order('premiere_expression')
@@ -3720,7 +3758,9 @@ const appels = [
   ['types_evenement', () => admin.from('types_evenement').select('id, libelle, actif, ordre', { count: 'exact' }).order('ordre').order('libelle').order('id').range(0, 998)],
   ['evenements', () => admin.from('evenements').select('id, titre, date_debut, date_fin, lieu, types_evenement(libelle)', { count: 'exact' }).order('date_debut', { ascending: false }).order('id').range(0, 24)],
   ['participations', () => admin.from('participations').select(COLONNES_PARTICIPANT, { count: 'exact' }).order('saisi_le').order('id').range(0, 49)],
-  ['participants_a_traiter', () => admin.from('participants_a_traiter').select('participant_externe_id, nom, prenom, telephone, email, ville, pays, cree_le, premiere_expression, evenements_concernes', { count: 'exact' }).order('premiere_expression').order('participant_externe_id').range(0, 24)],
+  ['participants_a_traiter', () => admin.from('participants_a_traiter').select('participant_externe_id, nom, prenom, telephone, email, ville, pays, premiere_expression, evenements_concernes', { count: 'exact' }).order('premiere_expression').order('participant_externe_id').range(0, 24)],
+  // ⚠️ CETTE LIGNE-CI RENDRA `count = 0`, ET CE N'EST PAS UN DÉFAUT — voir l'attendu
+  // ci-dessous AVANT de conclure quoi que ce soit sur la vue.
   ['seminaires_assistes', () => admin.from('seminaires_assistes').select('evenement_id, titre, type, date_debut', { count: 'exact' }).order('date_debut', { ascending: false }).order('evenement_id').range(0, 998)],
 ]
 
@@ -3739,6 +3779,47 @@ rm -rf scripts/.tmp-verif
 à `null` sur `participants_a_traiter` invaliderait `totalObligatoire` sur cette vue et
 **doit être traité avant de continuer** (repli par un `head: true` séparé, sur le modèle de
 `compterMembresActifs`). Consigner les cinq lignes réelles.
+
+## ⚠️ `seminaires_assistes` RENDRA `count = 0` ICI, ET C'EST LE RÉSULTAT NORMAL ET ATTENDU
+
+**Ne pas « corriger » la vue sur la foi de ce zéro.** Ce script s'authentifie avec
+`SUPABASE_SERVICE_ROLE_KEY`, donc **sans JWT utilisateur** : à l'intérieur de la vue,
+`auth.uid()` vaut `NULL`, `prive.est_actif()` rend `false`, `prive.peut_lire_membre` avec
+lui — et la vue rend **zéro ligne, sans la moindre erreur**. C'est la conséquence directe
+et voulue de son `security_invoker = false` : elle contourne la RLS, **pas l'identité**.
+
+**Ce que cette ligne du script vérifie, et c'est tout** : la **FORME** de la requête — les
+quatre colonnes existent, le tri est accepté, `count` est un nombre et non `null`. Elle ne
+dit **rien** de ce que la vue rend réellement.
+
+**LE GESTE À NE SURTOUT PAS FAIRE** : basculer la vue en `security_invoker = true` pour
+« réparer » ce zéro. Ce serait rendre la vue **silencieusement vide pour tout le monde** —
+`participations` est fermée à l'administrateur comme au modérateur, et la vue n'a plus
+aucun moyen de la lire — sans qu'aucune erreur ne soit levée nulle part : les étiquettes de
+séminaires disparaîtraient de toutes les fiches, sans trace.
+
+**CONTRÔLE POSITIF, à faire dans la foulée** — dans l'éditeur SQL du projet Supabase, où la
+requête tourne comme `postgres` et contourne aussi bien la RLS que ce prédicat :
+
+```sql
+select count(*) as lignes_vues_par_postgres from public.seminaires_assistes;
+```
+
+Lecture du couple de résultats :
+
+| SQL (`postgres`) | Script (`service_role`) | Verdict |
+|---|---|---|
+| `N > 0` | `count = 0` | **Attendu.** La vue est saine et son prédicat fait son travail. Continuer. |
+| `0` | `count = 0` | La base n'a **encore aucune participation** rattachée à un membre lisible à ce stade du plan : le contrôle est **inerte**, le dire dans le rapport et s'en remettre à la preuve n°5. |
+| `N > 0` | **erreur** | Là, il y a un vrai défaut de forme (colonne, tri) : le traiter avant de continuer. |
+
+**Ce que la vue rend réellement est prouvé ailleurs, depuis une session UTILISATEUR
+RÉELLE** : preuve n°5 de la Task 23, qui lit la vue par `clientSimple` et porte dans le
+même test l'assertion jumelle (`participations` rend zéro ligne pour ce même compte) —
+seule façon de distinguer « la vue contourne comme prévu » de « l'hypothèse `BYPASSRLS` est
+fausse ». **Aucune vérification de cette vue ne se fait depuis `clientAdmin()` ni depuis une
+clé de service**, hors la vérification de forme ci-dessus, qui est nommée pour ce qu'elle
+est.
 
 - [ ] **Étape 4 : les six portes, puis commit**
 
@@ -5709,9 +5790,11 @@ export default async function PageEvenement({
 }) {
 ```
 
-2. Ajouter les imports :
+2. Ajouter les imports, et **élargir celui de `next/navigation`** — la page livrée par la
+   Task 18 n'importe que `notFound`, et l'étape 3 ci-dessous appelle `redirect` :
 
 ```typescript
+import { notFound, redirect } from 'next/navigation'
 import { evenementParId, participantsDEvenement, typesEvenementActifs } from '@/lib/donnees/evenements'
 import { TAILLE_PAGE_PARTICIPANTS } from '@/lib/donnees/evenements-lots'
 import { SectionParticipants } from './participants'
@@ -5732,6 +5815,34 @@ import { SectionParticipants } from './participants'
   const participants = peutGerer
     ? await participantsDEvenement(evenement.id, pageParticipants)
     : null
+
+  // BORNE HAUTE DE LA PAGINATION — une adresse pointant au-delà de la dernière page réelle
+  // est un signet périmé (ou une liste qui a rétréci depuis une suppression, D78). Sans ce
+  // garde, `/evenements/<id>?pageParticipants=99` sur un évènement de cent participants
+  // affiche EN MÊME TEMPS trois vérités contradictoires : « Participants (100) » en
+  // en-tête (qui lit `participants.total`), « Aucun participant enregistré. » dans le corps
+  // (`participants.lignes` étant vide), et « Page 99 sur 2 » au pied. Le message du corps
+  // devient littéralement faux.
+  // Ce défaut a déjà été payé et corrigé une fois par ce projet, sur l'annuaire : voir
+  // `src/app/membres/page.tsx`, lignes 51-62, dont le commentaire le décrit mot pour mot.
+  // On corrige l'adresse vers la dernière page réelle plutôt que de laisser tenir ce
+  // mensonge.
+  // PAS DE BOUCLE POSSIBLE : `pagesParticipants` vaut toujours au moins 1, et la cible de
+  // la redirection est `pagesParticipants` lui-même — la page rechargée aura donc
+  // `pageParticipants === pagesParticipants`, qui ne redéclenche pas la condition.
+  // HORS DE TOUT `try` : `redirect()` lève une exception de contrôle Next.js que ce fichier
+  // ne doit pas intercepter (aucun `try` dans ce fichier — vérifié).
+  // Sous `if (participants)` : hors modérateur et administrateur, rien n'est lu, il n'y a
+  // aucune page à borner, et rediriger serait divulguer qu'il y a des participants.
+  let pagesParticipants = 1
+  if (participants) {
+    pagesParticipants = Math.max(
+      1, Math.ceil(participants.total / TAILLE_PAGE_PARTICIPANTS),
+    )
+    if (pageParticipants > pagesParticipants) {
+      redirect(`/evenements/${evenement.id}?pageParticipants=${pagesParticipants}`)
+    }
+  }
 ```
 
 4. Remplacer le commentaire `{/* SECTION PARTICIPANTS — livrée par la Task 19. … */}` par :
@@ -5742,6 +5853,12 @@ import { SectionParticipants } from './participants'
         administrateur (design §8.1). Un compte ordinaire obtiendrait zéro ligne sous RLS,
         et un évènement à cent participants lui paraîtrait désert — un mensonge, pas une
         protection.
+
+        `pages` reçoit `pagesParticipants`, calculé plus haut EN MÊME TEMPS que le garde de
+        borne haute — surtout PAS une seconde expression recalculée ici. Deux calculs
+        séparés de la même quantité divergeraient au premier changement de
+        `TAILLE_PAGE_PARTICIPANTS`, et le pied de page se remettrait à annoncer une page
+        que le garde interdit d'atteindre.
       */}
       {peutGerer && participants ? (
         <SectionParticipants
@@ -5749,7 +5866,7 @@ import { SectionParticipants } from './participants'
           participants={participants.lignes}
           total={participants.total}
           page={pageParticipants}
-          pages={Math.max(1, Math.ceil(participants.total / TAILLE_PAGE_PARTICIPANTS))}
+          pages={pagesParticipants}
         />
       ) : null}
 ```
@@ -5769,7 +5886,16 @@ import { SectionParticipants } from './participants'
    reprendre**.
 4. Ajouter **deux fois le même membre** : le second reçoit
    `MESSAGE_PARTICIPANT_DEJA_INSCRIT` **à l'écran**, sans page d'erreur.
-5. **Administrateur** : idem.
+5. **LA BORNE HAUTE DE LA PAGINATION** : sur cet évènement peuplé, ouvrir
+   `/evenements/<id>?pageParticipants=99`. **Attendu : la page REDIRIGE vers la dernière
+   page réelle** — l'adresse affichée dans la barre devient
+   `?pageParticipants=<dernière page>` et la liste montre bien des participants. **Ce qui
+   serait un échec** : rester sur `?pageParticipants=99` et afficher simultanément
+   « Participants (N) », « Aucun participant enregistré. » et « Page 99 sur M ». **Contrôle
+   positif dans la même situation** : `?pageParticipants=1` ne redirige **pas** et affiche
+   la première page — sans quoi on ne distinguerait pas « le garde fonctionne » de « toute
+   adresse est réécrite ».
+6. **Administrateur** : idem.
 
 Nettoyer, **dans l'ordre** :
 
@@ -5985,9 +6111,13 @@ git commit -m "feat: seminaires assistes sur la fiche membre, historique des con
   `MESSAGE_NOM_PRENOM_OBLIGATOIRES`, `MESSAGE_FAISEUR_OBLIGATOIRE`,
   `MESSAGE_FICHE_CIBLE_OBLIGATOIRE`, `MESSAGE_CHEMIN_INCONNU`,
   `MESSAGE_PARTICIPANT_INTROUVABLE`, `MESSAGE_PARTICIPANT_DEJA_CONVERTI`,
-  `MESSAGE_FICHE_CIBLE_NON_ACTIVE`, `MESSAGE_FAISEUR_ARCHIVE`,
-  `MESSAGE_CLASSEMENT_DEFINITIF`, `MESSAGE_MOTIF_OBLIGATOIRE_CLASSEMENT`,
-  `MESSAGE_ECHEC_CONVERSION`, `MESSAGE_ECHEC_CLASSEMENT`, importables par les specs.
+  `MESSAGE_FICHE_CIBLE_NON_ACTIVE`, `MESSAGE_FICHE_CIBLE_INTROUVABLE`,
+  `MESSAGE_FAISEUR_ARCHIVE`, `MESSAGE_CLASSEMENT_DEFINITIF`,
+  `MESSAGE_MOTIF_OBLIGATOIRE_CLASSEMENT`, `MESSAGE_ECHEC_CONVERSION`,
+  `MESSAGE_ECHEC_CLASSEMENT`, importables par les specs — **treize messages, et
+  `messages.ts` doit en définir exactement treize.** Une spec qui importe ses attendus
+  depuis cette liste passerait sinon à côté de `MESSAGE_FICHE_CIBLE_INTROUVABLE`, qui est
+  le message du marqueur `membre_cible_inconnu`.
 
 **Deux niveaux d'accès sur le même écran (D55).**
 
@@ -6242,6 +6372,18 @@ export async function convertirParticipant(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ligne = (Array.isArray(data) ? data[0] : data) as { membre_id: string; demande_id: string | null } | null
   const demandeId = ligne?.demande_id ?? null
+
+  // LE CHEMIN CONNAÎT SA PROPRE ATTENTE, ET IL LA DIT. `chemin === 'fiche_en_attente'`
+  // implique qu'une ligne `demandes_membre` vient d'être créée, donc qu'un `demande_id` a
+  // été rendu. Si ce n'est pas le cas — forme de retour changée, `data` vide, colonne
+  // renommée —, le `if` ci-dessous sauterait la notification SANS UNE LIGNE DE JOURNAL, et
+  // la demande créée en base ne serait signalée à personne : exactement le mode de
+  // défaillance que le commentaire du `if` déclare vouloir empêcher. On ne lève pas et on
+  // ne retourne pas d'erreur — la conversion est acquise en base et refuser ici la ferait
+  // paraître échouée —, mais le silence, lui, n'est pas acceptable.
+  if (chemin === 'fiche_en_attente' && !demandeId) {
+    console.error('convertirParticipant : chemin 1 sans demande_id — notification impossible', { participantId })
+  }
 
   if (demandeId) {
     // Chemin 1 uniquement. La notification est HORS de la transaction, comme
@@ -6668,8 +6810,16 @@ est d'éprouver le chemin réel).
    une demande d'origine « conversion » apparaît sur `/demandes`.
 4. **Administrateur, chemin 2** : convertir le deuxième **sans choisir de faiseur de
    disciple** → le message `MESSAGE_FAISEUR_OBLIGATOIRE` s'affiche **à l'écran**. Choisir
-   un faiseur, convertir → la personne disparaît de la liste, sa fiche est **active**, et
-   son **dirigeant proposé** est renseigné.
+   un faiseur, convertir → la personne disparaît de la liste et sa fiche est **active**.
+
+   **Le dirigeant proposé n'est renseigné que SI le faiseur de disciple choisi a lui-même
+   un dirigeant.** `dirigeantPropose(null)` rend `null` (`src/lib/domaine/arbre.ts`), et ce
+   `null` est un résultat **légitime** : un faiseur de disciple qui est **racine** de
+   l'arbre n'a aucun dirigeant à proposer. **Choisir donc, pour ce contrôle, un faiseur qui
+   n'est PAS racine de l'arbre**, et **noter dans le rapport lequel a été choisi et quel
+   est son propre dirigeant** — sans quoi la vérification échouerait pour une raison qui
+   n'a rien à voir avec le code éprouvé, et un implémenteur irait chercher un défaut
+   inexistant.
 5. **Administrateur, chemin 3** : convertir le troisième vers une fiche **active**
    existante. Ouvrir cette fiche : **l'étiquette du séminaire y apparaît** (seconde branche
    de la vue, D70).
@@ -6729,42 +6879,146 @@ git commit -m "feat: liste a traiter, conversion en trois chemins et classement 
 ### Task 22 : `/demandes` — l'origine `conversion_participant` (D64, D66)
 
 **Fichiers :**
+- Modifier : `src/app/demandes/actions.ts`
 - Modifier : `src/lib/donnees/demandes.ts`
 - Modifier : `src/app/demandes/ligne-demande-admin.tsx`
 - Modifier : `src/app/demandes/ligne-demande-personnelle.tsx`
+- Modifier : `src/app/demandes/page.tsx` (**commentaire seul**, aucun changement de
+  comportement — étape 2, point 5)
 
 **Interfaces :**
 - Consomme : la valeur `conversion_participant` (T10), la passerelle amendée (T13).
 - Produit : `DemandeListe['origine']` **élargi** à
-  `'auto_inscription' | 'demande_suivi' | 'conversion_participant'`.
+  `'auto_inscription' | 'demande_suivi' | 'conversion_participant'` ;
+  `validerDemandeNouvellePersonne(donnees: FormData): Promise<ResultatDemande>` **garde
+  exactement sa signature**, sa garde d'origine acceptant désormais une troisième valeur.
 
-**Trois changements, et pas un de plus.**
+## ⚠️ SANS CETTE TÂCHE, LE CHEMIN 1 EST UNE IMPASSE — ELLE N'EST PAS REJETABLE
 
-1. **Le type `DemandeListe['origine']` est élargi.** Sans cela, `tsc` passe (le cast
+La fiche créée par le chemin 1 naît `en_attente`. **Un seul geste de toute l'application
+écrit `etat = 'actif'` sur une fiche `en_attente`** : la validation d'une demande, dans
+`validerDemandeNouvellePersonne`. Rien d'autre ne le fait — `definir_arbre` n'écrit que les
+trois colonnes de filiation et **jamais** `etat` ; `rejeterDemande` n'écrit que
+`demandes_membre.etat` et ne touche pas la fiche ; `modifierMembre` ne porte aucune colonne
+`etat` ; `desarchiverMembre` ne s'offre que sur une fiche `archive`.
+
+Tant que la fiche reste `en_attente`, elle n'est lisible que de l'administrateur et de son
+demandeur (`prive.peut_lire_membre`, T2) — donc **la seconde branche de
+`seminaires_assistes` rend zéro ligne pour tout compte ordinaire**, et l'historique de
+séminaire du converti, qui est la promesse centrale de la phase (D70), **n'est pas tenu sur
+le chemin nominal de D66**. Et comme la conversion est à sens unique (D63), la demande
+inannulable (D64) et le membre insupprimable (`on delete restrict`), une conversion par le
+chemin 1 serait alors à la fois **irréversible et inachevable**.
+
+C'est bien ce que le design demande : D66 justifie la ligne `demandes_membre` par « sans
+elle, la fiche `en_attente` ne rejoindrait **aucun** circuit […] personne ne la validerait
+jamais », et le §8.1 veut que ces demandes s'affichent « **comme les autres**, **sans**
+l'action de rattachement et **sans** le bouton d'annulation ». **Deux** actions sont
+retirées, pas trois : la validation reste.
+
+**Quatre changements, et pas un de plus.**
+
+1. **La garde d'origine de `validerDemandeNouvellePersonne` accepte
+   `conversion_participant`** — c'est le changement qui referme la chaîne. Le reste de la
+   fonction est déjà correct sans retouche : pour cette origine, la fiche reçoit
+   `etat: 'actif'` **et rien d'autre** (aucun faiseur de disciple n'est posé depuis le
+   convertisseur, ce qui est exactement le but), et `profils.membre_id` n'est pas écrasé.
+2. **Le type `DemandeListe['origine']` est élargi.** Sans cela, `tsc` passe (le cast
    `as DemandeListe['origine']` masque la valeur nouvelle) mais **les comparaisons
    deviennent silencieusement fausses** : une demande de conversion serait traitée comme
    une `demande_suivi` par le `else` de `LigneDemandeAdmin`, qui afficherait le formulaire
    de validation **avec un dirigeant proposé calculé depuis le convertisseur** — une
    filiation qui n'a jamais eu lieu.
-2. **L'action de rattachement n'est PAS proposée** pour cette origine (§7.3 de la 2b la
+3. **L'action de rattachement n'est PAS proposée** pour cette origine (§7.3 de la 2b la
    réserve à `auto_inscription`) — c'est déjà le cas par construction, la branche
    `origine === 'auto_inscription'` étant la seule à la rendre. **Vérifier**, ne pas
    supposer.
-3. **Le bouton d'annulation n'est PAS affiché** pour cette origine (D64). La passerelle le
+4. **Le bouton d'annulation n'est PAS affiché** pour cette origine (D64). La passerelle le
    refuse déjà (`demande_conversion_non_annulable`), et la contrainte `on delete restrict`
    le refuserait encore après elle — **mais proposer un bouton qui échoue toujours est un
    mensonge d'interface**, et l'administrateur convertisseur est précisément celui à qui le
    bouton s'afficherait.
 
-**La validation d'une demande de conversion emprunte le chemin `demande_suivi`
-d'origine ?** **Non.** `validerDemandeNouvellePersonne` **relit `origine` depuis
-`demandes_membre`** et ne traite explicitement que `auto_inscription` et `demande_suivi` :
-toute autre valeur tombe dans le refus de la lecture initiale
-(`origine !== 'auto_inscription' && origine !== 'demande_suivi'`) et rend
-`MESSAGE_ECHEC_VALIDATION`. **C'est le comportement voulu, et il est déjà en place** —
-une fiche issue d'une conversion passe à `actif` par le geste d'arbre de
-`/membres/[id]/arbre`, pas par un circuit qui poserait le **convertisseur** comme faiseur
-de disciple. Le formulaire de validation n'est donc **pas** rendu pour cette origine.
+**La validation d'une demande de conversion emprunte-t-elle le chemin `demande_suivi` ?**
+**Non, et c'est justement ce que la relecture d'`origine` garantit.**
+`validerDemandeNouvellePersonne` **relit `origine` depuis `demandes_membre`**, jamais du
+formulaire, et n'entre dans le bloc `origine === 'demande_suivi'` — celui qui pose le
+demandeur comme faiseur de disciple — que pour cette valeur-là. Pour
+`conversion_participant`, ce bloc **n'est pas pris**, le bloc `origine ===
+'auto_inscription'` non plus : la fiche passe à `actif`, **sans faiseur de disciple**, et
+le rattachement à l'arbre reste un geste séparé, fait ensuite depuis
+`/membres/<id>/arbre`. Le formulaire `FormulaireValidationSuivi` (celui qui propose un
+dirigeant) n'est donc **pas** rendu pour cette origine — seul l'est le **bouton**
+« Valider comme nouvelle personne ».
+
+**Et le rejet, alors ?** Le formulaire de rejet reste rendu pour cette origine comme pour
+les deux autres, et c'est délibéré : c'est la seule façon de sortir de la liste une
+conversion faite par erreur, l'annulation étant fermée par D64. **Mais il faut savoir ce
+qu'il fait exactement, parce que ce n'est pas ce qu'on croit** : `rejeterDemande` écrit
+`demandes_membre.etat = 'rejetee'` et **rien d'autre**. Il **ne défait pas la conversion**,
+**ne supprime pas la fiche**, et la laisse `en_attente` — or la validation exige une
+demande `en_attente`, donc **après un rejet, plus aucun geste ne peut activer cette
+fiche**. Second effet à connaître : la notification `demande_rejetee`, titrée « Votre
+demande a été rejetée », part vers le **demandeur relu depuis la demande**, c'est-à-dire
+vers **l'administrateur convertisseur lui-même**. Ce n'est pas un défaut de destinataire —
+il *est* le demandeur — mais c'est une raison de plus de ne jamais présenter le rejet comme
+la marche à suivre normale après une conversion. **La marche à suivre normale est
+« Valider ».**
+
+- [ ] **Étape 0 : ouvrir la validation à l'origine `conversion_participant`**
+
+Dans `src/app/demandes/actions.ts`, dans `validerDemandeNouvellePersonne`, **remplacer** la
+condition de refus qui suit la lecture de la demande :
+
+```typescript
+  if (
+    erreurLecture ||
+    !demandeLue ||
+    !demandeLue.membre_id ||
+    (demandeLue.origine !== 'auto_inscription' && demandeLue.origine !== 'demande_suivi')
+  ) {
+```
+
+par :
+
+```typescript
+  if (
+    erreurLecture ||
+    !demandeLue ||
+    !demandeLue.membre_id ||
+    // TROIS ORIGINES VALIDABLES DEPUIS CET ÉCRAN. `conversion_participant` (D66) est
+    // ajoutée par la phase 4 : le chemin 1 de la conversion d'un participant externe crée
+    // une fiche `en_attente` et cette demande, et LA VALIDATION EST LE SEUL GESTE DE TOUTE
+    // L'APPLICATION QUI PASSE UNE FICHE `en_attente` À `actif`. Sans elle, la fiche reste
+    // invisible de tout compte ordinaire (`prive.peut_lire_membre` ne l'ouvre qu'à
+    // l'administrateur et à son demandeur), l'historique de séminaire du converti ne
+    // s'affiche nulle part (seconde branche de `seminaires_assistes`), et la conversion
+    // devient irréversible ET inachevable — la demande n'étant pas annulable (D64) et le
+    // membre pas supprimable (`on delete restrict`).
+    // CE QUE CETTE ORIGINE DÉCLENCHE, ET C'EST TOUT : `etat = 'actif'` sur la fiche. Elle
+    // n'entre NI dans le bloc `demande_suivi` (qui poserait le demandeur comme faiseur de
+    // disciple — or le demandeur est ici l'administrateur qui a converti, et il n'est pas
+    // le faiseur de disciple de la personne convertie), NI dans le bloc `auto_inscription`
+    // (qui écrirait `profils.membre_id` du demandeur — or il a déjà sa propre fiche).
+    // Le rattachement à l'arbre est un geste SÉPARÉ, fait ensuite depuis
+    // `/membres/<id>/arbre`.
+    (demandeLue.origine !== 'auto_inscription' &&
+      demandeLue.origine !== 'demande_suivi' &&
+      demandeLue.origine !== 'conversion_participant')
+  ) {
+```
+
+**Rien d'autre n'est touché dans cette fonction**, et c'est le point : la mise à jour de la
+fiche écrit déjà `etat: 'actif'` par défaut pour toute origine, le passage de la demande à
+`validee` est commun, la notification `demande_validee` part vers le demandeur relu depuis
+la demande — ici l'administrateur convertisseur, ce qui est **exact**, c'est bien lui qui a
+demandé —, et `marquerNouvelleDemandeLue` éteint la notification `nouvelle_demande` que la
+conversion avait envoyée aux administrateurs.
+
+⚠️ **Ce bloc est le même avant et après la Task 3.** La Task 3 réécrit le bloc
+`colonnesMembre` et l'`update` de `membres` qui le suivent ; elle **ne touche pas** cette
+condition de refus. La substitution ci-dessus s'applique donc telle quelle, que la Task 3
+ait été faite, rejetée, ou pas encore faite.
 
 - [ ] **Étape 1 : élargir le type**
 
@@ -6786,13 +7040,22 @@ par :
   origine: 'auto_inscription' | 'demande_suivi' | 'conversion_participant'
 ```
 
-- [ ] **Étape 2 : la ligne administrateur**
+- [ ] **Étape 2 : la ligne administrateur, et le commentaire de la proposition de dirigeant**
 
 Dans `src/app/demandes/ligne-demande-admin.tsx` :
 
-1. Remplacer le libellé d'origine :
+1. **Introduire** une constante `LIBELLE_ORIGINE` — **il n'y a rien à remplacer sous ce
+   nom : ce fichier ne porte aucune constante de libellé d'origine**, mais un **ternaire en
+   ligne** dans le JSX (`demande.origine === 'auto_inscription' ? 'Auto-inscription' :
+   'Demande de suivi'`). Un ternaire à deux issues ne peut pas porter une troisième valeur
+   sans la faire tomber en silence dans « Demande de suivi ». Ajouter donc, en tête de
+   fichier, à côté des autres constantes de module :
 
 ```typescript
+// Table exhaustive plutôt qu'un ternaire : `Record<DemandeListe['origine'], string>` fait
+// ÉCHOUER `tsc` le jour où une quatrième origine sera ajoutée à l'énumération, là où un
+// ternaire l'aurait silencieusement étiquetée comme la branche `else`. C'est exactement ce
+// qui serait arrivé à `conversion_participant`, affichée « Demande de suivi ».
 const LIBELLE_ORIGINE: Record<DemandeListe['origine'], string> = {
   auto_inscription: 'Auto-inscription',
   demande_suivi: 'Demande de suivi',
@@ -6800,7 +7063,7 @@ const LIBELLE_ORIGINE: Record<DemandeListe['origine'], string> = {
 }
 ```
 
-et, dans le JSX :
+et **remplacer par elle le ternaire du JSX** :
 
 ```typescript
         <span className="text-sm text-neutral-500">
@@ -6808,15 +7071,32 @@ et, dans le JSX :
         </span>
 ```
 
-2. Remplacer le ternaire `demande.origine === 'auto_inscription' ? (…) : (…)` par une
+2. **Renommer le gestionnaire `validerNouvellePersonneAutoInscription` en
+   `validerNouvellePersonne`, et reprendre son unique appelant existant** (le `onClick` du
+   bouton de la branche `auto_inscription`). Ce gestionnaire ne pose que `demandeId` dans
+   le `FormData` : il n'a jamais rien eu de propre à l'auto-inscription, et le serveur relit
+   `origine` depuis `demandes_membre`. Il sert désormais **deux** branches, et son ancien
+   nom mentirait sur la seconde.
+
+```typescript
+  function validerNouvellePersonne() {
+    const donnees = new FormData()
+    donnees.set('demandeId', demande.id)
+    appeler(validerDemandeNouvellePersonne, donnees)
+  }
+```
+
+3. Remplacer le ternaire `demande.origine === 'auto_inscription' ? (…) : (…)` par une
    sélection **explicite à trois branches** :
 
 ```typescript
       {demande.origine === 'auto_inscription' ? (
         <div className="mt-3 flex flex-col gap-3">
-          {/* … bloc existant, inchangé : bouton « Valider comme nouvelle personne » et
-              formulaire de rattachement (D26). L'action de rattachement N'EST PAS proposée
-              pour les deux autres origines — §7.3 de la 2b la réserve à auto_inscription. */}
+          {/* … bloc existant : bouton « Valider comme nouvelle personne » et formulaire de
+              rattachement (D26). SEUL CHANGEMENT dans ce bloc : le `onClick` du bouton
+              appelle désormais `validerNouvellePersonne` (renommage du point 2).
+              L'action de rattachement N'EST PAS proposée pour les deux autres origines —
+              §7.3 de la 2b la réserve à auto_inscription. */}
         </div>
       ) : demande.origine === 'demande_suivi' ? (
         <FormulaireValidationSuivi
@@ -6825,27 +7105,70 @@ et, dans le JSX :
           dirigeantInitial={dirigeantInitial}
         />
       ) : (
-        // D66 — origine `conversion_participant`. NI le rattachement (réservé à
-        // auto_inscription), NI le formulaire de validation d'une demande de suivi : ce
-        // dernier poserait le DEMANDEUR comme faiseur de disciple, et le demandeur est ici
-        // l'administrateur qui a converti — il n'est pas le faiseur de disciple de la
-        // personne convertie. `validerDemandeNouvellePersonne` refuse d'ailleurs déjà cette
-        // origine, en relisant `origine` depuis `demandes_membre`.
-        <p className="mt-3 text-sm text-neutral-600">
-          Fiche créée par conversion d&apos;un participant externe. Rattachez-la à un
-          faiseur de disciple depuis{' '}
-          <Link href={`/membres/${demande.membreId}/arbre`} className="underline underline-offset-4">
-            son arborescence
-          </Link>
-          , puis rejetez cette demande pour la retirer de la liste.
-        </p>
+        // D66 — origine `conversion_participant`. LE BOUTON DE VALIDATION, SEUL.
+        //
+        // PAS le formulaire de rattachement (§7.3 de la 2b le réserve à auto_inscription),
+        // PAS `FormulaireValidationSuivi` : ce dernier poserait le DEMANDEUR comme faiseur
+        // de disciple, et le demandeur est ici l'administrateur qui a converti — il n'est
+        // pas le faiseur de disciple de la personne convertie.
+        //
+        // MAIS LA VALIDATION, OUI, ET ELLE EST INDISPENSABLE : c'est LE SEUL GESTE DE TOUTE
+        // L'APPLICATION qui passe une fiche `en_attente` à `actif`. Sans elle, la fiche née
+        // du chemin 1 resterait invisible de tout compte ordinaire, son historique de
+        // séminaire n'apparaîtrait nulle part, et la conversion serait irréversible ET
+        // inachevable. Pour cette origine, la validation écrit `etat = 'actif'` ET RIEN
+        // D'AUTRE — aucun faiseur de disciple n'est posé.
+        <div className="mt-3 flex flex-col gap-2">
+          <button
+            type="button"
+            onClick={validerNouvellePersonne}
+            disabled={enCours}
+            className="self-start rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+          >
+            Valider comme nouvelle personne
+          </button>
+          <p className="text-sm text-neutral-600">
+            Fiche créée par conversion d&apos;un participant externe. La validation la fait
+            passer à l&apos;état actif, sans lui donner de faiseur de disciple : rattachez-la
+            ensuite depuis{' '}
+            <Link href={`/membres/${demande.membreId}/arbre`} className="underline underline-offset-4">
+              son arborescence
+            </Link>
+            . Le rejet, lui, ne défait pas la conversion : la fiche resterait en attente,
+            sans plus aucun geste pour l&apos;activer.
+          </p>
+        </div>
       )}
 ```
 
-3. Ajouter l'import manquant en tête du fichier :
+4. Ajouter l'import manquant en tête du fichier :
 
 ```typescript
 import Link from 'next/link'
+```
+
+5. **Dans `src/app/demandes/page.tsx`, corriger le commentaire de la branche `else` du
+   calcul de `propositionsDirigeant`.** Le **comportement est déjà correct et ne change
+   pas** : seule l'origine `demande_suivi` reçoit une proposition de dirigeant, toutes les
+   autres reçoivent `null`, et c'est exactement ce qu'il faut pour une conversion — le
+   demandeur est l'administrateur convertisseur, sa filiation n'a rien à voir avec la
+   personne convertie. Mais le commentaire n'énumère que deux cas et deviendrait **faux par
+   omission**. Remplacer :
+
+```typescript
+        // Compte racine sans fiche liée (spec D11), ou origine auto_inscription :
+        // aucune proposition (registre 1c, piège n°3).
+```
+
+par :
+
+```typescript
+        // Aucune proposition de dirigeant (registre 1c, piège n°3). Trois cas y tombent :
+        // origine `auto_inscription` ; origine `conversion_participant` (D66 — le demandeur
+        // est l'administrateur qui a converti, et sa filiation n'a rien à voir avec la
+        // personne convertie ; sa ligne ne rend d'ailleurs PAS `FormulaireValidationSuivi`,
+        // qui est le seul consommateur de cette proposition) ; et le compte racine, sans
+        // fiche liée (spec D11).
 ```
 
 - [ ] **Étape 3 : la ligne personnelle — pas de bouton d'annulation (D64)**
@@ -6886,21 +7209,78 @@ Et ajouter, juste après le bloc du bouton :
 
 - [ ] **Étape 4 : vérification manuelle**
 
-1. Convertir un participant par le **chemin 1** (Task 21).
+1. Convertir un participant par le **chemin 1** (Task 21). **Noter le nom donné à la fiche**
+   et l'identifiant du membre créé — les points 5 et 6 en ont besoin.
 2. **Administrateur**, sur `/demandes` : la ligne apparaît dans « À traiter », étiquetée
-   **« Conversion de participant »**, **sans** formulaire de rattachement et **sans**
-   formulaire de validation d'une demande de suivi. **Contrôle positif dans la même
-   page** : une demande d'origine `demande_suivi`, elle, **affiche bien** son formulaire de
-   validation.
+   **« Conversion de participant »**, avec le **bouton « Valider comme nouvelle
+   personne »**, **sans** formulaire de rattachement et **sans** le formulaire de
+   validation d'une demande de suivi (celui qui propose un dirigeant). **Contrôle positif
+   dans la même page** : une demande d'origine `demande_suivi`, elle, **affiche bien** son
+   formulaire de validation avec son dirigeant proposé.
 3. Dans « Mes demandes », la ligne de conversion **n'a pas de bouton « Annuler »**.
    **Contrôle positif** : une demande d'origine `demande_suivi` du même compte **a bien** le
    sien.
-4. **La preuve que le bouton absent n'est pas la seule barrière** est portée par la
-   Task 24, preuve n°11 (appel forgé de la passerelle).
+4. **LE CONTRÔLE NÉGATIF, AVANT DE VALIDER** — depuis un **compte ordinaire** (ni
+   administrateur, ni modérateur, et qui n'est pas le demandeur), ouvrir la fiche du membre
+   créé au point 1 : elle est **introuvable**, et le nom **n'apparaît pas dans l'annuaire**.
+   C'est normal et voulu : une fiche `en_attente` n'est lisible que de l'administrateur et
+   de son demandeur.
+5. **VALIDER.** Cliquer « Valider comme nouvelle personne » sur la ligne de conversion. La
+   ligne quitte « À traiter ». Relire la fiche en base :
 
-Nettoyer selon l'ordre de la Task 21, étape 5.
+```sql
+select m.etat, m.faiseur_de_disciple_id, d.etat as etat_demande
+from public.membres m
+join public.demandes_membre d on d.membre_id = m.id
+where m.nom = '<NOM_DE_LA_FICHE_CREEE>';
+```
 
-- [ ] **Étape 5 : les six portes + le build de production**
+   **Attendu : `actif`, `null`, `validee`.** Le `null` n'est pas un oubli — la validation
+   d'une conversion ne pose **aucun** faiseur de disciple, l'administrateur convertisseur
+   n'étant pas le faiseur de disciple de la personne convertie. Si `faiseur_de_disciple_id`
+   est renseigné, c'est que la demande a emprunté le chemin `demande_suivi` : **s'arrêter**,
+   la garde d'origine ou la branche d'affichage est fausse.
+6. **LA PROMESSE DE LA PHASE, DEPUIS UN COMPTE ORDINAIRE** — avec le **même compte
+   ordinaire** qu'au point 4, rouvrir la fiche du converti : elle est maintenant
+   **lisible**, et **l'étiquette du séminaire y apparaît** (seconde branche de
+   `seminaires_assistes`, D70). C'est le contrôle qui distingue « la conversion a créé une
+   fiche » de « la conversion a rendu son historique visible ».
+7. **La cloche des administrateurs** : la notification « Participant externe converti, à
+   valider » est passée **lue** après la validation (`marquerNouvelleDemandeLue`), et
+   l'administrateur convertisseur reçoit une notification « Votre demande a été validée » —
+   il **est** le demandeur de cette demande, c'est exact. **Ne pas rejeter** cette demande
+   pour la « retirer de la liste » : le rejet ne défait pas la conversion, laisse la fiche
+   `en_attente` pour toujours, et enverrait au convertisseur un « Votre demande a été
+   rejetée » sur sa propre demande.
+8. **La preuve que le bouton d'annulation absent n'est pas la seule barrière** est portée
+   par la Task 24, preuve n°11 (appel forgé de la passerelle).
+
+Nettoyer selon l'ordre de la Task 21, étape 5 — **dont la suppression des notifications par
+`demande_id`**, qui emporte aussi bien le `nouvelle_demande` du chemin 1 que le
+`demande_validee` du point 5. Le compte racine ne doit pas rester pollué.
+
+- [ ] **Étape 5 : la suite e2e des demandes passe INCHANGÉE**
+
+Cette tâche touche `validerDemandeNouvellePersonne` et renomme un gestionnaire de
+`LigneDemandeAdmin`. `tests/e2e/demandes.spec.ts` couvre déjà la validation des deux
+origines existantes — l'un des quatre parcours Playwright canoniques du §8 de la
+spécification maîtresse — et cible le bouton par son **libellé** (« Valider comme nouvelle
+personne »), pas par le nom du gestionnaire. Il doit donc passer **sans modification** : la
+garde d'origine ne fait que **s'élargir**, elle ne retire aucune origine, et le libellé du
+bouton ne change pas.
+
+```bash
+npm run test:e2e -- tests/e2e/demandes.spec.ts
+```
+
+```bash
+git diff --stat tests/e2e/demandes.spec.ts
+```
+
+Attendu : vert, et **aucune ligne de diff**. Un échec ici signifierait qu'une origine a été
+perdue en réécrivant la condition — la relire **valeur par valeur**.
+
+- [ ] **Étape 6 : les six portes + le build de production**
 
 ```bash
 npx tsc --noEmit && npm run lint && npm test && npm run test:rls && npm run test:e2e && npm run build
@@ -6911,8 +7291,8 @@ npm run test:e2e:prod
 ```
 
 ```bash
-git add src/lib/donnees/demandes.ts src/app/demandes/ligne-demande-admin.tsx src/app/demandes/ligne-demande-personnelle.tsx
-git commit -m "feat: afficher l'origine conversion_participant sans rattachement ni annulation (D64, D66)"
+git add src/app/demandes/actions.ts src/lib/donnees/demandes.ts src/app/demandes/page.tsx src/app/demandes/ligne-demande-admin.tsx src/app/demandes/ligne-demande-personnelle.tsx
+git commit -m "feat: valider et afficher l'origine conversion_participant, sans rattachement ni annulation (D64, D66)"
 ```
 
 ---
@@ -7677,17 +8057,26 @@ git commit -m "test: schema, RLS et les deux vues des evenements (preuves 1, 2, 
 ⚠️ **CETTE SUITE EMPRUNTE LE CHEMIN 1, QUI CRÉE UNE LIGNE `demandes_membre`.** Elle appelle
 la passerelle **directement**, donc **aucune notification n'est émise** (la notification vit
 dans la Server Action, pas dans la passerelle) — **le compte racine n'est donc pas
-pollué**. Si un jour la notification était déplacée **dans** la passerelle, ce fichier
+pollué**. Le test du chemin 1 rejoue ensuite **les deux écritures** de la validation
+(`membres.etat = 'actif'`, `demandes_membre.etat = 'validee'`) par `admin`, **sans** insérer
+la notification `demande_validee` que la Server Action, elle, insère : c'est délibéré, une
+suite RLS n'a pas à écrire dans la cloche de qui que ce soit. **Ne pas « compléter » ce test
+en ajoutant cette insertion** — elle viserait le profil de test, mais le motif interdit de
+polluer une cloche depuis une suite est le même pour tous les comptes. Si un jour la notification était déplacée **dans** la passerelle, ce fichier
 devrait nettoyer `notifications` par `demande_id` **avant** de supprimer les demandes :
 `notifications.demande_id` est en `on delete cascade`, mais compter dessus après coup
 rendrait le contrôle impossible.
 
 ⚠️ **ORDRE DE SUPPRESSION, et il est plus contraint qu'ailleurs :**
-`participations` → `demandes_membre` → `participants_externes` → `membres`.
+`participations` → `demandes_membre` → `participants_externes` → `membres` →
+`evenements` → `types_evenement`. **Les six, dans cet ordre** — c'est celui que
+`nettoyerFamille` applique plus bas, et un en-tête qui n'en annoncerait que quatre
+laisserait un implémenteur pressé écrire un nettoyage qui échoue sur les deux derniers.
 `participants_externes.converti_en_membre_id` est en **`on delete restrict`** (les membres
 créés par conversion ne peuvent partir qu'après) et `demandes_membre.membre_id` est en
 **`on delete set null`** (l'ordre inverse **effacerait la prise** juste avant qu'on la
-cherche).
+cherche). `evenements` ne peut partir qu'après les `participations` qui le référencent, et
+`types_evenement` qu'après les `evenements`.
 
 - [ ] **Étape 1 : écrire la suite**
 
@@ -7935,7 +8324,7 @@ describe('conversion : les trois chemins et la vue (preuve n°3)', () => {
     expect(participation!.participant_externe_id).toBe(idExterne)
   })
 
-  it('chemin 1 — crée une fiche en_attente ET une demande d origine conversion_participant (D66)', async () => {
+  it("chemin 1 — crée une fiche en_attente ET sa demande d origine conversion_participant, INVISIBLE d un compte ordinaire tant qu elle est en_attente, puis VISIBLE avec son séminaire une fois la demande validée", async () => {
     const idExterne = await creerExterneAvecDesir('chemin1')
 
     const { data, error } = await admin.rpc('convertir_participant_externe', {
@@ -7964,6 +8353,62 @@ describe('conversion : les trois chemins et la vue (preuve n°3)', () => {
     expect(demande!.origine).toBe('conversion_participant')
     expect(demande!.etat).toBe('en_attente')
     expect(demande!.membre_id).toBe(ligne.membre_id)
+
+    // CONTRÔLE NÉGATIF — tant que la fiche est `en_attente`, un COMPTE ORDINAIRE ne voit
+    // RIEN : `prive.peut_lire_membre` ne l'ouvre qu'à l'administrateur et au demandeur de
+    // la fiche, et la seconde branche de `seminaires_assistes` filtre par ce prédicat. Ce
+    // zéro n'est pas un défaut de la vue, c'est l'état d'une fiche non encore validée — et
+    // c'est précisément pour cela que la validation, plus bas, est INDISPENSABLE et non
+    // décorative.
+    const { data: avant, error: erreurAvant } = await clientSimple
+      .from('seminaires_assistes')
+      .select('evenement_id')
+      .eq('membre_id', ligne.membre_id)
+    expect(erreurAvant).toBeNull()
+    expect(avant).toEqual([])
+
+    // LA VALIDATION, REJOUÉE ICI PAR SES DEUX ÉCRITURES. `validerDemandeNouvellePersonne`
+    // est une Server Action : elle n'est pas appelable depuis une suite RLS. On rejoue donc
+    // EXACTEMENT ce qu'elle écrit pour l'origine `conversion_participant` — `etat = 'actif'`
+    // sur la fiche, ET RIEN D'AUTRE (aucun faiseur de disciple n'est posé, l'administrateur
+    // convertisseur n'étant pas le faiseur de disciple de la personne convertie), puis la
+    // demande à `validee`. Si un jour l'action écrivait autre chose pour cette origine, ces
+    // deux `update` seraient à reprendre AVEC elle : ce test les reproduit, il ne les
+    // observe pas.
+    const { error: erreurActivation } = await admin
+      .from('membres')
+      .update({ etat: 'actif' })
+      .eq('id', ligne.membre_id)
+    expect(erreurActivation).toBeNull()
+    const { error: erreurDemandeValidee } = await admin
+      .from('demandes_membre')
+      .update({ etat: 'validee' })
+      .eq('id', ligne.demande_id!)
+    expect(erreurDemandeValidee).toBeNull()
+
+    // LA PREUVE, LA MÊME QUE POUR LES CHEMINS 2 ET 3 : depuis un COMPTE ORDINAIRE, la vue
+    // rend le séminaire du converti. C'est la ligne 4 du périmètre livré du design —
+    // « historique des convertis compris » (D70) — tenue sur le chemin 1, qui est le chemin
+    // nominal de D66.
+    const { data: apres, error: erreurApres } = await clientSimple
+      .from('seminaires_assistes')
+      .select('evenement_id')
+      .eq('membre_id', ligne.membre_id)
+    expect(erreurApres).toBeNull()
+    expect((apres ?? []).length).toBe(1)
+    expect(apres![0].evenement_id).toBe(idEvenement)
+
+    // La fiche n'a TOUJOURS aucun faiseur de disciple : la validation d'une conversion ne
+    // pose pas de filiation. Sans cette assertion, une régression qui poserait le
+    // convertisseur comme faiseur passerait inaperçue — elle écrirait dans l'arbre une
+    // filiation qui n'a jamais eu lieu.
+    const { data: ficheApres } = await admin
+      .from('membres')
+      .select('etat, faiseur_de_disciple_id')
+      .eq('id', ligne.membre_id)
+      .single()
+    expect(ficheApres!.etat).toBe('actif')
+    expect(ficheApres!.faiseur_de_disciple_id).toBeNull()
   })
 
   it('chemin 2 — crée une fiche ACTIVE avec son faiseur de disciple, et la vue la montre à un compte ordinaire', async () => {
@@ -9848,6 +10293,17 @@ T4 (types) ──> T5 (evenements) ──> T7 (participations)
 T7 ──> T8, T9
 
 T10 (alter type, ISOLÉE) ──> T11 (conversion) ──> T13 (annulation amendée)
+                         └──> T22 (validation + affichage de la nouvelle origine)
+                              — DÉPENDANCE DURE, DANS LES DEUX SENS :
+                              (1) sans T22, une demande de conversion s'affiche comme une
+                                  demande de suivi (ternaire à deux issues) et propose deux
+                                  actions qui échouent toujours — la validation d'une
+                                  demande de suivi, refusée par la garde d'origine, et
+                                  l'annulation, refusée par la passerelle amendée ;
+                              (2) sans T22, RIEN ne fait passer à `actif` la fiche créée par
+                                  le chemin 1 : elle reste invisible de tout compte
+                                  ordinaire, son historique de séminaire n'apparaît nulle
+                                  part, et la conversion est irréversible ET inachevable.
 T12 (classement) : indépendante de T10 et T11
 
 T14 (domaine) ──> T17, T21
@@ -9860,8 +10316,18 @@ T28 (documentation) : INDÉPENDANTE — aucune dépendance de code.
 
 **Les tâches rejetables isolément**, dans lesquelles un relecteur peut légitimement dire
 non sans bloquer la voisine : T3 (dette du socle), T9 (la seconde vue), T13 (l'amendement
-de `annuler_demande_membre`), T20 (les étiquettes sur la fiche), T22 (l'affichage de la
-nouvelle origine), T25 (la preuve de pagination), T28 (la documentation).
+de `annuler_demande_membre`), T20 (les étiquettes sur la fiche), T25 (la preuve de
+pagination), T28 (la documentation).
+
+**T22 n'en fait PAS partie, et c'est une correction de cette liste.** Elle a longtemps été
+présentée comme un simple habillage d'affichage ; elle porte en réalité **le seul geste qui
+achève le chemin 1** (la garde d'origine de `validerDemandeNouvellePersonne`) et la seule
+chose qui empêche une demande de conversion de s'afficher comme une demande de suivi.
+La rejeter livrerait une conversion irréversible et inachevable, et manquerait la promesse
+« historique des convertis compris » (D70) sur le chemin nominal de D66.
+
+*(T13 reste, elle, légitimement rejetable : la contrainte `on delete restrict` de T6 est la
+seconde barrière et elle suffit à empêcher le sinistre — T13 n'ajoute que le message.)*
 
 ---
 
@@ -9875,6 +10341,7 @@ tables neuves.**
 |---|---|
 | `membres` (insert) | `creerMembre` (admin), `sInscrire` (public, fiche `en_attente`), `creerDemandeSuivi`, **`convertir_participant_externe` chemins 1 et 2 (NOUVEAU, T11)** |
 | `membres.faiseur_de_disciple_id` | `modifierMembre`, `definir_arbre`, `validerDemandeNouvellePersonne` (**désormais VIA `definir_arbre`, T3**), **`convertir_participant_externe` chemin 2 (NOUVEAU, T11)** — quatre chemins, dont **trois** prennent maintenant le verrou « arbre » ; `modifierMembre` reste le seul à ne pas le prendre, et **c'est un écart à réexaminer en revue** |
+| `membres.etat` → `actif` depuis `en_attente` | `validerDemandeNouvellePersonne` — **et elle seule dans tout le projet**. Sa garde d'origine couvre `auto_inscription`, `demande_suivi`, et **`conversion_participant` (ÉLARGIE par T22, D66)**. `definir_arbre` n'écrit jamais `etat` ; `rejeterDemande` n'écrit que `demandes_membre.etat` ; `changerEtatMembre` n'est pas exportée et ne sert qu'à l'archivage/désarchivage. **Refermer cette garde reviendrait à rendre le chemin 1 de la conversion inachevable** |
 | `demandes_membre` (insert) | `sInscrire`, `creerDemandeSuivi`, **`convertir_participant_externe` chemin 1 (NOUVEAU, T11)** |
 | `public.annuler_demande_membre` | **Amendée par cette phase (T13)** |
 | Politique `membres_lecture` | **Réécrite par cette phase (T2)** — sa suite RLS existante doit passer **inchangée** |
