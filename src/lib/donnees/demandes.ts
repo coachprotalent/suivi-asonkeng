@@ -3,7 +3,13 @@ import { clientServeur } from '@/lib/supabase/serveur'
 
 export type DemandeListe = {
   id: string
-  origine: 'auto_inscription' | 'demande_suivi'
+  // Élargi par la phase 4 (D66). SANS CET ÉLARGISSEMENT, `tsc` passerait quand même — le
+  // cast `as DemandeListe['origine']` de `versDemandeListe` masque la valeur nouvelle —
+  // mais toutes les comparaisons deviendraient SILENCIEUSEMENT FAUSSES : une demande de
+  // conversion tomberait dans le `else` de `LigneDemandeAdmin` et s'y verrait proposer le
+  // formulaire de validation d'une demande de suivi, avec un dirigeant proposé calculé
+  // depuis le CONVERTISSEUR — une filiation qui n'a jamais eu lieu.
+  origine: 'auto_inscription' | 'demande_suivi' | 'conversion_participant'
   demandeurProfilId: string
   demandeurNom: string
   membreId: string | null

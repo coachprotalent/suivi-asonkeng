@@ -39,8 +39,12 @@ export default async function PageDemandes({
         const proposeId = dirigeantPropose(maillon)
         propositionsDirigeant[demande.id] = proposeId ? await membreBrefParId(proposeId) : null
       } else {
-        // Compte racine sans fiche liée (spec D11), ou origine auto_inscription :
-        // aucune proposition (registre 1c, piège n°3).
+        // Aucune proposition de dirigeant (registre 1c, piège n°3). Trois cas y tombent :
+        // origine `auto_inscription` ; origine `conversion_participant` (D66 — le demandeur
+        // est l'administrateur qui a converti, et sa filiation n'a rien à voir avec la
+        // personne convertie ; sa ligne ne rend d'ailleurs PAS `FormulaireValidationSuivi`,
+        // qui est le seul consommateur de cette proposition) ; et le compte racine, sans
+        // fiche liée (spec D11).
         propositionsDirigeant[demande.id] = null
       }
     }

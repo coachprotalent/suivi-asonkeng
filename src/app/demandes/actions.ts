@@ -165,7 +165,25 @@ export async function validerDemandeNouvellePersonne(donnees: FormData): Promise
     erreurLecture ||
     !demandeLue ||
     !demandeLue.membre_id ||
-    (demandeLue.origine !== 'auto_inscription' && demandeLue.origine !== 'demande_suivi')
+    // TROIS ORIGINES VALIDABLES DEPUIS CET ÉCRAN. `conversion_participant` (D66) est
+    // ajoutée par la phase 4 : le chemin 1 de la conversion d'un participant externe crée
+    // une fiche `en_attente` et cette demande, et LA VALIDATION EST LE SEUL GESTE DE TOUTE
+    // L'APPLICATION QUI PASSE UNE FICHE `en_attente` À `actif`. Sans elle, la fiche reste
+    // invisible de tout compte ordinaire (`prive.peut_lire_membre` ne l'ouvre qu'à
+    // l'administrateur et à son demandeur), l'historique de séminaire du converti ne
+    // s'affiche nulle part (seconde branche de `seminaires_assistes`), et la conversion
+    // devient irréversible ET inachevable — la demande n'étant pas annulable (D64) et le
+    // membre pas supprimable (`on delete restrict`).
+    // CE QUE CETTE ORIGINE DÉCLENCHE, ET C'EST TOUT : `etat = 'actif'` sur la fiche. Elle
+    // n'entre NI dans le bloc `demande_suivi` (qui poserait le demandeur comme faiseur de
+    // disciple — or le demandeur est ici l'administrateur qui a converti, et il n'est pas
+    // le faiseur de disciple de la personne convertie), NI dans le bloc `auto_inscription`
+    // (qui écrirait `profils.membre_id` du demandeur — or il a déjà sa propre fiche).
+    // Le rattachement à l'arbre est un geste SÉPARÉ, fait ensuite depuis
+    // `/membres/<id>/arbre`.
+    (demandeLue.origine !== 'auto_inscription' &&
+      demandeLue.origine !== 'demande_suivi' &&
+      demandeLue.origine !== 'conversion_participant')
   ) {
     console.error('validerDemandeNouvellePersonne : demande introuvable, déjà traitée, ou sans fiche', {
       demandeId,
