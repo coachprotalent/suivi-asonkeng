@@ -1,6 +1,11 @@
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { expect, test } from '@playwright/test'
 import { MESSAGE_SEANCE_SANS_ENSEIGNANT } from '../../src/app/ael/seances/[id]/messages'
+// C1 : parcours par lots de `seances_ael`. Voir l'encadré de tête de ce module — il
+// porte la forme retenue, sa raison, et pourquoi il vit hors du fichier de spec.
+import { lireSeancesParLots } from './seances-lots'
 
 // `timeout` relevé bien au-dessus des 30 s de `playwright.config.ts`. Ce n'est pas le
 // contournement d'un défaut applicatif, c'est le coût réel de ces tests : chacun
@@ -29,10 +34,71 @@ const MDP_SIMPLE = `Test-${crypto.randomUUID()}`
 // aléatoire distingue seulement les noms individuels DE CETTE exécution. Écart
 // délibéré par rapport au brief de la Task 19, qui embarquait l'UUID dans le préfixe
 // balayé lui-même — signalé dans le rapport de tâche.
+//
+// CONTREPARTIE, NOMMÉE PLUTÔT QUE TUE (Mineur 5 de la revue de la Task 19) : deux
+// invocations Playwright CONCURRENTES sur cette base deviennent mutuellement
+// destructrices, chacune supprimant au `beforeAll` les entités de l'autre. Le registre
+// atteste que des exécutions concurrentes ont déjà eu lieu (fuite `test.e2e.autorite.lie`,
+// née pendant une revue). Le compromis est assumé — un rattrapage vaut mieux qu'une fuite
+// définitive en production — mais il exige de ne JAMAIS lancer deux fois `npm run test:e2e`
+// en parallèle sur ce dépôt.
 const FAMILLE = 'ZZAelPreuves-'
 const PREFIXE = `${FAMILLE}${crypto.randomUUID().slice(0, 8)}`
 
 const admin = createClient(URL, CLE_SERVICE, { auth: { autoRefreshToken: false, persistSession: false } })
+
+/**
+ * IMPORTANT 6 de la revue — REMÈDE À L'EMPREINTE QUI NE VIVAIT QU'EN MÉMOIRE.
+ *
+ * Une suite tuée entre le premier test de génération et l'`afterAll` laissait jusqu'à
+ * ~72 séances RÉELLES en production : elles ne portent ni préfixe ni `cree_par`, le
+ * balayage de FAMILLE ne les voit pas, et l'exécution suivante les intégrait à SA
+ * propre empreinte — donc ne les aurait jamais supprimées. Contrairement à la moitié
+ * préfixée du nettoyage, rendue rattrapable par I6, celle-ci ne l'était pas.
+ *
+ * L'empreinte est donc écrite sur DISQUE dès qu'elle est prise, avec l'instant de
+ * début d'exécution, et effacée seulement après un nettoyage final réussi. Sa présence
+ * au démarrage suivant SIGNIFIE « la précédente exécution n'est pas allée jusqu'à son
+ * nettoyage » :
+ *  - dans la FENÊTRE DE REPRISE, elle est reprise telle quelle et le delta de
+ *    l'exécution interrompue est rattrapé par le nettoyage d'entrée, sous la MÊME garde
+ *    bruyante (jamais `prevue`, jamais pointée, sinon on lève) ;
+ *  - au-delà, on REFUSE BRUYAMMENT de démarrer plutôt que de supprimer sur la foi d'une
+ *    empreinte vieille de plusieurs jours, pendant lesquels des séances légitimes ont pu
+ *    être générées : le résidu cesse d'être invisible sans que la suite s'autorise à
+ *    trancher seule. C'est le remède suggéré par la revue (« consigner l'intervalle
+ *    temporel de la suite et refuser bruyamment au démarrage suivant »).
+ *
+ * Ce que ce remède NE fait PAS, et il faut le dire : il ne protège pas d'une
+ * interruption survenue AVANT que l'empreinte ne soit écrite (aucune séance n'a alors
+ * encore été générée : il n'y a rien à rattraper), ni d'un fichier effacé à la main.
+ */
+// `__dirname` plutôt que `import.meta.url` : Playwright transpile les specs de ce dépôt
+// en CommonJS (package.json sans `"type": "module"`), et `import.meta` y est une erreur
+// de syntaxe à l'exécution — vérifié, pas supposé. `join`/`__dirname` plutôt que
+// `new URL(...)` : la constante `URL` de ce fichier est l'URL Supabase, elle masque le
+// constructeur global.
+const CHEMIN_EMPREINTE = join(__dirname, '..', '..', '.ael-preuves-empreinte.json')
+const FENETRE_REPRISE_MS = 24 * 60 * 60 * 1000
+
+type EmpreintePersistee = { debutIso: string; ids: string[] }
+
+function lireEmpreintePersistee(): EmpreintePersistee | null {
+  if (!existsSync(CHEMIN_EMPREINTE)) {
+    return null
+  }
+  // Aucun `catch` ici : un fichier illisible ou mal formé doit LEVER, jamais être
+  // traité comme « pas d'empreinte » — ce silence-là rendrait le résidu invisible une
+  // seconde fois, ce que ce mécanisme existe précisément pour empêcher.
+  const parse = JSON.parse(readFileSync(CHEMIN_EMPREINTE, 'utf8')) as EmpreintePersistee
+  if (typeof parse.debutIso !== 'string' || !Array.isArray(parse.ids)) {
+    throw new Error(
+      `Empreinte persistée illisible (${CHEMIN_EMPREINTE}) : structure inattendue. ` +
+        'Intervention manuelle requise — ce fichier atteste une exécution non close.',
+    )
+  }
+  return parse
+}
 
 let idAntenneDeplacement: string
 let idCalendrierDeplacement: string
@@ -58,6 +124,18 @@ let idSeanceEnseignantVisible: string
 // PAS apparaître (masquer le modérateur, jamais surveillé par ce déclencheur).
 let idMembreModerateurMasque: string
 let idSeanceModerateurMasque: string
+// IMPORTANT 4 de la revue de la Task 19 : le cas « membre ARCHIVÉ » — LE CŒUR de la
+// promesse d'I1, et le cas ORDINAIRE cité en premier par le constat — n'était éprouvé
+// NULLE PART, et `membresBrefsParIds` n'avait AUCUN test. Seule la branche du
+// détachement (membre resté ACTIF, donc branche où la RLS LAISSE PASSER) était couverte :
+// la branche « la RLS refuse → Fiche non consultable » ne l'était sur aucun chemin.
+// DEUX membres archivés, pas un seul, parce qu'IMPORTANT 7 porte précisément sur le cas
+// où deux fiches masquées rendaient deux lignes STRICTEMENT identiques.
+let idAntenneArchivePointee: string
+let idSeanceArchivePointee: string
+let idMembreArchivePointeA: string
+let idMembreArchivePointeB: string
+let idMembreTemoinArchivePointee: string
 
 // Empreinte des séances existantes AVANT toute génération, et drapeau qui dit si elle a
 // été prise. Le drapeau, et non `idsSeancesAvant.size > 0` : une base légitimement vide
@@ -82,9 +160,24 @@ async function supprimerCompte(identifiant: string) {
     await admin.auth.admin.deleteUser(data.id)
     return
   }
-  const { data: comptes } = await admin.auth.admin.listUsers()
-  const orphelin = comptes?.users.find((u) => u.email === `${identifiant}@asonkeng.local`)
-  if (orphelin) await admin.auth.admin.deleteUser(orphelin.id)
+  // Mineur 6 de la revue de la Task 19 — MÊME FAMILLE QUE C1, sur une autre API.
+  // `listUsers()` rend 50 comptes PAR PAGE par défaut : sans parcours, ce rattrapage
+  // d'un compte orphelin (profil supprimé, utilisateur auth resté) échouerait EN SILENCE
+  // dès le 51e compte, laissant un compte de test actif en production — et le
+  // `createUser` de l'exécution suivante échouerait alors sur un doublon d'adresse, pour
+  // une raison introuvable. On parcourt jusqu'à épuisement, comme partout ailleurs.
+  const PAR_PAGE = 200
+  for (let page = 1; ; page++) {
+    const { data: comptes, error } = await admin.auth.admin.listUsers({ page, perPage: PAR_PAGE })
+    if (error) throw new Error(`liste des comptes impossible : ${error.message}`)
+    const utilisateurs = comptes?.users ?? []
+    const orphelin = utilisateurs.find((u) => u.email === `${identifiant}@asonkeng.local`)
+    if (orphelin) {
+      await admin.auth.admin.deleteUser(orphelin.id)
+      return
+    }
+    if (utilisateurs.length < PAR_PAGE) return
+  }
 }
 
 async function creerCompte(identifiant: string, mdp: string, role: 'administrateur' | 'moderateur' | null) {
@@ -214,15 +307,13 @@ async function nettoyer() {
   // d'autre. Ce bloc ne s'exécute jamais au nettoyage d'entrée (`beforeAll`), où
   // l'empreinte n'est pas encore prise.
   if (empreinteSeancesPrise) {
-    const { data: apres, error: erreurApres } = await admin
-      .from('seances_ael')
-      .select('id, etat, calendrier_id')
-    if (erreurApres) {
-      throw new Error(`relecture des séances impossible pour le nettoyage : ${erreurApres.message}`)
-    }
-    const creees = (apres ?? []).filter(
-      (l) => l.calendrier_id !== null && !idsSeancesAvant.has(l.id as string),
+    // PARCOURS PAR LOTS (C1) : une relecture non bornée serait tronquée à 1000 lignes
+    // par PostgREST, laissant croire à un delta plus petit qu'il n'est.
+    const apres = await lireSeancesParLots<{ id: string; etat: string; calendrier_id: string | null }>(
+      admin,
+      'id, etat, calendrier_id',
     )
+    const creees = apres.filter((l) => l.calendrier_id !== null && !idsSeancesAvant.has(l.id))
     let supprimees = 0
     for (const seance of creees) {
       // Refus BRUYANT plutôt que suppression aveugle : une séance déjà tenue ou déjà
@@ -256,20 +347,112 @@ async function nettoyer() {
     // Comptage à CONSIGNER dans le rapport de tâche (contrainte globale n°13).
     console.log(`[ael-preuves] séances générées supprimées au nettoyage : ${supprimees}`)
   }
+
+  await verifierAbsenceDeResidu()
+}
+
+/**
+ * IMPORTANT 2 de la revue — LE « 72 » CONSIGNÉ COMPTAIT DES SUPPRESSIONS, PAS UNE
+ * ABSENCE. Ce fichier était le SEUL de sa famille (`ael-pointage.spec.ts:155-172`,
+ * `ael-seance-detail.spec.ts:158-175`, `antennes-membres.spec.ts`,
+ * `archivage-compte.spec.ts`, `completude-seance-production.spec.ts:118-126`) à ne pas
+ * tenir la contrainte globale n°13, et c'est celui qui crée le plus de matière en
+ * production. « J'ai supprimé N lignes » ne répond pas à « reste-t-il quelque chose ? » :
+ * un balayage qui rate une entité en supprime toujours autant et en laisse quand même.
+ *
+ * Appelée à la FIN de `nettoyer()`, donc aux DEUX appels : le nettoyage d'entrée du
+ * `beforeAll` doit lui aussi partir d'une base propre, sans quoi les tests s'appuieraient
+ * sur un décor pollué par une exécution antérieure.
+ */
+async function verifierAbsenceDeResidu() {
+  const { count: membresRestants, error: erreurMembres } = await admin
+    .from('membres')
+    .select('id', { count: 'exact', head: true })
+    .like('nom', `${FAMILLE}%`)
+  if (erreurMembres) throw new Error(`comptage des membres résiduels impossible : ${erreurMembres.message}`)
+  if (membresRestants !== 0) {
+    throw new Error(`Nettoyage incomplet : ${membresRestants} membre(s) sous ${FAMILLE} subsistent.`)
+  }
+
+  const { count: antennesRestantes, error: erreurAntennes } = await admin
+    .from('antennes')
+    .select('id', { count: 'exact', head: true })
+    .like('nom', `${FAMILLE}%`)
+  if (erreurAntennes) throw new Error(`comptage des antennes résiduelles impossible : ${erreurAntennes.message}`)
+  if (antennesRestantes !== 0) {
+    throw new Error(`Nettoyage incomplet : ${antennesRestantes} antenne(s) sous ${FAMILLE} subsistent.`)
+  }
+
+  const { count: comptesRestants, error: erreurComptes } = await admin
+    .from('profils')
+    .select('id', { count: 'exact', head: true })
+    .in('identifiant', [IDENT_ADMIN, IDENT_MODERATEUR, IDENT_SIMPLE])
+  if (erreurComptes) throw new Error(`comptage des profils résiduels impossible : ${erreurComptes.message}`)
+  if (comptesRestants !== 0) {
+    throw new Error(`Nettoyage incomplet : ${comptesRestants} profil(s) de test subsistent.`)
+  }
+
+  // Séances : l'absence se vérifie sur le MÊME critère que la suppression (delta de
+  // l'empreinte), sur une relecture PAGINÉE (C1). Ne rien trouver ici est la seule
+  // preuve que le delta a été intégralement traité, garde bruyante comprise.
+  if (empreinteSeancesPrise) {
+    const apres = await lireSeancesParLots<{ id: string; calendrier_id: string | null }>(admin, 'id, calendrier_id')
+    const restantes = apres.filter((l) => l.calendrier_id !== null && !idsSeancesAvant.has(l.id))
+    if (restantes.length !== 0) {
+      throw new Error(
+        `Nettoyage incomplet : ${restantes.length} séance(s) générée(s) pendant cette suite subsistent ` +
+          `(${restantes.map((s) => s.id).join(', ')}).`,
+      )
+    }
+  }
 }
 
 test.beforeAll(async () => {
+  // REPRISE D'UNE EXÉCUTION NON CLOSE (IMPORTANT 6) — avant le nettoyage d'entrée, pour
+  // que celui-ci rattrape le delta laissé par l'exécution interrompue.
+  const persistee = lireEmpreintePersistee()
+  if (persistee) {
+    const age = Date.now() - Date.parse(persistee.debutIso)
+    if (!Number.isFinite(age)) {
+      throw new Error(`Empreinte persistée illisible (${CHEMIN_EMPREINTE}) : instant de début invalide.`)
+    }
+    if (age > FENETRE_REPRISE_MS) {
+      throw new Error(
+        `Reprise refusée : ${CHEMIN_EMPREINTE} atteste une exécution de ael-preuves non close ` +
+          `démarrée le ${persistee.debutIso}, soit il y a plus de ${FENETRE_REPRISE_MS / 3_600_000} h. ` +
+          'Des séances générées par cette exécution subsistent probablement en production, mais ' +
+          'trop de temps a passé pour que cette suite distingue seule ses propres séances de ' +
+          'séances légitimement générées depuis. Intervention manuelle requise : comparer ' +
+          "`seances_ael` à l'empreinte de ce fichier, supprimer ce qui doit l'être, puis effacer " +
+          'ce fichier.',
+      )
+    }
+    idsSeancesAvant = new Set(persistee.ids)
+    empreinteSeancesPrise = true
+    console.log(
+      `[ael-preuves] exécution précédente non close détectée (démarrée le ${persistee.debutIso}) : ` +
+        `son empreinte de ${persistee.ids.length} séance(s) est reprise, son delta va être rattrapé.`,
+    )
+  }
+
   await nettoyer()
 
   // EMPREINTE, immédiatement après le nettoyage d'entrée et AVANT toute génération.
   // Tout ce qui portera un `calendrier_id` et ne figurera pas ici aura été créé par
   // cette suite — y compris sur les calendriers réels, que `genererSeances` balaie sans
-  // portée.
+  // portée. Lecture PAGINÉE (C1) : tronquée, elle ferait classer de VRAIES séances de
+  // production comme « créées par cette suite », donc supprimer.
   {
-    const { data, error } = await admin.from('seances_ael').select('id')
-    if (error) throw new Error(`empreinte des séances impossible : ${error.message}`)
-    idsSeancesAvant = new Set((data ?? []).map((l) => l.id as string))
+    const seances = await lireSeancesParLots<{ id: string }>(admin, 'id')
+    idsSeancesAvant = new Set(seances.map((l) => l.id))
     empreinteSeancesPrise = true
+    // Écrite sur disque AVANT le premier test, donc avant la première génération : une
+    // interruption ultérieure laisse derrière elle de quoi la rattraper (IMPORTANT 6).
+    writeFileSync(
+      CHEMIN_EMPREINTE,
+      JSON.stringify({ debutIso: new Date().toISOString(), ids: [...idsSeancesAvant] } satisfies EmpreintePersistee),
+      'utf8',
+    )
   }
 
   const { data: antenneDeplacement, error: erreurAntenneDeplacement } = await admin
@@ -439,12 +622,68 @@ test.beforeAll(async () => {
     .eq('id', idMembreModerateurMasque)
   if (erreurArchivageModerateur) throw new Error(erreurArchivageModerateur.message)
 
+  // IMPORTANT 4 / IMPORTANT 5 / IMPORTANT 7 — décor du cas « membre ARCHIVÉ pointé ».
+  // Une antenne, TROIS membres pointés présents dessus (deux qui seront archivés, un
+  // témoin qui reste actif), une séance ciblant cette antenne. Le total attendu à
+  // l'écran est donc 3 alors que la liste NORMALE n'en montrera qu'un : c'est ce qui
+  // fait de l'assertion sur le total autre chose qu'une décoration — elle prouve que le
+  // total compte bien les présences HORS LISTE (l'arbitrage d'I1), pas seulement les
+  // cases visibles dans la liste courante.
+  const { data: antenneArchivePointee, error: erreurAntenneArchivePointee } = await admin
+    .from('antennes')
+    .insert({ nom: `${PREFIXE}-AntenneArchivePointee`, pays: 'Test' })
+    .select('id')
+    .single()
+  if (erreurAntenneArchivePointee || !antenneArchivePointee) {
+    throw new Error(`création de l'antenne d'archivage impossible : ${erreurAntenneArchivePointee?.message}`)
+  }
+  idAntenneArchivePointee = antenneArchivePointee.id as string
+
+  idMembreArchivePointeA = await creerMembre('archive-pointe-a', idAntenneArchivePointee)
+  idMembreArchivePointeB = await creerMembre('archive-pointe-b', idAntenneArchivePointee)
+  idMembreTemoinArchivePointee = await creerMembre('temoin-archive', idAntenneArchivePointee)
+
+  const { data: seanceArchivePointee, error: erreurSeanceArchivePointee } = await admin
+    .from('seances_ael')
+    .insert({ date: '2026-09-25' })
+    .select('id')
+    .single()
+  if (erreurSeanceArchivePointee || !seanceArchivePointee) {
+    throw new Error(`création de la séance d'archivage impossible : ${erreurSeanceArchivePointee?.message}`)
+  }
+  idSeanceArchivePointee = seanceArchivePointee.id as string
+
+  const { error: erreurJonctionArchivePointee } = await admin
+    .from('seances_ael_antennes')
+    .insert({ seance_id: idSeanceArchivePointee, antenne_id: idAntenneArchivePointee })
+  if (erreurJonctionArchivePointee) throw new Error(erreurJonctionArchivePointee.message)
+
+  const { error: erreurPresencesArchivePointee } = await admin.from('presences_ael').insert([
+    { seance_id: idSeanceArchivePointee, membre_id: idMembreArchivePointeA, present: true },
+    { seance_id: idSeanceArchivePointee, membre_id: idMembreArchivePointeB, present: true },
+    { seance_id: idSeanceArchivePointee, membre_id: idMembreTemoinArchivePointee, present: true },
+  ])
+  if (erreurPresencesArchivePointee) throw new Error(erreurPresencesArchivePointee.message)
+
+  // Archivage APRÈS le pointage : c'est l'ordre réel de D48 (« la présence RESTE »).
+  const { error: erreurArchivagePointes } = await admin
+    .from('membres')
+    .update({ etat: 'archive' })
+    .in('id', [idMembreArchivePointeA, idMembreArchivePointeB])
+  if (erreurArchivagePointes) throw new Error(erreurArchivagePointes.message)
+
   await creerCompte(IDENT_ADMIN, MDP_ADMIN, 'administrateur')
   await creerCompte(IDENT_MODERATEUR, MDP_MODERATEUR, 'moderateur')
   await creerCompte(IDENT_SIMPLE, MDP_SIMPLE, null)
 })
 
-test.afterAll(nettoyer)
+test.afterAll(async () => {
+  await nettoyer()
+  // Effacée SEULEMENT après un nettoyage vérifié (`verifierAbsenceDeResidu` lève sinon,
+  // et le fichier survit) : sa présence au prochain démarrage signifie exactement « la
+  // dernière exécution n'est pas allée jusqu'au bout de son nettoyage ».
+  rmSync(CHEMIN_EMPREINTE, { force: true })
+})
 
 async function seConnecter(page: import('@playwright/test').Page, identifiant: string, mdp: string) {
   await page.goto('/connexion')
@@ -766,6 +1005,112 @@ test("détachement : n'affecte ni une présence ni un compteur, effet prospectif
 })
 
 // ---------------------------------------------------------------------------
+// IMPORTANT 4, 5 et 7 de la revue de la Task 19 — LE CAS ORDINAIRE, TENU POUR ACQUIS.
+//
+// La correction I1 promettait : une présence pointée sur quelqu'un que la RLS masque
+// reste VISIBLE, COMPTÉE et CORRIGEABLE, et l'écran dit honnêtement qu'il ne peut pas
+// nommer la fiche. Cette promesse reposait entièrement sur la branche
+// `trouve === undefined` de `page.tsx` et sur `membresBrefsParIds`
+// (`src/lib/donnees/membres.ts:372`) — ni l'une ni l'autre n'était exercée par un seul
+// test du dépôt. Le respect de la RLS y était établi PAR LECTURE (`clientServeur()`,
+// aucun `clientAdmin()`), jamais par preuve, très exactement sur la moitié du cas qui
+// compte le plus : l'ARCHIVAGE (D48). Le biais de la phase à l'envers — le cas exotique
+// récemment compris (le détachement) éprouvé, le cas ordinaire tenu pour acquis.
+//
+// CE TEST NE PEUT PAS ÊTRE VERT SI L'APPEL ÉCHOUE TOTALEMENT : il exige, dans la même
+// visite, un contrôle POSITIF (le témoin resté actif est nommé dans la liste normale) et
+// un contrôle NÉGATIF (les archivés ne sont nommés NULLE PART sur la page), puis il
+// rejoue la MÊME page depuis un ADMINISTRATEUR, à qui la RLS laisse voir les fiches
+// archivées : les noms réels apparaissent alors et « Fiche non consultable » disparaît.
+// C'est cette seconde moitié qui fait la preuve que le libellé du modérateur est un REFUS
+// DE LA RLS et non une fonction cassée qui ne rendrait jamais rien — les deux étant, sans
+// elle, rigoureusement indiscernables à l'écran.
+// ---------------------------------------------------------------------------
+
+test('une présence sur un membre ARCHIVÉ reste visible, comptée, corrigeable et discernable — masquée au modérateur, nommée à l\'administrateur (D48, I1)', async ({
+  page,
+  browser,
+}) => {
+  // Prémisse VÉRIFIÉE EN BASE : sans elle, tout ce qui suit resterait vert si l'archivage
+  // du décor n'avait pas eu lieu — l'écran montrerait alors trois noms bien lisibles et
+  // la branche visée ne serait jamais atteinte.
+  const { data: etats, error: erreurEtats } = await admin
+    .from('membres')
+    .select('id, etat')
+    .in('id', [idMembreArchivePointeA, idMembreArchivePointeB, idMembreTemoinArchivePointee])
+  expect(erreurEtats).toBeNull()
+  const parId = new Map((etats ?? []).map((m) => [m.id as string, m.etat as string]))
+  expect(parId.get(idMembreArchivePointeA)).toBe('archive')
+  expect(parId.get(idMembreArchivePointeB)).toBe('archive')
+  expect(parId.get(idMembreTemoinArchivePointee)).toBe('actif')
+
+  const refA = idMembreArchivePointeA.slice(0, 8)
+  const refB = idMembreArchivePointeB.slice(0, 8)
+  expect(refA).not.toBe(refB)
+
+  // ---- MODÉRATEUR : la RLS masque les fiches archivées ----
+  await seConnecter(page, IDENT_MODERATEUR, MDP_MODERATEUR)
+  await page.goto(`/ael/seances/${idSeanceArchivePointee}`)
+
+  const sectionHorsListe = page.getByRole('region', { name: 'Présences hors de la liste courante' })
+
+  // CONTRÔLE POSITIF : le témoin, resté ACTIF et rattaché, est nommé dans la liste
+  // NORMALE et coché. Si la page était cassée, si `Pointage` n'était pas rendu, ou si le
+  // libellé accessible d'une ligne changeait, cette assertion tomberait la première.
+  await expect(page.getByLabel(`Test ${PREFIXE}-temoin-archive`, { exact: false })).toHaveCount(1)
+  await expect(page.getByLabel(`Test ${PREFIXE}-temoin-archive`, { exact: false })).toBeChecked()
+  await expect(sectionHorsListe.getByLabel(`Test ${PREFIXE}-temoin-archive`, { exact: false })).toHaveCount(0)
+
+  // Les archivés ne sont nommés NULLE PART : la RLS reste seule juge, et l'écran ne
+  // contourne rien pour un confort d'affichage.
+  await expect(page.getByText(`${PREFIXE}-archive-pointe-a`, { exact: false })).toHaveCount(0)
+  await expect(page.getByText(`${PREFIXE}-archive-pointe-b`, { exact: false })).toHaveCount(0)
+
+  // …mais leurs présences RESTENT VISIBLES ET COCHÉES (D48), dans le bloc distinct.
+  await expect(sectionHorsListe.getByRole('checkbox')).toHaveCount(2)
+
+  // IMPORTANT 7 : les deux lignes masquées sont DISCERNABLES. Avant ce correctif elles
+  // portaient le même texte et le même nom accessible, alors que chacune commande une
+  // écriture réelle en base : le gestionnaire ne pouvait pas savoir laquelle il
+  // manipulait. Chaque référence ne désigne QU'UNE ligne, et les deux diffèrent.
+  await expect(sectionHorsListe.getByLabel(`Fiche non consultable (réf. ${refA})`)).toHaveCount(1)
+  await expect(sectionHorsListe.getByLabel(`Fiche non consultable (réf. ${refA})`)).toBeChecked()
+  await expect(sectionHorsListe.getByLabel(`Fiche non consultable (réf. ${refB})`)).toHaveCount(1)
+  await expect(sectionHorsListe.getByLabel(`Fiche non consultable (réf. ${refB})`)).toBeChecked()
+
+  // IMPORTANT 5 : LE TOTAL, rendu AUX GESTIONNAIRES (arbitrage d'I1 : ce sont eux qui
+  // pointent), n'avait aucune assertion nulle part — un total figé à zéro, ou calculé sur
+  // la seule liste courante, passait toutes les portes. Ici il vaut 3 alors que la liste
+  // NORMALE ne montre qu'UNE case cochée : cette assertion échouerait aussi bien sur un
+  // compteur mort (0) que sur un compteur qui ignorerait les présences hors liste (1).
+  await expect(page.getByText(/^\d+ présents?\.$/)).toHaveText('3 présents.')
+
+  // ---- ADMINISTRATEUR : même page, même données, RLS plus large ----
+  // Contexte NEUF plutôt qu'une seconde connexion sur la même page : le middleware
+  // redirige une visite DÉJÀ authentifiée de /connexion vers /tableau-de-bord
+  // (src/middleware.ts, bogue déjà rencontré à la Task 5).
+  const contexteAdmin = await browser.newContext()
+  const pageAdmin = await contexteAdmin.newPage()
+  try {
+    await seConnecter(pageAdmin, IDENT_ADMIN, MDP_ADMIN)
+    await pageAdmin.goto(`/ael/seances/${idSeanceArchivePointee}`)
+
+    const sectionAdmin = pageAdmin.getByRole('region', { name: 'Présences hors de la liste courante' })
+    // Les deux archivés restent HORS LISTE même pour l'administrateur — la liste normale
+    // ne rend que les membres ACTIFS de l'antenne, quel que soit le rôle — mais leurs
+    // NOMS sont désormais résolus : `membresBrefsParIds` fonctionne, et ce que le
+    // modérateur voyait était bien un refus de la RLS, pas une fonction muette.
+    await expect(sectionAdmin.getByLabel(`Test ${PREFIXE}-archive-pointe-a`, { exact: false })).toHaveCount(1)
+    await expect(sectionAdmin.getByLabel(`Test ${PREFIXE}-archive-pointe-a`, { exact: false })).toBeChecked()
+    await expect(sectionAdmin.getByLabel(`Test ${PREFIXE}-archive-pointe-b`, { exact: false })).toHaveCount(1)
+    await expect(pageAdmin.getByText('Fiche non consultable', { exact: false })).toHaveCount(0)
+    await expect(pageAdmin.getByText(/^\d+ présents?\.$/)).toHaveText('3 présents.')
+  } finally {
+    await contexteAdmin.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
 // Le chemin de navigation vers /antennes/[id] existe RÉELLEMENT pour un modérateur.
 // ---------------------------------------------------------------------------
 
@@ -830,7 +1175,15 @@ test("un enseignant archivé, invisible au modérateur, n'est pas effacé par un
 
   // L'écran DIT que la fiche n'est pas consultable, au lieu d'afficher un sélecteur vide
   // qui laisserait croire qu'aucun enseignant n'est désigné.
-  await expect(page.getByText('Fiche non consultable', { exact: false }).first()).toBeVisible()
+  //
+  // Mineur 7 de la revue : le `.first()` d'origine masquait un SECOND champ masqué
+  // inattendu. Assertion CROISÉE, harmonisée avec le test « modérateur masqué » : ce
+  // champ-ci et lui seul est masqué (son sélecteur normal a disparu), tandis que le champ
+  // modérateur, qui n'a aucun intervenant archivé, garde son sélecteur — le masquage d'un
+  // champ ne doit pas déborder sur l'autre.
+  await expect(page.getByText('Fiche non consultable', { exact: false })).toHaveCount(1)
+  await expect(page.getByLabel("Enseignant (membre de l'équipe)")).toHaveCount(0)
+  await expect(page.getByLabel("Modérateur (membre de l'équipe)")).toBeVisible()
 
   const nouveauTheme = `Thème modifié ${PREFIXE}`
   await page.getByLabel('Thème').fill(nouveauTheme)
