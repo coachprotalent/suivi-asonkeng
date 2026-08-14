@@ -59,6 +59,35 @@ test('une route protégée renvoie vers la connexion', async ({ page }) => {
   await expect(page).toHaveURL(/\/connexion/)
 })
 
+test("un visiteur NON AUTHENTIFIÉ atteint la page d'inscription par le lien de la connexion", async ({
+  page,
+  context,
+}) => {
+  // AUCUNE SESSION : le contexte Playwright est neuf par test, mais on le dit explicitement
+  // — c'est la propriété même que ce test éprouve, et un `beforeAll` qui connecterait un
+  // compte plus tard la retirerait sans que rien ne le signale.
+  await context.clearCookies()
+  await page.goto('/connexion')
+
+  // LE CLIC, PAS UNE ASSERTION NÉGATIVE. « Le lien est visible » ne prouve pas qu'il mène
+  // quelque part : la page d'inscription est publique dans le middleware, et c'est
+  // justement ce couple (lien présent ET cible atteignable sans session) qui manquait —
+  // `href="/inscription"` ne figurait NULLE PART dans `src/`.
+  const lien = page.getByRole('link', { name: 'Créer votre compte' })
+  await expect(lien).toBeVisible()
+  // Le libellé DOIT prévenir qu'un code est nécessaire : l'écran d'inscription, lui, ne le
+  // peut pas — le §7 lui impose un message indifférencié qui ne révèle jamais qu'un code
+  // existe. Si cette phrase disparaît, le lien envoie les visiteurs vers un refus qu'aucun
+  // écran ne pourra leur expliquer.
+  await expect(page.getByText("Vous avez reçu un code d'inscription ?")).toBeVisible()
+
+  await lien.click()
+  await expect(page).toHaveURL(/\/inscription$/)
+  // CONTRÔLE POSITIF À L'ARRIVÉE : la page a bien rendu son formulaire, et n'a pas été
+  // renvoyée vers la connexion par le middleware.
+  await expect(page.getByRole('button', { name: "S'inscrire" })).toBeVisible()
+})
+
 // `page.locator('[role="alert"]:not(#__next-route-announcer__)')` plutôt que
 // `page.getByRole('alert')` : Next.js 16 injecte son propre
 // `<div role="alert" id="__next-route-announcer__">` pour l'annonce de navigation, ce
