@@ -14,13 +14,32 @@
  * `prefixe` vient d'un `useId()` du parent : sans lui, trois instances du composant sur la
  * même page partageraient les mêmes `id`, et les `<label htmlFor>` désigneraient tous le
  * premier champ.
+ *
+ * CHAMPS CONTRÔLÉS (`valeurs` + `onChange`), et ce n'est pas un simple choix de style :
+ * React réinitialise les champs NON contrôlés d'un `<form action={...}>` dès que l'action
+ * se termine SANS LEVER, y compris quand elle RETOURNE un refus métier — défaut trouvé et
+ * verrouillé à la tâche précédente (`src/app/evenements/formulaire-evenement.tsx`,
+ * `src/app/evenements/types/formulaire-type.tsx`). Une note déjà rédigée ou un désir déjà
+ * coché ne doivent pas disparaître parce qu'un AUTRE champ du même formulaire (le membre
+ * choisi, le nom du participant externe…) a été refusé.
  */
+export type ValeursDesirs = { mentorat: boolean; suivi: boolean; cpeap: boolean; note: string }
+
+export const DESIRS_VIDES: ValeursDesirs = {
+  mentorat: false,
+  suivi: false,
+  cpeap: false,
+  note: '',
+}
+
 export function ChampsDesirs({
   prefixe,
   valeurs,
+  onChange,
 }: {
   prefixe: string
-  valeurs?: { mentorat: boolean; suivi: boolean; cpeap: boolean; note: string }
+  valeurs: ValeursDesirs
+  onChange: (valeurs: ValeursDesirs) => void
 }) {
   const idNote = `${prefixe}-note`
   const idAideNote = `${prefixe}-aide-note`
@@ -32,16 +51,27 @@ export function ChampsDesirs({
         <input
           name="desirMentoratAcademique"
           type="checkbox"
-          defaultChecked={valeurs?.mentorat ?? false}
+          checked={valeurs.mentorat}
+          onChange={(evenement) => onChange({ ...valeurs, mentorat: evenement.target.checked })}
         />
         Mentorat académique
       </label>
       <label className="flex items-center gap-2 text-sm">
-        <input name="desirSuiviSpirituel" type="checkbox" defaultChecked={valeurs?.suivi ?? false} />
+        <input
+          name="desirSuiviSpirituel"
+          type="checkbox"
+          checked={valeurs.suivi}
+          onChange={(evenement) => onChange({ ...valeurs, suivi: evenement.target.checked })}
+        />
         Suivi spirituel
       </label>
       <label className="flex items-center gap-2 text-sm">
-        <input name="desirCpeap" type="checkbox" defaultChecked={valeurs?.cpeap ?? false} />
+        <input
+          name="desirCpeap"
+          type="checkbox"
+          checked={valeurs.cpeap}
+          onChange={(evenement) => onChange({ ...valeurs, cpeap: evenement.target.checked })}
+        />
         CPEAP
       </label>
 
@@ -56,7 +86,8 @@ export function ChampsDesirs({
           id={idNote}
           name="note"
           rows={2}
-          defaultValue={valeurs?.note ?? ''}
+          value={valeurs.note}
+          onChange={(evenement) => onChange({ ...valeurs, note: evenement.target.value })}
           aria-describedby={idAideNote}
           className="rounded-md border border-neutral-300 px-3 py-2"
         />

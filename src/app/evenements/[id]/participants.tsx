@@ -1,11 +1,11 @@
 'use client'
 
 import Link from 'next/link'
-import { useActionState, useId, useState } from 'react'
+import { useActionState, useEffect, useId, useRef, useState } from 'react'
 import type { ParticipantLigne } from '@/lib/donnees/evenements-lots'
 import type { MembreBref } from '@/lib/donnees/membres'
 import { SelecteurMembre } from '@/app/membres/selecteur-membre'
-import { ChampsDesirs } from './champs-desirs'
+import { ChampsDesirs, DESIRS_VIDES, type ValeursDesirs } from './champs-desirs'
 import { FormulaireParticipantExterne } from './formulaire-participant-externe'
 import {
   ajouterParticipantMembre,
@@ -19,7 +19,20 @@ const etatInitial: EtatParticipation = { erreur: null }
 function FormulaireAjoutMembre({ evenementId }: { evenementId: string }) {
   const [etat, envoyer, enCours] = useActionState(ajouterParticipantMembre, etatInitial)
   const [membre, setMembre] = useState<MembreBref | null>(null)
+  const [desirs, setDesirs] = useState<ValeursDesirs>(DESIRS_VIDES)
   const prefixe = useId()
+
+  // Vidé au SUCCÈS d'une VRAIE soumission, jamais au montage — même garde que
+  // `formulaire-type.tsx` (tester seulement `etat.erreur === null` serait aussi vrai pour
+  // `etatInitial`, et déclencherait l'effet dès le montage).
+  const enCoursPrecedent = useRef(enCours)
+  useEffect(() => {
+    if (enCoursPrecedent.current && !enCours && etat.erreur === null) {
+      setMembre(null)
+      setDesirs(DESIRS_VIDES)
+    }
+    enCoursPrecedent.current = enCours
+  }, [enCours, etat])
 
   return (
     <form action={envoyer} className="flex flex-col gap-3">
@@ -34,7 +47,7 @@ function FormulaireAjoutMembre({ evenementId }: { evenementId: string }) {
         surChoix={setMembre}
         exclureId={null}
       />
-      <ChampsDesirs prefixe={prefixe} />
+      <ChampsDesirs prefixe={prefixe} valeurs={desirs} onChange={setDesirs} />
       <div className="flex items-center gap-4">
         <button
           type="submit"
@@ -69,6 +82,18 @@ function LigneParticipant({
     etatInitial,
   )
   const prefixe = useId()
+
+  // CONTRÔLÉ — voir l'encadré de `champs-desirs.tsx`. Initialisé UNE FOIS depuis
+  // `participant` (au montage) : après un enregistrement réussi, cet état local est déjà
+  // ce qui vient d'être écrit, et la nouvelle valeur du prop (revalidation) coïncide —
+  // aucune resynchronisation n'est nécessaire pour ce formulaire, qui ne se démonte pas
+  // au succès (à la différence des deux formulaires de création).
+  const [desirs, setDesirs] = useState<ValeursDesirs>({
+    mentorat: participant.desirMentoratAcademique,
+    suivi: participant.desirSuiviSpirituel,
+    cpeap: participant.desirCpeap,
+    note: participant.note ?? '',
+  })
 
   // Un membre DÉSIGNÉ dont la fiche n'est pas consultable par ce compte (typiquement
   // archivée, vue par un modérateur) : `membreId` non nul, embed nul. Les deux
@@ -108,15 +133,7 @@ function LigneParticipant({
         <form action={modifier} className="mt-3 flex flex-col gap-3">
           <input type="hidden" name="evenementId" value={evenementId} />
           <input type="hidden" name="participationId" value={participant.id} />
-          <ChampsDesirs
-            prefixe={prefixe}
-            valeurs={{
-              mentorat: participant.desirMentoratAcademique,
-              suivi: participant.desirSuiviSpirituel,
-              cpeap: participant.desirCpeap,
-              note: participant.note ?? '',
-            }}
-          />
+          <ChampsDesirs prefixe={prefixe} valeurs={desirs} onChange={setDesirs} />
           <button
             type="submit"
             disabled={modificationEnCours}
