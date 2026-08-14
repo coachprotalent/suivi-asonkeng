@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { formaterDateSeule } from '@/lib/format/date'
 import { seanceParId, presencesDeSeance } from '@/lib/donnees/ael'
-import { membresDesAntennes } from '@/lib/donnees/membres'
+import { membresBrefsParIds, membresDesAntennes } from '@/lib/donnees/membres'
 import { estModerateurOuAdministrateur, exigerProfilActif } from '@/lib/securite/garde'
 import { annulerSeance, remettrePrevue } from './actions'
 import { BoutonTransitionEtat } from './bouton-transition-etat'
@@ -52,6 +52,28 @@ export default async function PageSeanceAel({ params }: { params: Promise<{ id: 
     ? await membresDesAntennes(seance.antennes.map((antenne) => antenne.id))
     : []
   const presentsCount = Object.values(presences).filter(Boolean).length
+
+  // Correction I1 de la ronde : `presences` (toutes les lignes réellement pointées,
+  // via `presencesDeSeanceParLots`) peut contenir des identifiants absents de
+  // `membres` (limité aux membres ACTIFS des antennes ciblées) — ajoutés hors antenne
+  // (D47), archivés depuis (D48 : leur présence RESTE et reste comptée), ou déplacés
+  // vers une autre antenne. Sans ce rattrapage, ces présences n'avaient ni case, ni
+  // nom, ni total : le motif « absent et vide indiscernables », sans aucune condition
+  // de volume. On les relève ici et on lit leur nom séparément — la RLS reste seule
+  // juge : un identifiant que ce compte ne peut pas consulter (typiquement archivé,
+  // vu par un modérateur) rend « Fiche non consultable », jamais un silence, même
+  // discipline que `libelleIntervenant` ci-dessous pour l'enseignant/le modérateur.
+  let presencesHorsListe: { id: string; libelle: string }[] = []
+  if (peutGerer) {
+    const idsMembres = new Set(membres.map((m) => m.id))
+    const idsHorsListe = Object.keys(presences).filter((id) => !idsMembres.has(id))
+    const membresHorsListe = await membresBrefsParIds(idsHorsListe)
+    const parId = new Map(membresHorsListe.map((m) => [m.id, m]))
+    presencesHorsListe = idsHorsListe.map((id) => {
+      const trouve = parId.get(id)
+      return { id, libelle: trouve ? `${trouve.prenom} ${trouve.nom}` : 'Fiche non consultable' }
+    })
+  }
 
   return (
     <main className="mx-auto max-w-2xl px-6 py-10">
@@ -122,7 +144,12 @@ export default async function PageSeanceAel({ params }: { params: Promise<{ id: 
       <section className="mt-10">
         <h2 className="mb-3 text-lg font-medium">Présences</h2>
         {peutGerer ? (
-          <Pointage seanceId={seance.id} membres={membres} presencesInitiales={presences} />
+          <Pointage
+            seanceId={seance.id}
+            membres={membres}
+            presencesInitiales={presences}
+            presencesHorsListe={presencesHorsListe}
+          />
         ) : (
           <p className="text-sm text-neutral-600">
             {presentsCount} présent{presentsCount > 1 ? 's' : ''}.

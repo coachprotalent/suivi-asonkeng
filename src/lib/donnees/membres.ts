@@ -345,3 +345,50 @@ export async function membresDesAntennes(antenneIds: string[]): Promise<MembreBr
   const supabase = await clientServeur()
   return membresDesAntennesParLots(supabase, antenneIds)
 }
+
+/**
+ * Fiches brèves pour un ensemble d'identifiants — correction I1 de la ronde : le
+ * pointage d'une séance (`/ael/seances/[id]`) croise les présences déjà enregistrées
+ * (`presencesDeSeance`, qui ne filtre ni sur l'antenne ni sur l'état du membre) avec
+ * `membresDesAntennes` (qui ne rend que les membres ACTIFS des antennes ciblées). Un
+ * identifiant présent dans les présences mais absent de cette seconde liste — ajouté
+ * hors antenne (D47), archivé depuis (D48 : sa présence RESTE), ou déplacé vers une
+ * autre antenne — disparaissait donc entièrement de l'écran : ni case, ni nom, ni
+ * total. Cette fonction retrouve le nom de ces identifiants « hors liste courante ».
+ *
+ * RLS SEULE JUGE de ce qui est retourné, jamais contournée : un identifiant archivé,
+ * lu par un compte non administrateur, est simplement ABSENT du tableau rendu (même
+ * discipline que `compteurAelMembre` — jamais un nom inventé). L'appelant traite cette
+ * absence comme `libelleIntervenant` le fait déjà pour l'enseignant/le modérateur
+ * d'une séance : « Fiche non consultable », pas un silence.
+ *
+ * Découpée en lots de 500 : `.in('id', lot)` avec `id` la clé primaire ne peut jamais
+ * rendre plus de lignes que `lot.length`, donc AUCUN `.range()` n'est nécessaire ici
+ * (contrairement à `membresDesAntennesParLots`/`presencesDeSeanceParLots`, qui filtrent
+ * sur une colonne non unique) — mais un `ids` un jour plus long que `max_rows` (1000,
+ * `supabase/config.toml`) resterait quand même tronqué par PostgREST sans ce
+ * découpage, d'où sa présence malgré tout.
+ */
+export async function membresBrefsParIds(ids: string[]): Promise<MembreBref[]> {
+  if (ids.length === 0) {
+    return []
+  }
+  const supabase = await clientServeur()
+  const TAILLE_LOT = 500
+  const resultat: MembreBref[] = []
+  for (let debut = 0; debut < ids.length; debut += TAILLE_LOT) {
+    const lot = ids.slice(debut, debut + TAILLE_LOT)
+    const { data, error } = await supabase.from('membres').select('id, nom, prenom').in('id', lot)
+    if (error) {
+      throw new Error(`Lecture des fiches brèves impossible : ${error.message}`)
+    }
+    resultat.push(
+      ...(data ?? []).map((l) => ({
+        id: l.id as string,
+        nom: l.nom as string,
+        prenom: l.prenom as string,
+      })),
+    )
+  }
+  return resultat
+}

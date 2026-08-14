@@ -32,7 +32,11 @@ const admin = createClient(
 
 const MDP = `Test-${crypto.randomUUID()}`
 const IDENT_MODERATEUR = 'test.e2e.prod.ael.moderateur'
-const PREFIXE = `ZZAelCompletudeProdE2E-${crypto.randomUUID().slice(0, 8)}`
+// Préfixe de FAMILLE stable pour le nettoyage (I6 de la ronde de correction) — sur une
+// base qui sert AUSSI de production, le défaut est particulièrement coûteux ici : voir
+// `tests/e2e/ael-pointage.spec.ts` pour le raisonnement complet, même motif partout.
+const FAMILLE = 'ZZAelCompletudeProdE2E-'
+const PREFIXE = `${FAMILLE}${crypto.randomUUID().slice(0, 8)}`
 
 async function supprimerCompte(identifiant: string) {
   const { data } = await admin.from('profils').select('id').eq('identifiant', identifiant).maybeSingle()
@@ -46,14 +50,21 @@ async function supprimerCompte(identifiant: string) {
 }
 
 async function nettoyer() {
+  // Sur FAMILLE, pas sur `PREFIXE` de cette exécution (I6) : `PREFIXE` embarque un
+  // identifiant tiré À CETTE EXÉCUTION, donc un nettoyage borné à lui ne retrouve
+  // jamais ce qu'une exécution ANTÉRIEURE interrompue avant sa propre fin a laissé —
+  // antenne et séance sous un AUTRE suffixe de la même famille, EN PRODUCTION.
   const { data: jonctions } = await admin
     .from('seances_ael_antennes')
     .select('seance_id, antennes!inner(nom)')
-    .eq('antennes.nom', PREFIXE)
+    .like('antennes.nom', `${FAMILLE}%`)
   if (jonctions && jonctions.length > 0) {
     await admin.from('seances_ael').delete().in('id', jonctions.map((j) => j.seance_id))
   }
-  await admin.from('antennes').delete().eq('nom', PREFIXE)
+  const { error: erreurAntennes } = await admin.from('antennes').delete().like('nom', `${FAMILLE}%`)
+  if (erreurAntennes) {
+    throw new Error(`nettoyage des antennes de la famille impossible : ${erreurAntennes.message}`)
+  }
   await supprimerCompte(IDENT_MODERATEUR)
 }
 
@@ -104,6 +115,16 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   await nettoyer()
+  // Nettoyage vérifié par comptage (contrainte globale n°8/n°13), COUVRANT TOUT ce
+  // que ce fichier crée (I6 de la ronde de correction) : la version d'origine ne
+  // comptait que les profils, ni l'antenne ni la séance — sur une base qui sert AUSSI
+  // de production, un défaut de ce fichier-ci en particulier ne se serait jamais
+  // rattrapé tout seul.
+  const { count: comptesAntennes } = await admin
+    .from('antennes')
+    .select('id', { count: 'exact', head: true })
+    .like('nom', `${FAMILLE}%`)
+  expect(comptesAntennes).toBe(0)
   const { data: residus } = await admin.from('profils').select('id').eq('identifiant', IDENT_MODERATEUR)
   expect(residus ?? []).toHaveLength(0)
 })

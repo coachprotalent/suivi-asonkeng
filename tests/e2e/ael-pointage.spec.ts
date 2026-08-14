@@ -10,7 +10,15 @@ test.describe.configure({ mode: 'serial', timeout: 60_000 })
 
 const IDENT_MODERATEUR = 'test.e2e.ael.moderateur'
 const MDP_MODERATEUR = `Test-${crypto.randomUUID()}`
-const PREFIXE = `ZZAelPointage-${crypto.randomUUID().slice(0, 8)}`
+// Préfixe de FAMILLE stable pour le nettoyage (I6 de la ronde de correction) : une
+// exécution interrompue entre `beforeAll` et `afterAll` laisse une antenne, des
+// membres et une séance nommés sous ce préfixe FIXE, que le `nettoyer()` d'une
+// exécution ULTÉRIEURE retrouve. `PREFIXE`, lui, reste suffixé aléatoirement par
+// exécution — motif éprouvé du projet (`tests/e2e/demandes.spec.ts:24-25`,
+// `tests/e2e/arbre.spec.ts:8,44`) : la partie stable sert au balayage de
+// RATTRAPAGE, la partie aléatoire distingue les noms individuels DE CETTE exécution.
+const FAMILLE = 'ZZAelPointage-'
+const PREFIXE = `${FAMILLE}${crypto.randomUUID().slice(0, 8)}`
 const NOM_ANTENNE = `${PREFIXE}-Antenne`
 
 const admin = createClient(
@@ -48,13 +56,45 @@ async function supprimerCompte(identifiant: string) {
 
 async function nettoyer() {
   await supprimerCompte(IDENT_MODERATEUR)
+  // Rattrapage EXPLICITE de cette exécution (variables déjà connues, chemin le moins
+  // coûteux quand rien n'a été interrompu).
   if (idSeance) {
     await admin.from('presences_ael').delete().eq('seance_id', idSeance)
     await admin.from('seances_ael_antennes').delete().eq('seance_id', idSeance)
     await admin.from('seances_ael').delete().eq('id', idSeance)
   }
-  await admin.from('membres').delete().like('nom', `${PREFIXE}-%`)
-  await admin.from('antennes').delete().eq('nom', NOM_ANTENNE)
+
+  // Balayage de FAMILLE (I6) : retrouve aussi ce qu'une exécution ANTÉRIEURE
+  // interrompue avant sa propre fin a laissé — une antenne et des membres nommés sous
+  // `FAMILLE` mais avec un AUTRE suffixe que celui de cette exécution, que le bloc
+  // ci-dessus ne peut pas connaître. Séances d'abord (leur jonction, puis elles-mêmes)
+  // : `seances_ael_antennes.antenne_id` est en `on delete restrict`.
+  const { data: antennesFamille, error: erreurAntennesFamille } = await admin
+    .from('antennes')
+    .select('id')
+    .like('nom', `${FAMILLE}%`)
+  if (erreurAntennesFamille) {
+    throw new Error(`balayage des antennes de la famille impossible : ${erreurAntennesFamille.message}`)
+  }
+  const idsAntennesFamille = (antennesFamille ?? []).map((a) => a.id as string)
+  if (idsAntennesFamille.length > 0) {
+    const { data: jonctions, error: erreurJonctions } = await admin
+      .from('seances_ael_antennes')
+      .select('seance_id')
+      .in('antenne_id', idsAntennesFamille)
+    if (erreurJonctions) {
+      throw new Error(`balayage des jonctions de la famille impossible : ${erreurJonctions.message}`)
+    }
+    const idsSeancesFamille = [...new Set((jonctions ?? []).map((j) => j.seance_id as string))]
+    if (idsSeancesFamille.length > 0) {
+      await admin.from('presences_ael').delete().in('seance_id', idsSeancesFamille)
+      await admin.from('seances_ael_antennes').delete().in('seance_id', idsSeancesFamille)
+      await admin.from('seances_ael').delete().in('id', idsSeancesFamille)
+    }
+  }
+
+  await admin.from('membres').delete().like('nom', `${FAMILLE}%`)
+  await admin.from('antennes').delete().like('nom', `${FAMILLE}%`)
 }
 
 test.beforeAll(async () => {
@@ -115,15 +155,18 @@ test.afterAll(async () => {
     .select('id', { count: 'exact', head: true })
     .eq('id', idSeance)
   expect(comptesSeances).toBe(0)
+  // Comptage sur FAMILLE, pas seulement sur PREFIXE (I6) : couvre aussi ce que le
+  // balayage de rattrapage était censé nettoyer, pas seulement les entités de CETTE
+  // exécution.
   const { count: comptesMembres } = await admin
     .from('membres')
     .select('id', { count: 'exact', head: true })
-    .like('nom', `${PREFIXE}-%`)
+    .like('nom', `${FAMILLE}%`)
   expect(comptesMembres).toBe(0)
   const { count: comptesAntennes } = await admin
     .from('antennes')
     .select('id', { count: 'exact', head: true })
-    .eq('nom', NOM_ANTENNE)
+    .like('nom', `${FAMILLE}%`)
   expect(comptesAntennes).toBe(0)
   const { data: compteResiduel } = await admin
     .from('profils')
@@ -199,6 +242,42 @@ test('un modérateur tient la séance et pointe deux présences, écritures vér
     expect(await compteurAelEnBase(idMembre1)).toBe(1)
     expect(await compteurAelEnBase(idMembre2)).toBe(1)
   }).toPass()
+})
+
+// Ajouté suite à la revue des Tasks 17-18 : le compteur AEL affiché sur la fiche
+// membre (`src/app/membres/[id]/page.tsx:68`) était correct en lecture de code, mais
+// sa SEULE preuve d'affichage réel était un script Playwright JETÉ, non committé —
+// une recherche de « Compteur AEL » dans `tests/` ne rendait rien. Un compteur bloqué
+// à zéro est indiscernable d'un « rien à compter », et `seances_ael`/`presences_ael`
+// sont VIDES en production (au 2026-08-14) : un affichage figé à zéro serait
+// aujourd'hui rigoureusement conforme aux apparences. D'où les DEUX membres, dans la
+// MÊME preuve : idMembre1 (pointé par le test précédent, total réel 1, NON NUL) et
+// idEnseignant (jamais pointé, jamais visé par aucune présence de ce fichier, vrai
+// ZÉRO) — sans les deux, la preuve ne discriminerait rien. Placée ICI, entre le
+// pointage et la réversibilité : c'est la seule fenêtre du fichier où idMembre1 vaut
+// EXACTEMENT 1 en base (le test de réversibilité le fait ensuite redescendre à 0 puis
+// remonter).
+test('le compteur AEL affiché sur la fiche membre est réellement non nul après un pointage, et vraiment zéro sans historique', async ({
+  page,
+}) => {
+  await seConnecter(page, IDENT_MODERATEUR, MDP_MODERATEUR)
+
+  // Contrôle en base D'ABORD : si ce total n'était plus 1 pour une raison étrangère à
+  // ce test (ordre d'exécution changé, test précédent modifié), l'assertion d'écran
+  // qui suit ne prouverait plus ce qu'elle prétend.
+  expect(await compteurAelEnBase(idMembre1)).toBe(1)
+
+  await page.goto(`/membres/${idMembre1}`)
+  const ligneCompteurNonNul = page
+    .locator('dl > div')
+    .filter({ has: page.locator('dt', { hasText: 'Compteur AEL' }) })
+  await expect(ligneCompteurNonNul.locator('dd')).toHaveText('1')
+
+  await page.goto(`/membres/${idEnseignant}`)
+  const ligneCompteurZero = page
+    .locator('dl > div')
+    .filter({ has: page.locator('dt', { hasText: 'Compteur AEL' }) })
+  await expect(ligneCompteurZero.locator('dd')).toHaveText('0')
 })
 
 test("réversibilité (D49) : repasser à prévue préserve le pointage, le compteur suit", async ({ page }) => {

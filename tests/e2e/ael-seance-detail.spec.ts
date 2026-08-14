@@ -20,7 +20,10 @@ const MDP = `Test-${crypto.randomUUID()}`
 const IDENT_ADMIN = 'test.e2e.ael.admin'
 const IDENT_MODERATEUR = 'test.e2e.ael.moderateur'
 const IDENT_SIMPLE = 'test.e2e.ael.simple'
-const PREFIXE = `ZZAelSeanceDetail-${crypto.randomUUID().slice(0, 8)}`
+// Préfixe de FAMILLE stable pour le nettoyage (I6 de la ronde de correction) — voir
+// `tests/e2e/ael-pointage.spec.ts` pour le raisonnement complet, même motif partout.
+const FAMILLE = 'ZZAelSeanceDetail-'
+const PREFIXE = `${FAMILLE}${crypto.randomUUID().slice(0, 8)}`
 
 let idAntenne: string
 let idEnseignant: string
@@ -93,21 +96,32 @@ async function creerSeance(options: {
 }
 
 async function nettoyer() {
-  // Retrouve les séances par le NOM de l'antenne (jointure `!inner`), pas par
-  // `idAntenne` : cette variable n'est pas encore connue au premier appel, celui qui
-  // rattrape une exécution interrompue. Ordre imposé par les FK `on delete restrict` /
-  // le déclencheur de complétude (migration 20260817110000, commentaire de
-  // `seances_ael.enseignant_membre_id`) : les séances d'abord, les membres et
-  // l'antenne ensuite.
+  // Retrouve les séances par le NOM de l'antenne (jointure `!inner`), sur `FAMILLE`
+  // et non sur `PREFIXE` (I6 de la ronde de correction) : `PREFIXE` embarque un
+  // identifiant tiré À CETTE EXÉCUTION, donc un nettoyage borné à lui ne retrouve
+  // jamais ce qu'une exécution ANTÉRIEURE interrompue avant sa propre fin a laissé —
+  // antenne, membres et séance sous un AUTRE suffixe de la même famille. `FAMILLE`,
+  // stable d'une exécution à l'autre, les retrouve toutes. Ordre imposé par les FK
+  // `on delete restrict` / le déclencheur de complétude (migration 20260817110000,
+  // commentaire de `seances_ael.enseignant_membre_id`) : les séances d'abord, les
+  // membres et l'antenne ensuite.
   const { data: jonctions } = await admin
     .from('seances_ael_antennes')
     .select('seance_id, antennes!inner(nom)')
-    .eq('antennes.nom', PREFIXE)
+    .like('antennes.nom', `${FAMILLE}%`)
   if (jonctions && jonctions.length > 0) {
     await admin.from('seances_ael').delete().in('id', jonctions.map((j) => j.seance_id))
   }
-  await admin.from('membres').delete().like('nom', `${PREFIXE}-%`)
-  await admin.from('antennes').delete().eq('nom', PREFIXE)
+  await admin.from('membres').delete().like('nom', `${FAMILLE}%`)
+  // Erreur VÉRIFIÉE, pas ignorée : `seances_ael_antennes.antenne_id` est en
+  // `on delete restrict` (migration 20260817110000) — si une jonction vers une
+  // antenne de cette famille subsistait (séance non retrouvée ci-dessus, par exemple
+  // une jonction orpheline), cette suppression échouerait plutôt que de laisser une
+  // antenne de test définitivement en base de PRODUCTION sans que rien ne le dise.
+  const { error: erreurAntennes } = await admin.from('antennes').delete().like('nom', `${FAMILLE}%`)
+  if (erreurAntennes) {
+    throw new Error(`nettoyage des antennes de la famille impossible : ${erreurAntennes.message}`)
+  }
   await supprimerCompte(IDENT_ADMIN)
   await supprimerCompte(IDENT_MODERATEUR)
   await supprimerCompte(IDENT_SIMPLE)
@@ -141,16 +155,23 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   await nettoyer()
-  // Nettoyage vérifié par comptage, pas seulement par l'absence d'erreur de suppression.
+  // Nettoyage vérifié par comptage, pas seulement par l'absence d'erreur de suppression
+  // — sur FAMILLE (I6), pas seulement sur `PREFIXE` de cette exécution. Les SÉANCES ne
+  // sont pas comptées séparément ici : chaque `creerSeance` de ce fichier les lie
+  // TOUJOURS à une antenne de cette famille via `seances_ael_antennes`, laquelle est en
+  // `on delete restrict` (migration 20260817110000) — `comptesAntennes === 0` ci-dessous
+  // ne peut donc être vrai QUE si aucune jonction, et donc aucune séance de ce fichier,
+  // ne subsiste (la suppression des antennes aurait échoué bruyamment sinon, voir
+  // `nettoyer()`).
   const { count: comptesMembres } = await admin
     .from('membres')
     .select('id', { count: 'exact', head: true })
-    .like('nom', `${PREFIXE}-%`)
+    .like('nom', `${FAMILLE}%`)
   expect(comptesMembres).toBe(0)
   const { count: comptesAntennes } = await admin
     .from('antennes')
     .select('id', { count: 'exact', head: true })
-    .eq('nom', PREFIXE)
+    .like('nom', `${FAMILLE}%`)
   expect(comptesAntennes).toBe(0)
   const { data: comptesResiduels } = await admin
     .from('profils')

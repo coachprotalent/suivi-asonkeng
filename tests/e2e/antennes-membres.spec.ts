@@ -12,7 +12,10 @@ const IDENT_MODERATEUR = 'test.e2e.antennes.moderateur'
 const IDENT_SIMPLE = 'test.e2e.antennes.simple'
 const MDP_MODERATEUR = `Test-${crypto.randomUUID()}`
 const MDP_SIMPLE = `Test-${crypto.randomUUID()}`
-const PREFIXE = `ZZAntennesMembres-${crypto.randomUUID().slice(0, 8)}`
+// Préfixe de FAMILLE stable pour le nettoyage (I6 de la ronde de correction) — voir
+// `tests/e2e/ael-pointage.spec.ts` pour le raisonnement complet, même motif partout.
+const FAMILLE = 'ZZAntennesMembres-'
+const PREFIXE = `${FAMILLE}${crypto.randomUUID().slice(0, 8)}`
 const NOM_ANTENNE = `${PREFIXE}-Antenne`
 
 const admin = createClient(
@@ -70,9 +73,17 @@ async function creerCompte(identifiant: string, mdp: string, role: 'moderateur' 
 async function nettoyer() {
   await supprimerCompte(IDENT_MODERATEUR)
   await supprimerCompte(IDENT_SIMPLE)
-  await admin.from('membres').delete().like('nom', `${PREFIXE}-%`)
-  await admin.from('antennes').delete().eq('nom', NOM_ANTENNE)
-  await admin.from('antennes').delete().eq('nom', `${NOM_ANTENNE}-inactive`)
+  // Balayage de FAMILLE (I6), pas seulement `PREFIXE` de cette exécution : retrouve
+  // aussi ce qu'une exécution ANTÉRIEURE interrompue avant sa propre fin a laissé, sous
+  // un AUTRE suffixe aléatoire. LES MEMBRES D'ABORD, jamais après : `membres.antenne_id`
+  // référence `antennes` en `on delete restrict` (migration 20260812120000, vérifié dans
+  // le fichier avant d'écrire ce commentaire) — supprimer l'antenne avant ses membres
+  // encore rattachés échouerait, laissant l'antenne de test en base de PRODUCTION.
+  await admin.from('membres').delete().like('nom', `${FAMILLE}%`)
+  const { error: erreurAntennes } = await admin.from('antennes').delete().like('nom', `${FAMILLE}%`)
+  if (erreurAntennes) {
+    throw new Error(`nettoyage des antennes de la famille impossible : ${erreurAntennes.message}`)
+  }
 }
 
 test.beforeAll(async () => {

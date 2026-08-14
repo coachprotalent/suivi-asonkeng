@@ -185,6 +185,16 @@ test('une fiche archivée disparaît de l’annuaire', async ({ page }) => {
 })
 
 test("l'annuaire pagine au-delà d'une page", async ({ page }) => {
+  // Balayage de FAMILLE préventif (I6 de la ronde de correction, même défaut que
+  // `tests/e2e/ael-pointage.spec.ts` : `PREFIXE_PAGINATION` embarque un identifiant
+  // tiré À CETTE EXÉCUTION) : sans lui, une exécution antérieure interrompue APRÈS
+  // l'insertion des 51 lignes mais AVANT le `finally` ci-dessous laisserait ces lignes
+  // définitivement en base, introuvables par un run ultérieur qui tire un nouveau
+  // suffixe. Balayer AVANT d'insérer garde aussi `count === 51` (plus bas) vrai — il ne
+  // resterait sinon plus que les lignes de CETTE exécution au moment du comptage.
+  const { error: erreurBalayage } = await admin.from('membres').delete().like('nom', 'ZZPagination-%')
+  expect(erreurBalayage).toBeNull()
+
   const PREFIXE_PAGINATION = `ZZPagination-${crypto.randomUUID().slice(0, 8)}`
   const lignes = Array.from({ length: 51 }, (_, i) => ({
     nom: `${PREFIXE_PAGINATION}-${String(i).padStart(3, '0')}`,

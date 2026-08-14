@@ -14,7 +14,10 @@ const IDENT_RETABLIR = 'test.e2e.archivcpt.retablir'
 const IDENT_ADMIN_SECONDAIRE = 'test.e2e.archivcpt.admin2'
 const MDP_ADMIN = `Test-${crypto.randomUUID()}`
 const MDP_LIE = `Test-${crypto.randomUUID()}`
-const PREFIXE = `ZZArchivCpt-${crypto.randomUUID().slice(0, 8)}`
+// Préfixe de FAMILLE stable pour le nettoyage (I6 de la ronde de correction) — voir
+// `tests/e2e/ael-pointage.spec.ts` pour le raisonnement complet, même motif partout.
+const FAMILLE = 'ZZArchivCpt-'
+const PREFIXE = `${FAMILLE}${crypto.randomUUID().slice(0, 8)}`
 // Le route announcer de Next porte lui aussi `role="alert"`, toujours présent et
 // invisible : l'exclure évite un faux `toHaveCount(1)` sans rapport avec un message
 // applicatif. Même exclusion que `tests/e2e/arbre.spec.ts`.
@@ -85,7 +88,10 @@ async function nettoyer() {
   await supprimerCompte(IDENT_LIE)
   await supprimerCompte(IDENT_RETABLIR)
   await supprimerCompte(IDENT_ADMIN_SECONDAIRE)
-  await admin.from('membres').delete().like('nom', `${PREFIXE}-%`)
+  // Balayage de FAMILLE (I6), pas seulement `PREFIXE` de cette exécution : retrouve
+  // aussi ce qu'une exécution ANTÉRIEURE interrompue avant sa propre fin a laissé, sous
+  // un AUTRE suffixe aléatoire.
+  await admin.from('membres').delete().like('nom', `${FAMILLE}%`)
 }
 
 test.beforeAll(async () => {
@@ -111,7 +117,21 @@ test.beforeAll(async () => {
   if (error) throw new Error(`archivage préalable impossible : ${error.message}`)
 })
 
-test.afterAll(nettoyer)
+test.afterAll(async () => {
+  await nettoyer()
+  // Mineur traité au passage (constante globale n°8 : nettoyage vérifié par
+  // comptage) — ce fichier appelait `nettoyer()` sans jamais vérifier son effet.
+  const { count } = await admin
+    .from('membres')
+    .select('id', { count: 'exact', head: true })
+    .like('nom', `${FAMILLE}%`)
+  expect(count).toBe(0)
+  const { data: comptesResiduels } = await admin
+    .from('profils')
+    .select('id')
+    .in('identifiant', [IDENT_ADMIN, IDENT_LIE, IDENT_RETABLIR, IDENT_ADMIN_SECONDAIRE])
+  expect(comptesResiduels ?? []).toHaveLength(0)
+})
 
 async function seConnecter(page: import('@playwright/test').Page) {
   await page.goto('/connexion')

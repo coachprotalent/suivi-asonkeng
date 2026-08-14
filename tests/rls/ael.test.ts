@@ -745,22 +745,36 @@ describe('presencesDeSeance : correction de la troncature silencieuse (max_rows)
     expect(carte).toEqual(attendu)
   })
 
-  it("le tri total est déjà garanti par la clé primaire composite, sans troisième critère : aucun homonyme n'est possible sur membre_id à seance_id fixé", async () => {
-    // Contrairement à `membresDesAntennesParLots` (tri par nom/prénom, homonymes
-    // possibles), `presences_ael` a pour clé primaire `(seance_id, membre_id)`
-    // (migration 20260817110000) : à `seance_id` fixé par `.eq(...)`, `membre_id` SEUL
-    // est déjà unique dans l'ensemble filtré. Cette assertion le vérifie directement —
-    // aucune ligne dupliquée dans la réponse brute, à n'importe quelle taille de lot —
-    // plutôt que de le supposer depuis le schéma.
-    const { data, error } = await clientSimple
+  it("la clé primaire composite (seance_id, membre_id) refuse un doublon, prouvé par une insertion réelle en conflit — c'est CETTE garantie qui rend .order('membre_id') suffisant comme critère de tri total", async () => {
+    // Correction I3 de la ronde. L'ancienne version de ce test insérait 4 présences
+    // pour 4 membres distincts puis vérifiait que les 4 `membre_id` rendus étaient
+    // distincts : vrai QUEL QUE SOIT LE SCHÉMA (c'est un fait sur les données insérées
+    // par ce fichier, pas sur une garantie de la base), donc CE TEST NE POUVAIT PAS
+    // ÉCHOUER. Son commentaire prétendait pourtant « le vérifier directement plutôt
+    // que de le supposer depuis le schéma » — c'est l'inverse : la garantie EST la clé
+    // primaire, et seule une tentative réelle de VIOLER cette contrainte l'éprouve.
+    //
+    // On choisit ici de corriger le TEST plutôt que le commentaire : la garantie
+    // invoquée est bon marché à éprouver directement (les données du `beforeAll` de ce
+    // describe existent déjà), et une preuve réelle vaut mieux qu'un aveu honnête
+    // d'absence de preuve.
+    const { error } = await admin
       .from('presences_ael')
-      .select('membre_id')
+      .insert({ seance_id: idSeanceLots, membre_id: idsMembresLots[0], present: true })
+    expect(error).not.toBeNull()
+    expect(error!.code).toBe('23505')
+
+    // CONTRÔLE POSITIF : la ligne d'origine n'a pas bougé — le refus ci-dessus est bien
+    // un rejet de l'insertion en conflit, pas un effet de bord qui aurait modifié la
+    // valeur déjà en place (auquel cas la contrainte ne serait pas ce qui a été prouvé).
+    const { data: inchangee, error: erreurLecture } = await admin
+      .from('presences_ael')
+      .select('present')
       .eq('seance_id', idSeanceLots)
-      .order('membre_id')
-    expect(error).toBeNull()
-    const idsRendus = (data ?? []).map((l) => l.membre_id as string)
-    expect(new Set(idsRendus).size).toBe(idsRendus.length)
-    expect(idsRendus).toHaveLength(4)
+      .eq('membre_id', idsMembresLots[0])
+      .single()
+    expect(erreurLecture).toBeNull()
+    expect(inchangee?.present).toBe(attendu[idsMembresLots[0]])
   })
 
   it('tailleLot invalide (hors de [1, 999]) lève plutôt que de tronquer en silence ou boucler à l\'infini', async () => {
