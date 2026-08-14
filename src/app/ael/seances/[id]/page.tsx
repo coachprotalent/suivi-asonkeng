@@ -1,11 +1,13 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { formaterDateSeule } from '@/lib/format/date'
-import { seanceParId } from '@/lib/donnees/ael'
+import { seanceParId, presencesDeSeance } from '@/lib/donnees/ael'
+import { membresDesAntennes } from '@/lib/donnees/membres'
 import { estModerateurOuAdministrateur, exigerProfilActif } from '@/lib/securite/garde'
 import { annulerSeance, remettrePrevue } from './actions'
 import { BoutonTransitionEtat } from './bouton-transition-etat'
 import { FormulaireSeance } from './formulaire-seance'
+import { Pointage } from './pointage'
 
 const LIBELLE_ETAT: Record<string, string> = {
   prevue: 'Prévue',
@@ -39,7 +41,17 @@ export default async function PageSeanceAel({ params }: { params: Promise<{ id: 
     notFound()
   }
 
-  const peutGerer = await estModerateurOuAdministrateur()
+  const [peutGerer, presences] = await Promise.all([
+    estModerateurOuAdministrateur(),
+    presencesDeSeance(seance.id),
+  ])
+  // La liste complète des membres n'est chargée QUE pour qui pointe (D50 avant D29 :
+  // le rattachement d'antenne est le préalable, mais charger cette liste pour un
+  // simple consultant serait une lecture inutile — lui n'a droit qu'au compteur).
+  const membres = peutGerer
+    ? await membresDesAntennes(seance.antennes.map((antenne) => antenne.id))
+    : []
+  const presentsCount = Object.values(presences).filter(Boolean).length
 
   return (
     <main className="mx-auto max-w-2xl px-6 py-10">
@@ -106,6 +118,17 @@ export default async function PageSeanceAel({ params }: { params: Promise<{ id: 
           </form>
         </div>
       ) : null}
+
+      <section className="mt-10">
+        <h2 className="mb-3 text-lg font-medium">Présences</h2>
+        {peutGerer ? (
+          <Pointage seanceId={seance.id} membres={membres} presencesInitiales={presences} />
+        ) : (
+          <p className="text-sm text-neutral-600">
+            {presentsCount} présent{presentsCount > 1 ? 's' : ''}.
+          </p>
+        )}
+      </section>
     </main>
   )
 }

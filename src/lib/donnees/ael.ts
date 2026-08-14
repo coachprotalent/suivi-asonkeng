@@ -1,6 +1,7 @@
 import 'server-only'
 import type { EtatSeanceAel, JourSemaine } from '@/lib/domaine/ael'
 import type { MembreBref } from '@/lib/donnees/membres'
+import { presencesDeSeanceParLots } from '@/lib/donnees/presences-lots'
 import { clientServeur } from '@/lib/supabase/serveur'
 
 type LigneAntenneEmbed = { nom: string } | { nom: string }[] | null
@@ -292,22 +293,17 @@ export async function seanceParId(id: string): Promise<SeanceAelDetail | null> {
  * absent de cette carte n'a simplement pas encore été pointé — ce n'est PAS la même
  * chose qu'un `present: false` explicite (D43 : chaque case cochée écrit sa propre
  * ligne, décocher écrit `present: false`, ne rien cocher n'écrit rien du tout).
+ *
+ * PARCOURT PAR LOTS jusqu'à épuisement (`presencesDeSeanceParLots`,
+ * `src/lib/donnees/presences-lots.ts`) : voir le commentaire de ce module pour
+ * pourquoi une lecture non bornée ici est le mode de défaillance le plus grave de
+ * tout l'écran de pointage — une présence RÉELLE tronquée hors de cette carte se lit
+ * comme une case vide, et le geste normal d'un modérateur pour la « corriger »
+ * ÉCRASE le fait qui existait déjà.
  */
 export async function presencesDeSeance(seanceId: string): Promise<Record<string, boolean>> {
   const supabase = await clientServeur()
-  const { data, error } = await supabase
-    .from('presences_ael')
-    .select('membre_id, present')
-    .eq('seance_id', seanceId)
-
-  if (error) {
-    throw new Error(`Lecture des présences impossible : ${error.message}`)
-  }
-  const resultat: Record<string, boolean> = {}
-  for (const ligne of data ?? []) {
-    resultat[ligne.membre_id as string] = ligne.present as boolean
-  }
-  return resultat
+  return presencesDeSeanceParLots(supabase, seanceId)
 }
 
 /**

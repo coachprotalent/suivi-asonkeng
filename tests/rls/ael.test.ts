@@ -1,5 +1,12 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+// Import depuis `presences-lots`, PAS depuis `ael` : ce dernier porte
+// `import 'server-only'`, qui lève inconditionnellement hors du bundler Next (même
+// motif que `membres-lots` / `tests/rls/membres.test.ts`, voir l'encadré de tête de
+// `src/lib/donnees/presences-lots.ts`). Ce module séparé, sans cette garde, permet à
+// cette suite vitest (hors Next) de faire tourner EXACTEMENT le code de production
+// contre la vraie base.
+import { presencesDeSeanceParLots } from '@/lib/donnees/presences-lots'
 
 const URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const CLE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -630,6 +637,135 @@ describe('seances_ael, seances_ael_antennes, presences_ael', () => {
     expect(erreurSeconde).toBeNull()
     idsSeancesLocales.push(seconde!.id as string)
     idsSeancesTest.push(seconde!.id as string)
+  })
+})
+
+describe('presencesDeSeance : correction de la troncature silencieuse (max_rows) — le point le plus grave de l\'écran de pointage', () => {
+  // PostgREST applique un plafond `max_rows` (1000, `supabase/config.toml:18`) à TOUTE
+  // lecture, y compris sans `.range()` ni `.limit()` explicite — au-delà, il tronque
+  // SANS ERREUR. Une présence tronquée hors de la carte rendue par cette fonction
+  // n'est pas seulement absente de l'écran : elle apparaît comme une case VIDE,
+  // indiscernable d'un membre jamais pointé. C'est ce mode de défaillance — un
+  // modérateur qui « corrige » une case qu'il croit vide et écrase une présence
+  // réelle avec `present: false` — que `presencesDeSeanceParLots`
+  // (`src/lib/donnees/presences-lots.ts`) existe pour rendre impossible.
+  //
+  // Même remède que `membresDesAntennesParLots` (`tests/rls/membres.test.ts`) : une
+  // lecture réelle sur la base de production ne prouverait rien à cette échelle (le
+  // nombre de présences réelles est très inférieur à `max_rows`) — `tailleLot` est
+  // donc ramené à 2 ou 3 ici pour franchir une VRAIE frontière de page avec 4 lignes
+  // seulement, au lieu des centaines qu'il faudrait pour atteindre la valeur de
+  // production (`TAILLE_LOT_PRESENCES_SEANCE`, 500).
+  const PREFIXE_LOT = `ZZAelPresencesLots-${crypto.randomUUID().slice(0, 8)}`
+  let idSeanceLots: string
+  const idsMembresLots: string[] = []
+  // Attendu : membreId -> present, tel qu'inséré ci-dessous.
+  let attendu: Record<string, boolean>
+
+  beforeAll(async () => {
+    const { data: seance, error: erreurSeance } = await admin
+      .from('seances_ael')
+      .insert({ date: '2026-09-01' })
+      .select('id')
+      .single()
+    if (erreurSeance || !seance) throw new Error(`création de la séance impossible : ${erreurSeance?.message}`)
+    idSeanceLots = seance.id as string
+    idsSeancesTest.push(idSeanceLots)
+
+    const { data: membres, error: erreurMembres } = await admin
+      .from('membres')
+      .insert(
+        [1, 2, 3, 4].map((n) => ({ nom: `${PREFIXE_LOT}-${n}`, prenom: 'Test', etat: 'actif' })),
+      )
+      .select('id')
+    if (erreurMembres || !membres || membres.length !== 4) {
+      throw new Error(`création des membres de test impossible : ${erreurMembres?.message}`)
+    }
+    idsMembresLots.push(...membres.map((m) => m.id as string))
+
+    // Un mélange de présent/absent : la troncature d'origine ne discriminait pas les
+    // deux, mais une carte qui confondrait `present: false` explicite avec une entrée
+    // manquante serait tout aussi fausse — cette assertion couvre les deux valeurs.
+    attendu = {
+      [idsMembresLots[0]]: true,
+      [idsMembresLots[1]]: false,
+      [idsMembresLots[2]]: true,
+      [idsMembresLots[3]]: false,
+    }
+    const { error: erreurPresences } = await admin
+      .from('presences_ael')
+      .insert(
+        idsMembresLots.map((membreId) => ({
+          seance_id: idSeanceLots,
+          membre_id: membreId,
+          present: attendu[membreId],
+        })),
+      )
+    if (erreurPresences) throw new Error(`création des présences de test impossible : ${erreurPresences.message}`)
+  })
+
+  afterAll(async () => {
+    // Les enfants d'abord : `presences_ael` référence `seances_ael` et `membres` en
+    // `on delete cascade`, mais la suppression explicite garde ce fichier lisible même
+    // si l'ordre des contraintes changeait un jour (même discipline que le describe
+    // précédent).
+    await admin.from('presences_ael').delete().eq('seance_id', idSeanceLots)
+    await admin.from('seances_ael').delete().eq('id', idSeanceLots)
+    if (idsMembresLots.length > 0) {
+      await admin.from('membres').delete().in('id', idsMembresLots)
+    }
+    // Nettoyage vérifié par comptage, pas seulement par l'absence d'erreur de suppression.
+    const { count } = await admin
+      .from('membres')
+      .select('id', { count: 'exact', head: true })
+      .like('nom', `${PREFIXE_LOT}%`)
+    expect(count).toBe(0)
+  })
+
+  it("un lot dont le compte n'est pas un multiple exact franchit réellement la frontière de page (dernière page partielle)", async () => {
+    // 4 présences, tailleLot = 3 : page 1 rend 3 lignes (= tailleLot, la boucle
+    // continue), page 2 rend 1 ligne (< tailleLot, fin de parcours normale).
+    const carte = await presencesDeSeanceParLots(clientSimple, idSeanceLots, 3)
+    expect(carte).toEqual(attendu)
+  })
+
+  it('un lot dont le compte est un multiple EXACT franchit la frontière sans lever (page hors bornes rendue vide sans erreur)', async () => {
+    // 4 présences, tailleLot = 2 : page 1 rend 2 lignes (continue), page 2 rend 2
+    // lignes (continue encore, le total est atteint mais rien ne le dit encore à la
+    // boucle), page 3 démarre exactement au nombre total de lignes et sort normalement
+    // avec un lot vide — le même fait, établi par mutation contre cette base réelle
+    // pour `membresDesAntennesParLots` (I3, `tests/rls/membres.test.ts`), s'applique
+    // ici : un décalage égal au total rend une page vide, jamais `PGRST103`.
+    const carte = await presencesDeSeanceParLots(clientSimple, idSeanceLots, 2)
+    expect(carte).toEqual(attendu)
+  })
+
+  it("un lot plus grand que le total ne fait toujours qu'une seule page (comportement inchangé pour le cas courant, aucune régression)", async () => {
+    const carte = await presencesDeSeanceParLots(clientSimple, idSeanceLots, 500)
+    expect(carte).toEqual(attendu)
+  })
+
+  it("le tri total est déjà garanti par la clé primaire composite, sans troisième critère : aucun homonyme n'est possible sur membre_id à seance_id fixé", async () => {
+    // Contrairement à `membresDesAntennesParLots` (tri par nom/prénom, homonymes
+    // possibles), `presences_ael` a pour clé primaire `(seance_id, membre_id)`
+    // (migration 20260817110000) : à `seance_id` fixé par `.eq(...)`, `membre_id` SEUL
+    // est déjà unique dans l'ensemble filtré. Cette assertion le vérifie directement —
+    // aucune ligne dupliquée dans la réponse brute, à n'importe quelle taille de lot —
+    // plutôt que de le supposer depuis le schéma.
+    const { data, error } = await clientSimple
+      .from('presences_ael')
+      .select('membre_id')
+      .eq('seance_id', idSeanceLots)
+      .order('membre_id')
+    expect(error).toBeNull()
+    const idsRendus = (data ?? []).map((l) => l.membre_id as string)
+    expect(new Set(idsRendus).size).toBe(idsRendus.length)
+    expect(idsRendus).toHaveLength(4)
+  })
+
+  it('tailleLot invalide (hors de [1, 999]) lève plutôt que de tronquer en silence ou boucler à l\'infini', async () => {
+    await expect(presencesDeSeanceParLots(clientSimple, idSeanceLots, 0)).rejects.toThrow(/tailleLot invalide/)
+    await expect(presencesDeSeanceParLots(clientSimple, idSeanceLots, 1000)).rejects.toThrow(/tailleLot invalide/)
   })
 })
 
