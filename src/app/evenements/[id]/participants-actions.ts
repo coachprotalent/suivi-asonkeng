@@ -43,7 +43,7 @@ export async function ajouterParticipantMembre(
 
   const evenementId = champOuNull(donnees, 'evenementId')
   if (!evenementId) {
-    console.error('ajouterParticipantMembre : identifiant de l évènement manquant')
+    console.error("ajouterParticipantMembre : identifiant de l'évènement manquant")
     return { erreur: MESSAGE_ECHEC_PARTICIPATION }
   }
   const membreId = champOuNull(donnees, 'membreId')
@@ -61,7 +61,7 @@ export async function ajouterParticipantMembre(
   })
 
   if (error) {
-    console.error('ajouterParticipantMembre : échec de l insertion', {
+    console.error("ajouterParticipantMembre : échec de l'insertion", {
       evenementId,
       membreId,
       code: error.code,
@@ -105,7 +105,7 @@ export async function ajouterParticipantExterne(
 
   const evenementId = champOuNull(donnees, 'evenementId')
   if (!evenementId) {
-    console.error('ajouterParticipantExterne : identifiant de l évènement manquant')
+    console.error("ajouterParticipantExterne : identifiant de l'évènement manquant")
     return { erreur: MESSAGE_ECHEC_PARTICIPATION }
   }
   const nom = champOuNull(donnees, 'nom')
@@ -146,7 +146,7 @@ export async function ajouterParticipantExterne(
   })
 
   if (erreurParticipation) {
-    console.error('ajouterParticipantExterne : échec de l inscription, nettoyage du participant', {
+    console.error("ajouterParticipantExterne : échec de l'inscription, nettoyage du participant", {
       evenementId,
       participantExterneId: externe.id,
       code: erreurParticipation.code,
@@ -162,7 +162,7 @@ export async function ajouterParticipantExterne(
       .is('converti_en_membre_id', null)
       .is('classe_le', null)
     if (erreurNettoyage) {
-      console.error('ajouterParticipantExterne : le participant orphelin n a PAS été supprimé', {
+      console.error("ajouterParticipantExterne : le participant orphelin n'a PAS été supprimé", {
         participantExterneId: externe.id,
         code: erreurNettoyage.code,
         message: erreurNettoyage.message,
