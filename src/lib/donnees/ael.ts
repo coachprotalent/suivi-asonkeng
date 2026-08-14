@@ -121,18 +121,69 @@ function nomsAntennesDeJonction(valeur: unknown): string[] {
   return lignes.map((l) => nomAntenneObligatoire(l.antennes, 'listerSeances'))
 }
 
-/** Toutes les séances, à venir et passées, les plus récentes en premier. */
+/**
+ * Plafond de lecture de `listerSeances`, strictement sous `max_rows` de PostgREST
+ * (1000, `supabase/config.toml:18`) — même discipline que `TAILLE_LOT_MEMBRES_ANTENNE`
+ * (`src/lib/donnees/membres-lots.ts`). Voir le commentaire de `listerSeances` pour la
+ * raison de choisir « échouer bruyamment » ici plutôt que de paginer.
+ */
+const LIMITE_LECTURE_SEANCES_AEL = 999
+
+/**
+ * Toutes les séances, à venir et passées, les plus récentes en premier.
+ *
+ * SANS BORNE, PostgREST tronquerait silencieusement au-delà de `max_rows` (1000,
+ * `supabase/config.toml:18`) — exactement le défaut déjà corrigé une fois sur
+ * `membresDesAntennes` (`src/lib/donnees/membres-lots.ts`), où une troncature ne
+ * produisait pas une page incomplète mais des membres qu'on ne pouvait plus marquer
+ * présents. Décision reportée par la Task 12 aux écrans qui consomment cette lecture
+ * (Task 13, registre de la phase) : tranchée ici.
+ *
+ * FORME RETENUE : échouer bruyamment plutôt que paginer par lots. `membresDesAntennes`
+ * paginait parce qu'un de ses DEUX appelants (le pointage multi-antennes, Task 16)
+ * n'a structurellement AUCUN plafond naturel par appel — la pagination y rend la
+ * troncature IMPOSSIBLE plutôt que seulement détectable sous une hypothèse de plafond
+ * qui pourrait se tromper. `listerSeances` n'a qu'un seul appelant, `/ael/seances`
+ * (Task 14), qui affiche une liste complète sans notion de plafond « normal » — il n'y
+ * a ici ni fenêtre de dates ni filtre par antenne à qui adosser une pagination motivée.
+ * Choisir de paginer silencieusement produirait donc une liste toujours « complète en
+ * apparence », en train de grossir sans qu'aucun signal ne prévienne qu'elle a dépassé
+ * ce qu'un navigateur peut raisonnablement afficher d'un bloc — un problème de produit
+ * différent de celui que la pagination de `membresDesAntennes` résout. Échouer
+ * bruyamment rend le dépassement VISIBLE le jour où il se produit, et force alors une
+ * vraie décision de produit (borner par date, paginer l'écran) plutôt que de la
+ * repousser silencieusement à un futur relecteur de code.
+ *
+ * `{ count: 'exact' }` rend le compte TOTAL de lignes correspondantes, indépendamment
+ * de `.range()` — vérifié contre la base réelle avant d'écrire ce commentaire (et non
+ * supposé) : un `.range(0, 0)` sur une table de 3 lignes rend `data.length === 1` mais
+ * `count === 3`. Si `count` dépasse la page effectivement lue, la lecture est
+ * incomplète et cette fonction LÈVE plutôt que de rendre une liste tronquée comme
+ * complète — au 2026-08-14, `seances_ael` est vide en production, donc cette garde
+ * n'a encore jamais eu l'occasion de se déclencher pour de vrai.
+ */
 export async function listerSeances(): Promise<SeanceAelListe[]> {
   const supabase = await clientServeur()
-  const { data, error } = await supabase
+  const { data, error, count } = await supabase
     .from('seances_ael')
-    .select('id, date, heure, theme, etat, seances_ael_antennes(antennes(nom))')
+    .select('id, date, heure, theme, etat, seances_ael_antennes(antennes(nom))', {
+      count: 'exact',
+    })
     .order('date', { ascending: false })
+    .range(0, LIMITE_LECTURE_SEANCES_AEL - 1)
 
   if (error) {
     throw new Error(`Lecture des séances AEL impossible : ${error.message}`)
   }
-  return (data ?? []).map((l) => ({
+  const lignes = data ?? []
+  if (count !== null && count > lignes.length) {
+    throw new Error(
+      `listerSeances : ${count} séances existent, au-delà du plafond de lecture de ` +
+        `${LIMITE_LECTURE_SEANCES_AEL} lignes — cette fonction refuse de rendre une ` +
+        'liste tronquée comme complète. Il faut désormais borner ou paginer cet écran.',
+    )
+  }
+  return lignes.map((l) => ({
     id: l.id as string,
     date: l.date as string,
     heure: l.heure as string | null,

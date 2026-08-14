@@ -7,6 +7,7 @@ export default async function PageTableauDeBord() {
   const profil = await exigerProfilActif()
   const roles = await rolesDuProfil(profil.id)
   const estAdmin = roles.includes('administrateur')
+  const estModerateur = roles.includes('moderateur')
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-12">
@@ -34,6 +35,11 @@ export default async function PageTableauDeBord() {
         <Link href="/demandes" className="underline underline-offset-4">
           Voir les demandes
         </Link>
+        {estAdmin || estModerateur ? (
+          <Link href="/ael/seances" className="underline underline-offset-4">
+            Gérer l&apos;AEL
+          </Link>
+        ) : null}
         {estAdmin ? (
           <Link href="/antennes" className="underline underline-offset-4">
             Gérer les antennes
