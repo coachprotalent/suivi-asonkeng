@@ -547,7 +547,19 @@ test(
     await page.goto('/demandes')
     const ligne = page.locator('li', { hasText: `${PREFIXE_MEMBRE}-rejet` })
     await ligne.getByLabel('Motif de rejet').fill('Doublon suspecté')
+    // M12 — le rejet porte désormais une confirmation, et Playwright REJETTE d'office toute
+    // boîte non gérée : sans ce branchement, le clic serait annulé et le test échouerait sur
+    // l'assertion suivante sans dire pourquoi. Le message est asséré, ce qui en fait le
+    // CONTRÔLE POSITIF de l'existence de la confirmation — retirée par inadvertance, elle
+    // laisserait sinon ce test parfaitement vert.
+    let texteConfirmation: string | null = null
+    page.once('dialog', async (dialogue) => {
+      texteConfirmation = dialogue.message()
+      await dialogue.accept()
+    })
     await ligne.getByRole('button', { name: 'Rejeter' }).click()
+    // Origine `demande_suivi` ici : c'est la branche NON définitive du message.
+    await expect.poll(() => texteConfirmation).toContain('notifié avec le motif saisi')
     await expect(page.getByText(`${PREFIXE_MEMBRE}-rejet`)).toHaveCount(0)
     await deconnecter(page)
 
@@ -611,6 +623,10 @@ test(
 
     // La soumission légitime est CAPTURÉE PUIS AVORTÉE : le rejet ne doit avoir
     // lieu qu'une fois, par la requête falsifiée ci-dessous.
+    // M12 — la confirmation doit être ACCEPTÉE pour que la requête parte et soit capturable ;
+    // rejetée (comportement par défaut de Playwright), aucune requête n'existerait et
+    // `capturerRequeteAbandonnee` attendrait dans le vide.
+    page.once('dialog', (dialogue) => dialogue.accept())
     const requete = await capturerRequeteAbandonnee(page, '**/demandes', () =>
       ligne.getByRole('button', { name: 'Rejeter' }).click(),
     )

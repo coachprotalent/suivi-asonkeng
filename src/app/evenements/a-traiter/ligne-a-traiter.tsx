@@ -1,6 +1,7 @@
 'use client'
 
 import { useActionState, useId, useState } from 'react'
+import { formaterDateSeule } from '@/lib/format/date'
 import type { ATraiterLigne } from '@/lib/donnees/evenements-lots'
 import type { MembreBref } from '@/lib/donnees/membres'
 import { SelecteurMembre } from '@/app/membres/selecteur-membre'
@@ -81,9 +82,17 @@ export function LigneATraiter({
     <li className="py-5">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <span className="font-medium">{nomComplet}</span>
+        {/* M1 DE LA REVUE FINALE — `premiereExpression` était sélectionné, typé et mappé
+            mais RENDU PAR AUCUN ÉCRAN, et le commentaire qui exclut `cree_le` de la lecture
+            (« une colonne lue que personne ne rend est une colonne morte ») justifiait sa
+            présence par un affichage qui n'existait pas. Il existe désormais — et c'est
+            l'information que cette file de travail réclamait le plus : depuis QUAND cette
+            personne attend. C'est aussi la clé de tri de la liste, ce qui rend l'ordre
+            affiché lisible au lieu d'être subi. */}
         <span className="text-sm text-neutral-500">
           {participant.evenementsConcernes} évènement
-          {participant.evenementsConcernes > 1 ? 's' : ''}
+          {participant.evenementsConcernes > 1 ? 's' : ''} · depuis le{' '}
+          {formaterDateSeule(participant.premiereExpression)}
         </span>
       </div>
       <p className="mt-1 text-sm text-neutral-600">

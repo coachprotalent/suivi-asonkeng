@@ -339,6 +339,16 @@ export async function validerDemandeNouvellePersonne(donnees: FormData): Promise
   await marquerNouvelleDemandeLue(admin, demandeId)
 
   revalidatePath('/demandes')
+  // M2 DE LA REVUE FINALE — CETTE ACTION FAIT PASSER UNE FICHE À `actif`, et ne revalidait
+  // que `/demandes`. Deux conséquences visibles ailleurs, et non revalidées :
+  //  - la fiche entre dans l'ANNUAIRE (`/membres` ne liste que les actifs) ;
+  //  - pour l'origine `conversion_participant`, son historique de séminaire devient lisible
+  //    de TOUS les comptes actifs (seconde branche de `seminaires_assistes`) — sa fiche
+  //    change donc pour tout le monde, pas seulement pour l'administrateur.
+  // Dette héritée de la 2b, mais la phase 4 a posé exactement ces deux revalidations partout
+  // ailleurs pour ce motif : les laisser absentes ICI était l'incohérence.
+  revalidatePath('/membres')
+  revalidatePath('/membres/[id]', 'page')
   return { erreur: null }
 }
 

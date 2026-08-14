@@ -62,9 +62,27 @@ export function LigneDemandeAdmin({
     appeler(validerDemandeRattachement, donnees)
   }
 
+  /**
+   * M12 DE LA REVUE FINALE — LE REJET N'AVAIT AUCUNE CONFIRMATION, contrairement à tous les
+   * autres gestes irréversibles du projet (suppression d'une participation, annulation d'une
+   * demande, et désormais la conversion elle-même).
+   *
+   * ET IL EST PARTICULIÈREMENT DÉFINITIF POUR UNE ORIGINE : rejeter une demande
+   * `conversion_participant` laisse la fiche `en_attente` POUR TOUJOURS — la validation exige
+   * `etat = 'en_attente'` mais aussi une demande `en_attente`, l'annulation est refusée, et
+   * le membre n'est pas supprimable. Aucun geste de l'application ne rattrape ce cas. La
+   * confirmation le DIT, au lieu de le laisser découvrir après coup.
+   */
   function soumettreRejet(evenement: FormEvent<HTMLFormElement>) {
     evenement.preventDefault()
-    appeler(rejeterDemande, new FormData(evenement.currentTarget))
+    const formulaire = evenement.currentTarget
+    const nomComplet = `${demande.membrePrenom ?? ''} ${demande.membreNom ?? ''}`.trim()
+    const consequence =
+      demande.origine === 'conversion_participant'
+        ? "Cette personne a été convertie depuis un évènement : sa fiche restera « en attente » DÉFINITIVEMENT, et aucun geste de l'application ne pourra plus l'activer ni la supprimer."
+        : 'Le demandeur en sera notifié avec le motif saisi.'
+    if (!window.confirm(`Rejeter la demande concernant ${nomComplet} ? ${consequence}`)) return
+    appeler(rejeterDemande, new FormData(formulaire))
   }
 
   return (
