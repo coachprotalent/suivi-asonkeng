@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { totalObligatoire, verifierTaillePage, type PageLue } from './pagination'
 
 /**
  * PAS de `import 'server-only'` ici, à la différence de `src/lib/donnees/evenements.ts` —
@@ -37,7 +38,11 @@ export const TAILLE_PAGE_EVENEMENTS = 25
 export const TAILLE_PAGE_PARTICIPANTS = 50
 export const TAILLE_PAGE_A_TRAITER = 25
 
-export type PageLue<T> = { lignes: T[]; total: number }
+// `PageLue`, `verifierTaillePage` et `totalObligatoire` vivent désormais dans
+// `pagination.ts` (I4 de la revue finale) : la lecture paginée des demandes s'en sert aussi,
+// et recopier les garde-fous aurait créé deux vérités. RÉEXPORTÉ pour ne rien casser chez
+// les appelants existants (`evenements.ts`, `/evenements/[id]/page.tsx`, la suite RLS).
+export type { PageLue }
 
 export type EvenementListe = {
   id: string
@@ -77,32 +82,9 @@ export type ATraiterLigne = {
   evenementsConcernes: number
 }
 
-/**
- * Validation LEVÉE, pas bornée en silence — même discipline et même raison que
- * `membresDesAntennesParLots` : borner (`Math.min(taille, 999)`) masquerait un appel erroné
- * derrière un comportement différent de celui demandé. Une taille >= `max_rows` ferait
- * tronquer la page PAR POSTGREST LUI-MÊME, et la fonction rendrait une page tronquée comme
- * complète. Une taille <= 0 produirait un `range` structurellement invalide.
- */
-function verifierTaillePage(taillePage: number, fonction: string): void {
-  if (!Number.isInteger(taillePage) || taillePage < 1 || taillePage >= 1000) {
-    throw new Error(
-      `${fonction} : taillePage invalide (${taillePage}) — doit être un entier compris entre 1 et 999 inclus (max_rows PostgREST = 1000, supabase/config.toml:18).`,
-    )
-  }
-}
-
-/**
- * `count` absent de la réponse PostgREST : retomber sur la longueur de la page serait un
- * MENSONGE — l'écran annoncerait « 25 événements » pour une base qui en compte mille, et la
- * pagination s'arrêterait à la première page. Même discipline que `listerMembres`.
- */
-function totalObligatoire(count: number | null, fonction: string): number {
-  if (count === null) {
-    throw new Error(`${fonction} : comptage absent de la réponse PostgREST.`)
-  }
-  return count
-}
+// Les deux docblocks qui vivaient ici (validation LEVÉE et non bornée en silence ; `count`
+// absent = mensonge) ont suivi leurs fonctions dans `pagination.ts` — les laisser ici
+// aurait produit exactement ce que ce projet traque : une légende sans code sous elle.
 
 type LigneMembreEmbed = { id: string; nom: string; prenom: string } | { id: string; nom: string; prenom: string }[] | null
 type ExterneEmbed = {
