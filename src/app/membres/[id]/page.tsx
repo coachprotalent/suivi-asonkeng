@@ -240,9 +240,11 @@ export default async function PageFicheMembre({
         {/*
           Lue depuis la vue `seminaires_assistes` (D70, D71), la SEULE vue du projet en
           `security_invoker = false` : elle contourne délibérément la RLS de
-          `participations`, fermée à l'administrateur et au modérateur, pour rendre le seul
-          FAIT de la participation lisible de tout compte actif (§4.4, D2, D16). Elle ne
-          contourne PAS la RLS de `membres` — `prive.peut_lire_membre` (D72) la réimpose.
+          `participations` — OUVERTE au seul administrateur et modérateur (policy
+          `participations_lecture`, `prive.est_moderateur_ou_admin()`), FERMÉE à tout
+          compte ordinaire — pour rendre le seul FAIT de la participation lisible de tout
+          compte actif (§4.4, D2, D16). Elle ne contourne PAS la RLS de `membres` —
+          `prive.peut_lire_membre` (D72) la réimpose.
 
           L'HISTORIQUE DES CONVERTIS EST COMPRIS : la seconde branche de la vue projette les
           participations d'externes convertis sur `converti_en_membre_id`, résolu à la
