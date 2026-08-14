@@ -16,8 +16,21 @@ const CLE_SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY!
 // tout compte de test qu'une exécution interrompue aurait laissé derrière elle.
 const MDP = `Test-${crypto.randomUUID()}`
 const IDENT_SIMPLE = 'test.membres.simple'
-const NOM_MEMBRE_ACTIF = `ZZTest-actif-${crypto.randomUUID().slice(0, 8)}`
-const NOM_MEMBRE_ARCHIVE = `ZZTest-archive-${crypto.randomUUID().slice(0, 8)}`
+// IMPORTANT 3 de la revue de la Task 19 — LE BALAYAGE I6 S'ETAIT ARRÊTÉ À `tests/e2e/`.
+// Les tests RLS écrivent dans LES MÊMES TABLES, sur la MÊME base (qui sert aussi de
+// production), et reproduisaient le défaut à l'identique : le préfixe balayé embarquait
+// l'UUID tiré PAR EXÉCUTION, si bien qu'une suite interrompue laissait des lignes que
+// PLUS RIEN ne retrouvait — ni cette exécution-ci, qui ne connaît que son propre
+// suffixe, ni aucune autre. Même remède que I6 : une partie STABLE (`FAMILLE_*`) sert au
+// balayage de RATTRAPAGE, la partie aléatoire ne distingue plus que les noms individuels
+// de CETTE exécution.
+// `ZZTest-` (avec le tiret) ne matche PAS `ZZTestLots-` ni `ZZTestHomonymes-`, qui ont
+// leurs propres familles plus bas — vérifié, ce n'est pas une coïncidence heureuse : la
+// famille sert aussi à ne PAS emporter le décor d'un autre bloc.
+const FAMILLE_MEMBRE = 'ZZTest-'
+const FAMILLE_ANTENNE_INTRUS = 'ZZAntenne-'
+const NOM_MEMBRE_ACTIF = `${FAMILLE_MEMBRE}actif-${crypto.randomUUID().slice(0, 8)}`
+const NOM_MEMBRE_ARCHIVE = `${FAMILLE_MEMBRE}archive-${crypto.randomUUID().slice(0, 8)}`
 
 const admin = createClient(URL, CLE_SERVICE, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -43,7 +56,32 @@ async function supprimerCompte(identifiant: string) {
 }
 
 async function supprimerMembres() {
-  await admin.from('membres').delete().in('nom', [NOM_MEMBRE_ACTIF, NOM_MEMBRE_ARCHIVE])
+  // Balayage de FAMILLE, pas `.in()` sur les deux noms de CETTE exécution : ce dernier
+  // ne pouvait rien rattraper d'une exécution antérieure interrompue. Emporte aussi
+  // `ZZTest-intrus-…`, qu'une régression de la RLS d'écriture laisserait derrière elle —
+  // et que rien ne balayait.
+  await admin.from('membres').delete().like('nom', `${FAMILLE_MEMBRE}%`)
+  // Même chose pour l'antenne forgée du test « un compte simple ne peut pas créer une
+  // antenne » : elle n'est censée n'exister jamais, donc personne ne la nettoyait.
+  //
+  // Les fiches RATTACHÉES à ces antennes sont retirées D'ABORD : `membres.antenne_id` est
+  // en `on delete restrict` (migration 20260812120000), donc une seule fiche rattachée
+  // ferait ÉCHOUER la suppression de l'antenne — et, sans le comptage ajouté plus bas,
+  // elle aurait échoué EN SILENCE. Ce n'est pas une précaution théorique : le contrôle
+  // positif du balayage (un résidu réellement planté, puis la suite relancée) a fait
+  // tomber ce cas exact avant qu'il ne soit corrigé ici.
+  const { data: antennesIntrus, error: erreurAntennesIntrus } = await admin
+    .from('antennes')
+    .select('id')
+    .like('nom', `${FAMILLE_ANTENNE_INTRUS}%`)
+  if (erreurAntennesIntrus) {
+    throw new Error(`balayage des antennes intruses impossible : ${erreurAntennesIntrus.message}`)
+  }
+  const idsAntennesIntrus = (antennesIntrus ?? []).map((a) => a.id as string)
+  if (idsAntennesIntrus.length > 0) {
+    await admin.from('membres').delete().in('antenne_id', idsAntennesIntrus)
+  }
+  await admin.from('antennes').delete().like('nom', `${FAMILLE_ANTENNE_INTRUS}%`)
 }
 
 beforeAll(async () => {
@@ -93,6 +131,20 @@ beforeAll(async () => {
 afterAll(async () => {
   await supprimerMembres()
   await supprimerCompte(IDENT_SIMPLE)
+
+  // Nettoyage VÉRIFIÉ PAR COMPTAGE, sur la FAMILLE.
+  const { count: membresRestants, error: erreurMembres } = await admin
+    .from('membres')
+    .select('id', { count: 'exact', head: true })
+    .like('nom', `${FAMILLE_MEMBRE}%`)
+  expect(erreurMembres).toBeNull()
+  expect(membresRestants).toBe(0)
+  const { count: antennesRestantes, error: erreurAntennes } = await admin
+    .from('antennes')
+    .select('id', { count: 'exact', head: true })
+    .like('nom', `${FAMILLE_ANTENNE_INTRUS}%`)
+  expect(erreurAntennes).toBeNull()
+  expect(antennesRestantes).toBe(0)
 })
 
 describe('lecture des membres', () => {
@@ -128,7 +180,7 @@ describe('lecture des membres', () => {
 
 describe('écriture refusée par défaut', () => {
   it("un utilisateur ne peut pas créer de membre", async () => {
-    const nomIntrus = `ZZTest-intrus-${crypto.randomUUID().slice(0, 8)}`
+    const nomIntrus = `${FAMILLE_MEMBRE}intrus-${crypto.randomUUID().slice(0, 8)}`
     const { error } = await clientSimple
       .from('membres')
       .insert({ nom: nomIntrus, prenom: 'Intrus' })
@@ -160,7 +212,7 @@ describe('écriture refusée par défaut', () => {
   })
 
   it('un utilisateur ne peut pas créer une antenne', async () => {
-    const nomIntrus = `ZZAntenne-${crypto.randomUUID().slice(0, 8)}`
+    const nomIntrus = `${FAMILLE_ANTENNE_INTRUS}${crypto.randomUUID().slice(0, 8)}`
     const { error } = await clientSimple
       .from('antennes')
       .insert({ nom: nomIntrus, pays: 'Nulle part' })
@@ -216,7 +268,10 @@ describe('membresDesAntennes : correction de la troncature silencieuse (max_rows
   // production (`TAILLE_LOT_MEMBRES_ANTENNE`, 500) — exactement la seconde option
   // proposée pour cette preuve, `membresDesAntennesParLots` acceptant `tailleLot` en
   // paramètre pour ça.
-  const PREFIXE_LOT = `ZZTestLots-${crypto.randomUUID().slice(0, 8)}`
+  // Famille stable (IMPORTANT 3) : le balayage de rattrapage de cet `afterAll` ne
+  // dépendait que du suffixe de l'exécution courante.
+  const FAMILLE_LOT = 'ZZTestLots-'
+  const PREFIXE_LOT = `${FAMILLE_LOT}${crypto.randomUUID().slice(0, 8)}`
   const NOMS_LOT = [`${PREFIXE_LOT}-1`, `${PREFIXE_LOT}-2`, `${PREFIXE_LOT}-3`, `${PREFIXE_LOT}-4`]
   let idAntenneLots: string
 
@@ -266,12 +321,23 @@ describe('membresDesAntennes : correction de la troncature silencieuse (max_rows
     if (erreurSuppressionAntenne) {
       throw new Error(`nettoyage de l'antenne de test impossible : ${erreurSuppressionAntenne.message}`)
     }
-    // Nettoyage vérifié par comptage, pas seulement par l'absence d'erreur de suppression.
+    // Rattrapage de FAMILLE : membres puis antennes (ordre imposé par
+    // `antenne_id … on delete restrict`), pour ce qu'une exécution ANTÉRIEURE
+    // interrompue aurait laissé sous un autre suffixe.
+    await admin.from('membres').delete().like('nom', `${FAMILLE_LOT}%`)
+    await admin.from('antennes').delete().like('nom', `${FAMILLE_LOT}%`)
+    // Nettoyage vérifié par comptage, sur la FAMILLE et non sur le seul préfixe de
+    // cette exécution.
     const { count } = await admin
       .from('membres')
       .select('id', { count: 'exact', head: true })
-      .like('nom', `${PREFIXE_LOT}%`)
+      .like('nom', `${FAMILLE_LOT}%`)
     expect(count).toBe(0)
+    const { count: antennesLot } = await admin
+      .from('antennes')
+      .select('id', { count: 'exact', head: true })
+      .like('nom', `${FAMILLE_LOT}%`)
+    expect(antennesLot).toBe(0)
   })
 
   it("un lot dont le compte n'est pas un multiple exact franchit réellement la frontière de page (dernière page partielle)", async () => {
@@ -337,7 +403,9 @@ describe('membresDesAntennesParLots : tri total malgré des homonymes exacts (I2
   // (membres-lots.ts) rend le tri total ; ce bloc l'éprouve par une insertion réelle,
   // pas par lecture du code. Bloc dédié, séparé de celui ci-dessus, pour ne pas fausser
   // les assertions d'égalité stricte qui portent déjà sur les 4 fiches `NOMS_LOT`.
-  const NOM_HOMONYME = `ZZTestHomonymes-${crypto.randomUUID().slice(0, 8)}`
+  // Famille stable (IMPORTANT 3), même raison que le bloc précédent.
+  const FAMILLE_HOMONYME = 'ZZTestHomonymes-'
+  const NOM_HOMONYME = `${FAMILLE_HOMONYME}${crypto.randomUUID().slice(0, 8)}`
   let idAntenneHomonymes: string
   let idHomonyme1: string
   let idHomonyme2: string
@@ -390,12 +458,22 @@ describe('membresDesAntennesParLots : tri total malgré des homonymes exacts (I2
     if (erreurSuppressionAntenne) {
       throw new Error(`nettoyage de l'antenne homonymes impossible : ${erreurSuppressionAntenne.message}`)
     }
-    // Nettoyage vérifié par comptage, pas seulement par l'absence d'erreur de suppression.
+    // Rattrapage de FAMILLE (IMPORTANT 3) : membres puis antennes, pour ce qu'une
+    // exécution ANTÉRIEURE interrompue aurait laissé sous un autre suffixe.
+    await admin.from('membres').delete().like('nom', `${FAMILLE_HOMONYME}%`)
+    await admin.from('antennes').delete().like('nom', `${FAMILLE_HOMONYME}%`)
+    // Nettoyage vérifié par comptage, sur la FAMILLE et non sur le seul nom de cette
+    // exécution.
     const { count } = await admin
       .from('membres')
       .select('id', { count: 'exact', head: true })
-      .like('nom', `${NOM_HOMONYME}%`)
+      .like('nom', `${FAMILLE_HOMONYME}%`)
     expect(count).toBe(0)
+    const { count: antennesHomonymes } = await admin
+      .from('antennes')
+      .select('id', { count: 'exact', head: true })
+      .like('nom', `${FAMILLE_HOMONYME}%`)
+    expect(antennesHomonymes).toBe(0)
   })
 
   it('deux homonymes exacts à cheval sur une frontière de page sont rendus une fois chacun, jamais deux fois, jamais aucun', async () => {

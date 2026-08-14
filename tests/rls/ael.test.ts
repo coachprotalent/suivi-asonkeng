@@ -14,7 +14,17 @@ const CLE_SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
 const MDP = `Test-${crypto.randomUUID()}`
 const IDENT = 'test.rls.ael.simple'
-const PREFIXE = `ZZAel-${crypto.randomUUID().slice(0, 8)}`
+// IMPORTANT 3 de la revue de la Task 19 — LE BALAYAGE I6 S'ETAIT ARRÊTÉ À `tests/e2e/`,
+// et le CAS LE PLUS GRAVE était dans ce fichier même, celui que la ronde précédente avait
+// modifié : l'`afterAll` assertait `toEqual([])` sur un balayage GLOBAL `'ZZAel-%'` alors
+// que la suppression, elle, était bornée à `NOM_ANTENNE`, c'est-à-dire à l'exécution
+// COURANTE. UNE SEULE interruption passée rendait donc la suite RLS ROUGE EN PERMANENCE,
+// sur un résidu qu'elle était incapable de nettoyer elle-même — le contraire d'un
+// rattrapage. Suppression ET assertion portent désormais sur la MÊME famille.
+// `ZZAel-` exige le tiret littéral : il ne peut pas ramasser `ZZAelPointage-`,
+// `ZZAelPreuves-` ni `ZZAelPresencesLots-`, qui ont chacun leur propre famille.
+const FAMILLE = 'ZZAel-'
+const PREFIXE = `${FAMILLE}${crypto.randomUUID().slice(0, 8)}`
 const NOM_ANTENNE = `${PREFIXE}-Antenne`
 
 const admin = createClient(URL, CLE_SERVICE, {
@@ -46,9 +56,112 @@ async function supprimerCompte(identifiant: string) {
   if (orphelin) await admin.auth.admin.deleteUser(orphelin.id)
 }
 
+/**
+ * Balayage de FAMILLE (IMPORTANT 3) : retrouve ce qu'une exécution ANTÉRIEURE
+ * interrompue a laissé sous `FAMILLE` mais avec un AUTRE suffixe — que les variables de
+ * CETTE exécution ne peuvent pas connaître. L'ordre n'est pas cosmétique : `presences_ael`
+ * et `seances_ael_antennes` avant `seances_ael` ; `calendriers_ael` avant `antennes`
+ * (`antenne_id` en `on delete restrict`) ; et les membres avant les antennes
+ * (`membres.antenne_id`, même contrainte).
+ */
+async function nettoyerFamille() {
+  const { data: antennesFamille, error: erreurAntennes } = await admin
+    .from('antennes')
+    .select('id')
+    .like('nom', `${FAMILLE}%`)
+  if (erreurAntennes) throw new Error(`balayage des antennes de la famille impossible : ${erreurAntennes.message}`)
+  const idsAntennes = (antennesFamille ?? []).map((a) => a.id as string)
+
+  const { data: membresFamille, error: erreurMembres } = await admin
+    .from('membres')
+    .select('id')
+    .like('nom', `${FAMILLE}%`)
+  if (erreurMembres) throw new Error(`balayage des membres de la famille impossible : ${erreurMembres.message}`)
+  const idsMembres = (membresFamille ?? []).map((m) => m.id as string)
+
+  const idsSeances = new Set<string>()
+  let idsCalendriers: string[] = []
+  if (idsAntennes.length > 0) {
+    const { data: calendriers, error: erreurCalendriers } = await admin
+      .from('calendriers_ael')
+      .select('id')
+      .in('antenne_id', idsAntennes)
+    if (erreurCalendriers) {
+      throw new Error(`balayage des calendriers de la famille impossible : ${erreurCalendriers.message}`)
+    }
+    idsCalendriers = (calendriers ?? []).map((c) => c.id as string)
+
+    const { data: jonctions, error: erreurJonctions } = await admin
+      .from('seances_ael_antennes')
+      .select('seance_id')
+      .in('antenne_id', idsAntennes)
+    if (erreurJonctions) {
+      throw new Error(`balayage des jonctions de la famille impossible : ${erreurJonctions.message}`)
+    }
+    for (const j of jonctions ?? []) idsSeances.add(j.seance_id as string)
+  }
+  if (idsCalendriers.length > 0) {
+    // Séances GÉNÉRÉES : elles portent le `calendrier_id` d'un créneau de la famille,
+    // même quand aucune jonction d'antenne ne les rattache.
+    const { data: parCalendrier, error: erreurParCalendrier } = await admin
+      .from('seances_ael')
+      .select('id')
+      .in('calendrier_id', idsCalendriers)
+    if (erreurParCalendrier) {
+      throw new Error(`balayage des séances par calendrier impossible : ${erreurParCalendrier.message}`)
+    }
+    for (const ligne of parCalendrier ?? []) idsSeances.add(ligne.id as string)
+  }
+  if (idsMembres.length > 0) {
+    for (const colonne of ['enseignant_membre_id', 'moderateur_membre_id']) {
+      const { data: parIntervenant, error: erreurParIntervenant } = await admin
+        .from('seances_ael')
+        .select('id')
+        .in(colonne, idsMembres)
+      if (erreurParIntervenant) {
+        throw new Error(`balayage des séances par ${colonne} impossible : ${erreurParIntervenant.message}`)
+      }
+      for (const ligne of parIntervenant ?? []) idsSeances.add(ligne.id as string)
+    }
+    const { data: parPresence, error: erreurParPresence } = await admin
+      .from('presences_ael')
+      .select('seance_id')
+      .in('membre_id', idsMembres)
+    if (erreurParPresence) {
+      throw new Error(`balayage des présences de la famille impossible : ${erreurParPresence.message}`)
+    }
+    for (const ligne of parPresence ?? []) idsSeances.add(ligne.seance_id as string)
+  }
+
+  if (idsSeances.size > 0) {
+    const ids = [...idsSeances]
+    await admin.from('presences_ael').delete().in('seance_id', ids)
+    await admin.from('seances_ael_antennes').delete().in('seance_id', ids)
+    const { error: erreurSeances } = await admin.from('seances_ael').delete().in('id', ids)
+    if (erreurSeances) throw new Error(`nettoyage des séances de la famille impossible : ${erreurSeances.message}`)
+  }
+  if (idsAntennes.length > 0) {
+    const { error: erreurSuppressionCalendriers } = await admin
+      .from('calendriers_ael')
+      .delete()
+      .in('antenne_id', idsAntennes)
+    if (erreurSuppressionCalendriers) {
+      throw new Error(`nettoyage des calendriers de la famille impossible : ${erreurSuppressionCalendriers.message}`)
+    }
+  }
+  await admin.from('membres').delete().like('nom', `${FAMILLE}%`)
+  const { error: erreurSuppressionAntennes } = await admin
+    .from('antennes')
+    .delete()
+    .like('nom', `${FAMILLE}%`)
+  if (erreurSuppressionAntennes) {
+    throw new Error(`nettoyage des antennes de la famille impossible : ${erreurSuppressionAntennes.message}`)
+  }
+}
+
 beforeAll(async () => {
   await supprimerCompte(IDENT)
-  await admin.from('antennes').delete().eq('nom', NOM_ANTENNE)
+  await nettoyerFamille()
 
   // Une antenne fraîchement créée n'a AUCUNE ligne dans `calendriers_ael` : l'amorçage
   // de la migration est un `insert ... select` ponctuel, joué UNE SEULE FOIS au moment
@@ -160,20 +273,30 @@ afterAll(async () => {
   // base de PRODUCTION, visible dans le sélecteur d'antenne d'une fiche membre, dans
   // `/ael/calendriers` et dans le formulaire de séance manuelle. On supprime donc les
   // créneaux AVANT l'antenne, et on vérifie l'erreur de la suppression de l'antenne.
-  await admin.from('calendriers_ael').delete().eq('antenne_id', idAntenne)
-  const { error: erreurAntenne } = await admin.from('antennes').delete().eq('nom', NOM_ANTENNE)
-  expect(erreurAntenne).toBeNull()
+  // Balayage de FAMILLE, et non plus la seule antenne de CETTE exécution : c'est le
+  // point exact de l'IMPORTANT 3 — l'assertion plus bas portait déjà sur la famille, la
+  // suppression non, et l'écart rendait la suite définitivement rouge après une seule
+  // interruption.
+  await nettoyerFamille()
   await supprimerCompte(IDENT)
 
-  // Nettoyage VÉRIFIÉ PAR COMPTAGE (contrainte globale n°13) : plus aucune antenne ni
-  // aucun membre portant le préfixe de cette suite ne subsiste. `ZZAel-%` exige le tiret
-  // littéral et ne peut donc pas ramasser les préfixes des suites e2e
-  // (`ZZAelPointage-`, `ZZAelPreuves-`). Un reste ici signale une fuite dans un des
-  // blocs `afterAll` internes, pas un faux positif.
-  const { data: antennesRestantes } = await admin.from('antennes').select('id').like('nom', 'ZZAel-%')
-  expect(antennesRestantes).toEqual([])
-  const { data: membresRestants } = await admin.from('membres').select('id').like('nom', `${PREFIXE}-%`)
-  expect(membresRestants).toEqual([])
+  // Nettoyage VÉRIFIÉ PAR COMPTAGE (contrainte globale n°13), sur la MÊME famille que la
+  // suppression ci-dessus — c'est cette concordance qui manquait. `ZZAel-%` exige le
+  // tiret littéral et ne peut donc pas ramasser les préfixes voisins (`ZZAelPointage-`,
+  // `ZZAelPreuves-`, `ZZAelPresencesLots-`). Un reste ici signale une fuite dans un des
+  // blocs `afterAll` internes, pas un faux positif hérité d'une exécution passée.
+  const { count: antennesRestantes, error: erreurAntennesRestantes } = await admin
+    .from('antennes')
+    .select('id', { count: 'exact', head: true })
+    .like('nom', `${FAMILLE}%`)
+  expect(erreurAntennesRestantes).toBeNull()
+  expect(antennesRestantes).toBe(0)
+  const { count: membresRestants, error: erreurMembresRestants } = await admin
+    .from('membres')
+    .select('id', { count: 'exact', head: true })
+    .like('nom', `${FAMILLE}%`)
+  expect(erreurMembresRestants).toBeNull()
+  expect(membresRestants).toBe(0)
 })
 
 describe('calendriers_ael', () => {
@@ -656,7 +779,10 @@ describe('presencesDeSeance : correction de la troncature silencieuse (max_rows)
   // donc ramené à 2 ou 3 ici pour franchir une VRAIE frontière de page avec 4 lignes
   // seulement, au lieu des centaines qu'il faudrait pour atteindre la valeur de
   // production (`TAILLE_LOT_PRESENCES_SEANCE`, 500).
-  const PREFIXE_LOT = `ZZAelPresencesLots-${crypto.randomUUID().slice(0, 8)}`
+  // Famille stable (IMPORTANT 3) : le balayage de rattrapage ne dépendait que du
+  // suffixe de l'exécution courante.
+  const FAMILLE_LOT = 'ZZAelPresencesLots-'
+  const PREFIXE_LOT = `${FAMILLE_LOT}${crypto.randomUUID().slice(0, 8)}`
   let idSeanceLots: string
   const idsMembresLots: string[] = []
   // Attendu : membreId -> present, tel qu'inséré ci-dessous.
@@ -714,11 +840,20 @@ describe('presencesDeSeance : correction de la troncature silencieuse (max_rows)
     if (idsMembresLots.length > 0) {
       await admin.from('membres').delete().in('id', idsMembresLots)
     }
-    // Nettoyage vérifié par comptage, pas seulement par l'absence d'erreur de suppression.
+    // Rattrapage de FAMILLE : les présences d'abord (elles référencent les membres),
+    // puis les membres eux-mêmes.
+    const { data: residus } = await admin.from('membres').select('id').like('nom', `${FAMILLE_LOT}%`)
+    const idsResidus = (residus ?? []).map((m) => m.id as string)
+    if (idsResidus.length > 0) {
+      await admin.from('presences_ael').delete().in('membre_id', idsResidus)
+      await admin.from('membres').delete().in('id', idsResidus)
+    }
+    // Nettoyage vérifié par comptage, sur la FAMILLE et non sur le seul préfixe de cette
+    // exécution.
     const { count } = await admin
       .from('membres')
       .select('id', { count: 'exact', head: true })
-      .like('nom', `${PREFIXE_LOT}%`)
+      .like('nom', `${FAMILLE_LOT}%`)
     expect(count).toBe(0)
   })
 

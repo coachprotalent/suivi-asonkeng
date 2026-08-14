@@ -10,8 +10,16 @@ const CLE_SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY!
 // tout compte de test qu'une exécution interrompue aurait laissé derrière elle.
 const MDP = `Test-${crypto.randomUUID()}`
 const IDENT = 'test.statuts.simple'
-const NOM_ACTIF = `ZZStatut-actif-${crypto.randomUUID().slice(0, 8)}`
-const NOM_ARCHIVE = `ZZStatut-archive-${crypto.randomUUID().slice(0, 8)}`
+// IMPORTANT 3 de la revue de la Task 19 — LE BALAYAGE I6 S'ETAIT ARRÊTÉ À `tests/e2e/`.
+// Les tests RLS écrivent dans LES MÊMES TABLES, sur la MÊME base (qui sert aussi de
+// production), et reproduisaient le défaut à l'identique : le préfixe balayé embarquait
+// l'UUID tiré PAR EXÉCUTION, si bien qu'une suite interrompue laissait des lignes que
+// PLUS RIEN ne retrouvait. Une partie STABLE (`FAMILLE_*`) sert désormais au balayage de
+// RATTRAPAGE, la partie aléatoire ne distinguant plus que les noms de CETTE exécution.
+const FAMILLE_MEMBRE = 'ZZStatut-'
+const FAMILLE_STATUT_INTRUS = 'ZZIntrus-'
+const NOM_ACTIF = `${FAMILLE_MEMBRE}actif-${crypto.randomUUID().slice(0, 8)}`
+const NOM_ARCHIVE = `${FAMILLE_MEMBRE}archive-${crypto.randomUUID().slice(0, 8)}`
 
 const admin = createClient(URL, CLE_SERVICE, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -39,7 +47,13 @@ async function supprimerCompte(identifiant: string) {
 
 async function supprimerMembres() {
   // `membre_statuts` et `journal_statuts` sont en `on delete cascade` sur `membres`.
-  await admin.from('membres').delete().in('nom', [NOM_ACTIF, NOM_ARCHIVE])
+  // Balayage de FAMILLE, pas `.in()` sur les deux noms de CETTE exécution : ce dernier
+  // ne pouvait rien rattraper d'une exécution antérieure interrompue.
+  await admin.from('membres').delete().like('nom', `${FAMILLE_MEMBRE}%`)
+  // Le statut forgé du test « un utilisateur ne peut pas créer un statut au catalogue »
+  // n'est censé n'exister jamais, donc rien ne le balayait : une régression de la RLS
+  // d'écriture le laisserait DANS LE CATALOGUE DE PRODUCTION, visible de tous.
+  await admin.from('statuts').delete().like('libelle', `${FAMILLE_STATUT_INTRUS}%`)
 }
 
 beforeAll(async () => {
@@ -112,6 +126,20 @@ beforeAll(async () => {
 afterAll(async () => {
   await supprimerMembres()
   await supprimerCompte(IDENT)
+
+  // Nettoyage VÉRIFIÉ PAR COMPTAGE, sur la FAMILLE.
+  const { count: membresRestants, error: erreurMembres } = await admin
+    .from('membres')
+    .select('id', { count: 'exact', head: true })
+    .like('nom', `${FAMILLE_MEMBRE}%`)
+  expect(erreurMembres).toBeNull()
+  expect(membresRestants).toBe(0)
+  const { count: statutsRestants, error: erreurStatuts } = await admin
+    .from('statuts')
+    .select('id', { count: 'exact', head: true })
+    .like('libelle', `${FAMILLE_STATUT_INTRUS}%`)
+  expect(erreurStatuts).toBeNull()
+  expect(statutsRestants).toBe(0)
 })
 
 describe('lecture du catalogue', () => {
@@ -205,7 +233,7 @@ describe('écriture refusée par défaut', () => {
   })
 
   it('un utilisateur ne peut pas créer un statut au catalogue', async () => {
-    const libelleIntrus = `ZZIntrus-${crypto.randomUUID().slice(0, 8)}`
+    const libelleIntrus = `${FAMILLE_STATUT_INTRUS}${crypto.randomUUID().slice(0, 8)}`
     const { data: groupe } = await admin.from('groupes_statut').select('id').limit(1).single()
     const { error } = await clientSimple
       .from('statuts')

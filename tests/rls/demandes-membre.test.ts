@@ -14,7 +14,16 @@ const PREFIXE = 'test.rls.demandes.'
 const IDENT_ADMIN = `${PREFIXE}admin`
 const IDENT_DEMANDEUR_A = `${PREFIXE}demandeura`
 const IDENT_DEMANDEUR_B = `${PREFIXE}demandeurb`
-const PREFIXE_MEMBRE = `ZZDemandes-${crypto.randomUUID().slice(0, 8)}`
+// IMPORTANT 3 de la revue de la Task 19 — LE BALAYAGE I6 S'ETAIT ARRÊTÉ À `tests/e2e/`.
+// Les tests RLS écrivent dans LES MÊMES TABLES, sur la MÊME base (qui sert aussi de
+// production), et reproduisaient le défaut à l'identique : le préfixe balayé embarquait
+// l'UUID tiré PAR EXÉCUTION, si bien qu'une suite interrompue laissait des lignes que
+// PLUS RIEN ne retrouvait — ni cette exécution-ci, qui ne connaît que son propre
+// suffixe, ni aucune autre. Même remède que I6 : une partie STABLE (`FAMILLE_*`) sert au
+// balayage de RATTRAPAGE, la partie aléatoire ne distingue plus que les noms individuels
+// de CETTE exécution.
+const FAMILLE_MEMBRE = 'ZZDemandes-'
+const PREFIXE_MEMBRE = `${FAMILLE_MEMBRE}${crypto.randomUUID().slice(0, 8)}`
 
 let idAdmin: string
 let idDemandeurA: string
@@ -67,7 +76,7 @@ async function connecter(identifiant: string): Promise<SupabaseClient> {
 }
 
 beforeAll(async () => {
-  await admin.from('membres').delete().like('nom', `${PREFIXE_MEMBRE}%`)
+  await admin.from('membres').delete().like('nom', `${FAMILLE_MEMBRE}%`)
   await supprimerCompte(IDENT_ADMIN)
   await supprimerCompte(IDENT_DEMANDEUR_A)
   await supprimerCompte(IDENT_DEMANDEUR_B)
@@ -152,10 +161,20 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  await admin.from('membres').delete().like('nom', `${PREFIXE_MEMBRE}%`)
+  await admin.from('membres').delete().like('nom', `${FAMILLE_MEMBRE}%`)
   await supprimerCompte(IDENT_ADMIN)
   await supprimerCompte(IDENT_DEMANDEUR_A)
   await supprimerCompte(IDENT_DEMANDEUR_B)
+
+  // Nettoyage VÉRIFIÉ PAR COMPTAGE (contrainte globale de la phase), sur la FAMILLE et
+  // non sur le préfixe de cette exécution : « j'ai lancé une suppression » ne répond pas
+  // à « reste-t-il quelque chose ? ».
+  const { count, error } = await admin
+    .from('membres')
+    .select('id', { count: 'exact', head: true })
+    .like('nom', `${FAMILLE_MEMBRE}%`)
+  expect(error).toBeNull()
+  expect(count).toBe(0)
 })
 
 describe('politique demandes_membre_lecture', () => {

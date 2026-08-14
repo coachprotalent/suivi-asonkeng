@@ -14,7 +14,16 @@ const CLE_SERVICE = process.env.SUPABASE_SERVICE_ROLE_KEY!
 
 const MDP = `Test-${crypto.randomUUID()}`
 const PREFIXE_COMPTE = 'test.rls.archcpt.'
-const PREFIXE_MEMBRE = `ZZArchivageComptes-${crypto.randomUUID().slice(0, 8)}`
+// IMPORTANT 3 de la revue de la Task 19 — LE BALAYAGE I6 S'ETAIT ARRÊTÉ À `tests/e2e/`.
+// Les tests RLS écrivent dans LES MÊMES TABLES, sur la MÊME base (qui sert aussi de
+// production), et reproduisaient le défaut à l'identique : le préfixe balayé embarquait
+// l'UUID tiré PAR EXÉCUTION, si bien qu'une suite interrompue laissait des lignes que
+// PLUS RIEN ne retrouvait — ni cette exécution-ci, qui ne connaît que son propre
+// suffixe, ni aucune autre. Même remède que I6 : une partie STABLE (`FAMILLE_*`) sert au
+// balayage de RATTRAPAGE, la partie aléatoire ne distingue plus que les noms individuels
+// de CETTE exécution.
+const FAMILLE_MEMBRE = 'ZZArchivageComptes-'
+const PREFIXE_MEMBRE = `${FAMILLE_MEMBRE}${crypto.randomUUID().slice(0, 8)}`
 
 const IDENT_ORDINAIRE = `${PREFIXE_COMPTE}ordinaire`
 const IDENT_ADMIN_A = `${PREFIXE_COMPTE}admina`
@@ -82,7 +91,7 @@ async function nettoyer() {
   for (const identifiant of [IDENT_ORDINAIRE, IDENT_ADMIN_A, IDENT_ADMIN_B, IDENT_DEJA_INACTIF]) {
     await supprimerCompte(identifiant)
   }
-  await admin.from('membres').delete().like('nom', `${PREFIXE_MEMBRE}-%`)
+  await admin.from('membres').delete().like('nom', `${FAMILLE_MEMBRE}%`)
 }
 
 // MÊME PIÈGE, MÊME MESURE que `tests/rls/comptes.test.ts` (Task 12 de la phase 1c) :
@@ -133,7 +142,16 @@ beforeAll(async () => {
   }
 })
 
-afterAll(nettoyer)
+afterAll(async () => {
+  await nettoyer()
+  // Nettoyage VÉRIFIÉ PAR COMPTAGE, sur la FAMILLE (voir l'encadré du préfixe).
+  const { count, error } = await admin
+    .from('membres')
+    .select('id', { count: 'exact', head: true })
+    .like('nom', `${FAMILLE_MEMBRE}%`)
+  expect(error).toBeNull()
+  expect(count).toBe(0)
+})
 
 describe('archivage désactive le compte lié (D24)', () => {
   it('désactive le compte ordinaire actif lié à la fiche archivée', async () => {
