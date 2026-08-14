@@ -1,7 +1,12 @@
 import Link from 'next/link'
 import { notFound, redirect } from 'next/navigation'
-import { evenementParId, participantsDEvenement, typesEvenementActifs } from '@/lib/donnees/evenements'
-import { TAILLE_PAGE_PARTICIPANTS } from '@/lib/donnees/evenements-lots'
+import {
+  evenementParId,
+  participantsDEvenement,
+  totalParticipantsDEvenement,
+  typesEvenementActifs,
+} from '@/lib/donnees/evenements'
+import { TAILLE_PAGE_PARTICIPANTS, type PageLue, type ParticipantLigne } from '@/lib/donnees/evenements-lots'
 import { formaterDateSeule } from '@/lib/format/date'
 import { estModerateurOuAdministrateur, exigerProfilActif } from '@/lib/securite/garde'
 import { FormulaireEvenement } from '../formulaire-evenement'
@@ -38,36 +43,37 @@ export default async function PageEvenement({
   // afficher laisserait ce zéro se glisser un jour dans un compteur ou dans un « aucun
   // participant » — c'est le pendant exact du mode de défaillance de D71, dans l'autre
   // sens : une lecture VIDÉE PAR LA RLS ne doit jamais être affichée comme un résultat.
-  const participants = peutGerer
-    ? await participantsDEvenement(evenement.id, pageParticipants)
-    : null
-
-  // BORNE HAUTE DE LA PAGINATION — une adresse pointant au-delà de la dernière page réelle
-  // est un signet périmé (ou une liste qui a rétréci depuis une suppression, D78). Sans ce
-  // garde, `/evenements/<id>?pageParticipants=99` sur un évènement de cent participants
-  // affiche EN MÊME TEMPS trois vérités contradictoires : « Participants (100) » en
-  // en-tête (qui lit `participants.total`), « Aucun participant enregistré. » dans le corps
-  // (`participants.lignes` étant vide), et « Page 99 sur 2 » au pied. Le message du corps
-  // devient littéralement faux.
-  // Ce défaut a déjà été payé et corrigé une fois par ce projet, sur l'annuaire : voir
-  // `src/app/membres/page.tsx`, lignes 51-62, dont le commentaire le décrit mot pour mot.
-  // On corrige l'adresse vers la dernière page réelle plutôt que de laisser tenir ce
-  // mensonge.
+  //
+  // BORNE HAUTE DE LA PAGINATION — EN DEUX TEMPS, ET C'EST ESSENTIEL, PAS UN CHOIX DE
+  // STYLE. Une adresse pointant au-delà de la dernière page réelle est un signet périmé
+  // (ou une liste qui a rétréci depuis une suppression, D78) : sans garde, l'écran
+  // afficherait EN MÊME TEMPS trois vérités contradictoires (total, « aucun participant »,
+  // et un numéro de page qui n'existe pas). Le brief décalquait le patron de
+  // `src/app/membres/page.tsx` — lire la page DEMANDÉE, PUIS comparer au nombre réel de
+  // pages — mais CE PATRON PLANTE ICI : constaté À L'EXÉCUTION (vérification manuelle de
+  // cette tâche, `?pageParticipants=99` sur un évènement à deux participants), PostgREST
+  // renvoie une erreur 416 (`Requested range not satisfiable`, marqueur `PGRST103`) dès que
+  // le décalage demandé dépasse le nombre de lignes présentes — CE QUI EST TOUJOURS LE CAS
+  // quand ce garde doit justement se déclencher. La page ne redirigeait pas : elle
+  // PLANTAIT. `compterParticipantsDEvenement` lit le compte SEUL (décalage 0, toujours
+  // satisfiable) pour calculer `pagesParticipants` et décider d'une redirection AVANT tout
+  // `.range()`, qui n'est alors plus jamais hors bornes.
   // PAS DE BOUCLE POSSIBLE : `pagesParticipants` vaut toujours au moins 1, et la cible de
   // la redirection est `pagesParticipants` lui-même — la page rechargée aura donc
   // `pageParticipants === pagesParticipants`, qui ne redéclenche pas la condition.
   // HORS DE TOUT `try` : `redirect()` lève une exception de contrôle Next.js que ce fichier
   // ne doit pas intercepter (aucun `try` dans ce fichier — vérifié).
-  // Sous `if (participants)` : hors modérateur et administrateur, rien n'est lu, il n'y a
+  // Sous `if (peutGerer)` : hors modérateur et administrateur, rien n'est lu, il n'y a
   // aucune page à borner, et rediriger serait divulguer qu'il y a des participants.
+  let participants: PageLue<ParticipantLigne> | null = null
   let pagesParticipants = 1
-  if (participants) {
-    pagesParticipants = Math.max(
-      1, Math.ceil(participants.total / TAILLE_PAGE_PARTICIPANTS),
-    )
+  if (peutGerer) {
+    const totalParticipants = await totalParticipantsDEvenement(evenement.id)
+    pagesParticipants = Math.max(1, Math.ceil(totalParticipants / TAILLE_PAGE_PARTICIPANTS))
     if (pageParticipants > pagesParticipants) {
       redirect(`/evenements/${evenement.id}?pageParticipants=${pagesParticipants}`)
     }
+    participants = await participantsDEvenement(evenement.id, pageParticipants)
   }
 
   const lignes: Array<[string, string | null]> = [

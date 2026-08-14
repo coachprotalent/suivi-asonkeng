@@ -183,6 +183,37 @@ export async function evenementsParPage(
 }
 
 /**
+ * Nombre TOTAL de participants d'un évènement, sans lire aucune ligne — sert à BORNER la
+ * pagination AVANT de lire une page, jamais après.
+ *
+ * DÉFAUT RÉEL DÉCOUVERT PAR L'EXÉCUTION à la vérification manuelle de la Task 19
+ * (`?pageParticipants=99` sur un évènement à deux participants), absent du brief : lire la
+ * page DEMANDÉE avant de connaître le total — le patron que `src/app/membres/page.tsx`
+ * emploie et que ce brief décalquait — fait renvoyer par PostgREST une erreur 416
+ * (`Requested range not satisfiable`, marqueur `PGRST103`) dès que le décalage demandé
+ * dépasse le nombre de lignes réellement présentes, CE QUI EST TOUJOURS LE CAS quand le
+ * garde de borne haute doit justement se déclencher. Résultat observé : la page ne
+ * redirigeait pas, elle PLANTAIT (digest Next.js), pour l'exemple même que l'étape de
+ * vérification du brief demande de rejouer. Cette fonction lit le compte seul (décalage 0,
+ * toujours satisfiable) pour calculer `pagesParticipants` et décider d'une redirection
+ * AVANT tout `.range()`, qui n'est alors plus jamais hors bornes.
+ */
+export async function compterParticipantsDEvenement(
+  supabase: SupabaseClient,
+  evenementId: string,
+): Promise<number> {
+  const { count, error } = await supabase
+    .from('participations')
+    .select('id', { count: 'exact', head: true })
+    .eq('evenement_id', evenementId)
+
+  if (error) {
+    throw new Error(`Comptage des participants impossible : ${error.message}`)
+  }
+  return totalObligatoire(count, 'compterParticipantsDEvenement')
+}
+
+/**
  * Une page de participants d'un événement, membres et externes confondus, dans l'ordre de
  * saisie. Tri TOTAL : `saisi_le` puis `id` — `saisi_le` n'est PAS unique, un ajout en lot
  * partage la même valeur par défaut `now()` à la milliseconde près.
