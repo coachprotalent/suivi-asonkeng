@@ -1,0 +1,111 @@
+import Link from 'next/link'
+import { notFound } from 'next/navigation'
+import { formaterDateSeule } from '@/lib/format/date'
+import { seanceParId } from '@/lib/donnees/ael'
+import { estModerateurOuAdministrateur, exigerProfilActif } from '@/lib/securite/garde'
+import { annulerSeance, remettrePrevue } from './actions'
+import { BoutonTransitionEtat } from './bouton-transition-etat'
+import { FormulaireSeance } from './formulaire-seance'
+
+const LIBELLE_ETAT: Record<string, string> = {
+  prevue: 'Prévue',
+  tenue: 'Tenue',
+  annulee: 'Annulée',
+}
+
+/**
+ * Nom d'un intervenant pour l'affichage en LECTURE SEULE. Distingue « aucun » de
+ * « désigné mais non consultable » (même discipline que `ChampIntervenant`, côté
+ * édition) : un `xxxMembreId` non nul dont l'embed est `null` signifie une fiche que la
+ * RLS cache à ce compte, pas une absence d'intervenant.
+ */
+function libelleIntervenant(
+  membreId: string | null,
+  membre: { nom: string; prenom: string } | null,
+  libre: string | null,
+): string | null {
+  if (membreId) {
+    return membre ? `${membre.prenom} ${membre.nom}` : 'Fiche non consultable'
+  }
+  return libre
+}
+
+export default async function PageSeanceAel({ params }: { params: Promise<{ id: string }> }) {
+  await exigerProfilActif()
+  const { id } = await params
+
+  const seance = await seanceParId(id)
+  if (!seance) {
+    notFound()
+  }
+
+  const peutGerer = await estModerateurOuAdministrateur()
+
+  return (
+    <main className="mx-auto max-w-2xl px-6 py-10">
+      <Link href="/ael/seances" className="text-sm underline underline-offset-4">
+        Retour aux séances
+      </Link>
+      <header className="mt-4 mb-8">
+        <h1 className="text-2xl font-semibold">{formaterDateSeule(seance.date)}</h1>
+        <p className="text-sm text-neutral-500">
+          {seance.antennes.map((a) => a.nom).join(', ') || 'Aucune antenne'} · {LIBELLE_ETAT[seance.etat]}
+        </p>
+      </header>
+
+      {peutGerer ? (
+        <FormulaireSeance seance={seance} />
+      ) : (
+        <dl className="divide-y divide-neutral-200">
+          <div className="flex justify-between gap-4 py-3">
+            <dt className="text-sm text-neutral-500">Thème</dt>
+            <dd className="text-sm">{seance.theme ?? '—'}</dd>
+          </div>
+          <div className="flex justify-between gap-4 py-3">
+            <dt className="text-sm text-neutral-500">Enseignant</dt>
+            <dd className="text-sm">
+              {libelleIntervenant(seance.enseignantMembreId, seance.enseignantMembre, seance.enseignantLibre) ?? '—'}
+            </dd>
+          </div>
+          <div className="flex justify-between gap-4 py-3">
+            <dt className="text-sm text-neutral-500">Modérateur</dt>
+            <dd className="text-sm">
+              {libelleIntervenant(seance.moderateurMembreId, seance.moderateurMembre, seance.moderateurLibre) ?? '—'}
+            </dd>
+          </div>
+        </dl>
+      )}
+
+      {peutGerer && seance.etat !== 'prevue' ? (
+        <div className="mt-6 flex flex-wrap gap-4">
+          {seance.etat === 'tenue' ? (
+            <form action={remettrePrevue}>
+              <input type="hidden" name="seanceId" value={seance.id} />
+              <BoutonTransitionEtat
+                libelle="Repasser à prévue"
+                message={
+                  'Repasser cette séance à « prévue » ?\n\n' +
+                  "Le pointage déjà fait n'est pas effacé : il redevient visible si vous " +
+                  'remarquez la séance « tenue » ensuite.'
+                }
+              />
+            </form>
+          ) : null}
+        </div>
+      ) : null}
+
+      {peutGerer && seance.etat !== 'annulee' ? (
+        <div className="mt-2 flex flex-wrap gap-4">
+          <form action={annulerSeance}>
+            <input type="hidden" name="seanceId" value={seance.id} />
+            <BoutonTransitionEtat
+              libelle="Annuler la séance"
+              message="Annuler cette séance ? Le pointage déjà fait, s'il y en a, n'est pas effacé."
+              accent
+            />
+          </form>
+        </div>
+      ) : null}
+    </main>
+  )
+}
