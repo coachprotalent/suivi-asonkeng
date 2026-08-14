@@ -57,6 +57,8 @@ export type ParticipantLigne = {
   externeNom: string | null
   externePrenom: string | null
   externeConvertiEnMembreId: string | null
+  externeClasseLe: string | null
+  externeMotifClassement: string | null
   desirMentoratAcademique: boolean
   desirSuiviSpirituel: boolean
   desirCpeap: boolean
@@ -103,10 +105,15 @@ function totalObligatoire(count: number | null, fonction: string): number {
 }
 
 type LigneMembreEmbed = { id: string; nom: string; prenom: string } | { id: string; nom: string; prenom: string }[] | null
-type LigneExterneEmbed =
-  | { id: string; nom: string; prenom: string | null; converti_en_membre_id: string | null }
-  | { id: string; nom: string; prenom: string | null; converti_en_membre_id: string | null }[]
-  | null
+type ExterneEmbed = {
+  id: string
+  nom: string
+  prenom: string | null
+  converti_en_membre_id: string | null
+  classe_le: string | null
+  motif_classement: string | null
+}
+type LigneExterneEmbed = ExterneEmbed | ExterneEmbed[] | null
 
 function premier<T>(valeur: T | T[] | null): T | null {
   if (!valeur) return null
@@ -118,25 +125,48 @@ function premier<T>(valeur: T | T[] | null): T | null {
 // détaillé de `.select(...)` qu'à partir d'un littéral au sens de TypeScript, et une
 // concaténation widen le type en `string` générique, faisant retomber tout le résultat sur
 // `GenericStringError`. Constaté en phase 3 (`COLONNES_SEANCE_DETAIL`).
+// `classe_le` et `motif_classement` (I3 de la revue finale) : sans eux, un participant classé
+// sans suite DISPARAISSAIT de toute l'application. La fiche d'évènement affichait « · converti »
+// mais jamais « · classé », et le motif — rendu OBLIGATOIRE et validé deux fois — n'était
+// affiché NULLE PART : une colonne en écriture seule. Lus par le même embed que
+// `converti_en_membre_id`, donc sous la même RLS, et rendus sous le même `if (peutGerer)`.
 const COLONNES_PARTICIPANT =
   'id, membre_id, participant_externe_id, desir_mentorat_academique, desir_suivi_spirituel, \
 desir_cpeap, note, saisi_le, \
 membres(id, nom, prenom), \
-participants_externes(id, nom, prenom, converti_en_membre_id)'
+participants_externes(id, nom, prenom, converti_en_membre_id, classe_le, motif_classement)'
+
+/**
+ * LE filtre des événements, appliqué PAR CETTE FONCTION aux deux requêtes qui en ont besoin
+ * — la lecture paginée et son comptage de repli.
+ *
+ * CORRECTION D'UN COMMENTAIRE QUI DÉCRIVAIT L'INVERSE DU CODE (revue du dernier lot). Le
+ * docblock de `compterEvenements` invoquait `compterMembresActifs` comme modèle et affirmait
+ * que les filtres étaient « CENTRALISÉS […] pour qu'un futur filtre ajouté à l'une ne puisse
+ * pas diverger de l'autre en silence » — alors que `membres.ts:99-110` applique bel et bien
+ * une FONCTION UNIQUE aux deux requêtes, tandis qu'ici le filtre était RÉÉCRIT de part et
+ * d'autre. Le code avait exactement la forme que son commentaire disait interdire. C'est le
+ * commentaire qui avait raison : la centralisation est faite ici, pour de bon.
+ *
+ * `any` pour la même raison que `filtrerMembresActifs` : les surcharges de `PostgrestBuilder`
+ * ne se recomposent pas à travers une fonction générique. Sans conséquence sur la sûreté —
+ * l'appelant retype `data` champ par champ.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function filtrerEvenements(requete: any, typeId?: string) {
+  return typeId ? requete.eq('type_id', typeId) : requete
+}
 
 /**
  * Compte les événements visibles par l'appelant, même filtre que `evenementsParPage` mais
  * sans `range` — sert de REPLI quand PostgREST refuse la requête paginée elle-même
- * (`PGRST103`, voir `evenementsParPage`), cas où son `count` normal n'arrive jamais. Motif
- * de `compterMembresActifs` (membres.ts) : filtres CENTRALISÉS avec la lecture paginée, pour
- * qu'un futur filtre ajouté à l'une ne puisse pas diverger de l'autre en silence.
+ * (`PGRST103`, voir `evenementsParPage`), cas où son `count` normal n'arrive jamais.
  */
 async function compterEvenements(supabase: SupabaseClient, typeId?: string): Promise<number> {
-  let requete = supabase.from('evenements').select('id', { count: 'exact', head: true })
-  if (typeId) {
-    requete = requete.eq('type_id', typeId)
-  }
-  const { count, error } = await requete
+  const { count, error } = await filtrerEvenements(
+    supabase.from('evenements').select('id', { count: 'exact', head: true }),
+    typeId,
+  )
   if (error) {
     throw new Error(`Comptage des événements impossible : ${error.message}`)
   }
@@ -170,18 +200,15 @@ export async function evenementsParPage(
   const page = Math.max(1, options?.page ?? 1)
   const debut = (page - 1) * taillePage
 
-  let requete = supabase
-    .from('evenements')
-    .select('id, titre, date_debut, date_fin, lieu, types_evenement(libelle)', { count: 'exact' })
-    .order('date_debut', { ascending: false })
-    .order('id')
-    .range(debut, debut + taillePage - 1)
-
-  if (options?.typeId) {
-    requete = requete.eq('type_id', options.typeId)
-  }
-
-  const { data, error, count } = await requete
+  const { data, error, count } = await filtrerEvenements(
+    supabase
+      .from('evenements')
+      .select('id, titre, date_debut, date_fin, lieu, types_evenement(libelle)', { count: 'exact' })
+      .order('date_debut', { ascending: false })
+      .order('id')
+      .range(debut, debut + taillePage - 1),
+    options?.typeId,
+  )
   if (error) {
     if (error.code === 'PGRST103') {
       const total = await compterEvenements(supabase, options?.typeId)
@@ -193,7 +220,12 @@ export async function evenementsParPage(
   }
 
   return {
-    lignes: (data ?? []).map((l) => {
+    // `l: any` explicite depuis la centralisation du filtre : `filtrerEvenements` rend `any`
+    // (les surcharges de PostgrestBuilder ne se recomposent pas), donc `data` n'est plus
+    // inféré. Même forme que `participantsDEvenementParPage` et `listerMembres` juste à côté,
+    // et chaque champ est retypé un à un ci-dessous.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    lignes: (data ?? []).map((l: any) => {
       const type = premier(l.types_evenement as { libelle: string } | { libelle: string }[] | null)
       if (!type) {
         // `type_id` est NOT NULL et `types_evenement_lecture` est ouverte à tout compte
@@ -299,6 +331,8 @@ export async function participantsDEvenementParPage(
         externeNom: externe?.nom ?? null,
         externePrenom: externe?.prenom ?? null,
         externeConvertiEnMembreId: externe?.converti_en_membre_id ?? null,
+        externeClasseLe: externe?.classe_le ?? null,
+        externeMotifClassement: externe?.motif_classement ?? null,
         desirMentoratAcademique: l.desir_mentorat_academique as boolean,
         desirSuiviSpirituel: l.desir_suivi_spirituel as boolean,
         desirCpeap: l.desir_cpeap as boolean,

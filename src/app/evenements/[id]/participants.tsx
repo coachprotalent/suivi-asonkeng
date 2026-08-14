@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useActionState, useEffect, useId, useRef, useState } from 'react'
+import { formaterDateSeule } from '@/lib/format/date'
 import type { ParticipantLigne } from '@/lib/donnees/evenements-lots'
 import type { MembreBref } from '@/lib/donnees/membres'
 import { SelecteurMembre } from '@/app/membres/selecteur-membre'
@@ -121,8 +122,23 @@ function LigneParticipant({
         <span className="text-sm text-neutral-500">
           {participant.membreId ? 'Membre' : 'Externe'}
           {participant.externeConvertiEnMembreId ? ' · converti' : ''}
+          {/* I3 de la revue finale — L'ÉTAT « CLASSÉ » ÉTAIT INVISIBLE PARTOUT. La ligne
+              affichait « · converti » mais jamais « · classé », et la vue « à traiter »
+              excluant les classés (D74), un modérateur ne pouvait apprendre NULLE PART
+              qu'une personne avait été classée sans suite — ni pourquoi, le
+              `motif_classement` étant obligatoire, validé deux fois, et affiché nulle
+              part. Cette fiche d'évènement est le seul écran qui liste encore ces
+              personnes : c'est donc ici que l'information doit vivre. */}
+          {participant.externeClasseLe ? ' · classé sans suite' : ''}
         </span>
       </div>
+
+      {participant.externeClasseLe ? (
+        <p className="mt-1 text-sm text-neutral-600">
+          Classé sans suite le {formaterDateSeule(participant.externeClasseLe)}
+          {participant.externeMotifClassement ? ` — ${participant.externeMotifClassement}` : ''}
+        </p>
+      ) : null}
 
       <details className="mt-2">
         <summary className="cursor-pointer text-sm underline underline-offset-4">

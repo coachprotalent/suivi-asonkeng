@@ -208,7 +208,17 @@ test("le refus « fiche cible non active » — remonté d'un MARQUEUR POSTGRES 
   // MESSAGE_FICHE_CIBLE_OBLIGATOIRE, et le test échouerait sur l'assertion suivante SANS
   // qu'on sache que c'est la forge qui a raté, pas le refus qui manque.
   await expect(champCache).toHaveValue(idMembreArchive)
+  // M11 — la conversion porte désormais une confirmation `window.confirm`, et Playwright
+  // REJETTE d'office toute boîte non gérée : sans ce branchement, le clic serait annulé et
+  // ce test échouerait sur l'absence du refus, en donnant à croire que le refus a disparu.
+  // Le message est asséré, ce qui en fait aussi le contrôle positif de la confirmation.
+  let texteConfirmation: string | null = null
+  page.once('dialog', async (dialogue) => {
+    texteConfirmation = dialogue.message()
+    await dialogue.accept()
+  })
   await ligne.getByRole('button', { name: 'Convertir' }).click()
+  await expect.poll(() => texteConfirmation).toContain('DÉFINITIVE')
 
   await expect(ligne.getByRole('alert')).toContainText(MESSAGE_FICHE_CIBLE_NON_ACTIVE)
 

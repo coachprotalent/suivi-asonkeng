@@ -11,6 +11,22 @@ const etatInitial: EtatConversion = { erreur: null }
 type Chemin = 'fiche_en_attente' | 'fiche_active' | 'membre_existant'
 
 /**
+ * Message de la confirmation de conversion (M11). Chaque chemin a sa conséquence propre, et
+ * un texte générique les rendrait indiscernables au moment précis où l'administrateur peut
+ * encore se raviser — même discipline que les messages de refus de `messages.ts`, qui
+ * reçoivent chacun le leur plutôt qu'un texte commun.
+ */
+function messageConfirmationConversion(nomComplet: string, chemin: Chemin): string {
+  const consequence =
+    chemin === 'fiche_en_attente'
+      ? "Une fiche à valider sera créée et déposée sur l'écran des demandes."
+      : chemin === 'fiche_active'
+        ? 'Une fiche ACTIVE sera créée immédiatement, avec le faiseur de disciple choisi.'
+        : 'Les séminaires de cette personne seront rattachés à la fiche membre choisie.'
+  return `Convertir ${nomComplet} ? ${consequence} La conversion est DÉFINITIVE : aucun geste de l'application ne la défait.`
+}
+
+/**
  * Une ligne de la liste « à traiter ». Les blocs de conversion et de classement ne sont
  * rendus que pour un administrateur (D55) ; le modérateur voit la ligne et ses coordonnées,
  * ce que la ligne « Voir les trois désirs » du §5.2 lui accorde déjà.
@@ -188,9 +204,24 @@ export function LigneATraiter({
               ) : null}
 
               <div className="flex items-center gap-4">
+                {/* M11 — LA CONVERSION EST LE GESTE LE PLUS IRRÉVERSIBLE DE LA PHASE ET
+                    N'AVAIT AUCUNE CONFIRMATION, alors que la suppression d'une participation
+                    (`participants.tsx`) et l'annulation d'une demande
+                    (`ligne-demande-personnelle.tsx`) en ont une, et que le classement — moins
+                    définitif — porte au moins le mot « Définitif ». Le déclencheur
+                    `participants_externes_liens_definitifs` refuse toute seconde écriture du
+                    lien : rien, dans l'application ni même par écriture directe, ne défait une
+                    conversion. La confirmation nomme LE CHEMIN CHOISI, parce que c'est là que
+                    se joue l'erreur coûteuse — un chemin 2 crée une fiche ACTIVE, un chemin 3
+                    rattache DÉFINITIVEMENT le séminaire à la fiche de quelqu'un d'autre. */}
                 <button
                   type="submit"
                   disabled={conversionEnCours}
+                  onClick={(evenement) => {
+                    if (!window.confirm(messageConfirmationConversion(nomComplet, chemin))) {
+                      evenement.preventDefault()
+                    }
+                  }}
                   className="self-start rounded-md bg-neutral-900 px-4 py-2 text-white disabled:opacity-50"
                 >
                   Convertir
@@ -223,9 +254,21 @@ export function LigneATraiter({
                   aria-describedby={idAideMotif}
                   className="rounded-md border border-neutral-300 px-3 py-2"
                 />
+                {/* I3 de la revue finale — PHRASE CORRIGÉE. Elle disait : « Il restera
+                    convertible plus tard s'il reprend contact. » C'était vrai EN SQL et faux
+                    À L'ÉCRAN : la passerelle laisse bien convertir un participant déjà classé
+                    (D62), mais la conversion n'est offerte que depuis cette liste, dont la vue
+                    exclut les classés (D74), et AUCUN écran du dépôt ne liste les classés. Le
+                    texte avait importé dans le monde de l'utilisateur une promesse qui ne
+                    valait que dans celui de la fonction. Il dit désormais ce que
+                    l'application permet réellement — et le motif saisi ici est maintenant
+                    affiché sur la fiche de chaque évènement où cette personne figure
+                    (`participants.tsx`). */}
                 <span id={idAideMotif} className="text-xs text-neutral-500">
-                  Définitif : ce participant ne reviendra pas dans cette liste. Il restera
-                  convertible plus tard s&apos;il reprend contact.
+                  Définitif : ce participant quitte cette liste et n&apos;y reviendra pas.
+                  Le motif restera lisible sur la fiche des évènements auxquels il a
+                  participé. Pour le suivre à nouveau, il faudra le ressaisir comme nouveau
+                  participant.
                 </span>
               </div>
               <button

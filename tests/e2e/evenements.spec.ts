@@ -111,6 +111,26 @@ function extraireChampsCaches(formHtml: string): Record<string, string> {
  * qu'un test qui, silencieusement, ne teste plus rien. C'est le premier des deux filets
  * contre « le refus vient de la forge, pas du garde » ; le second est le canari.
  */
+/**
+ * M11 — la conversion porte désormais une confirmation `window.confirm`. Playwright
+ * REJETTE automatiquement toute boîte de dialogue non gérée : sans ce branchement, le clic
+ * sur « Convertir » serait annulé et le test échouerait sur l'assertion suivante, sans que
+ * rien ne dise que c'est la confirmation qui l'a bloqué.
+ *
+ * Le message est CAPTURÉ ET RENDU, pas seulement accepté : l'appelant s'en sert comme
+ * CONTRÔLE POSITIF de l'existence de la confirmation. Une confirmation retirée par
+ * inadvertance laisserait sinon ces tests parfaitement verts — exactement le défaut que ce
+ * fichier corrige par ailleurs.
+ */
+function capterConfirmation(page: Page): { texte: string | null } {
+  const capture: { texte: string | null } = { texte: null }
+  page.once('dialog', async (dialogue) => {
+    capture.texte = dialogue.message()
+    await dialogue.accept()
+  })
+  return capture
+}
+
 function verifierCaptureAction(champs: Record<string, string>): void {
   const trouve = Object.keys(champs).some((nom) => nom.startsWith('$ACTION'))
   if (!trouve) {
@@ -650,7 +670,10 @@ test("PARCOURS RÉEL 2 : un ADMINISTRATEUR convertit bien un participant PAR L'I
   await ligne.getByLabel('Rattacher à une fiche membre existante').check()
   await ligne.getByPlaceholder('Chercher par nom ou prénom').fill(`${PREFIXE}-membre`)
   await ligne.getByRole('button', { name: new RegExp(`${PREFIXE}-membre`) }).click()
+  const confirmation = capterConfirmation(page)
   await ligne.getByRole('button', { name: 'Convertir' }).click()
+  // CONTRÔLE POSITIF de la confirmation de M11, et de la branche du chemin 3 en particulier.
+  await expect.poll(() => confirmation.texte).toContain('rattachés à la fiche membre choisie')
 
   // VÉRIFICATION EN BASE, pas à l'écran : le lien est posé.
   await expect
@@ -691,7 +714,10 @@ test(
     // Chemin par défaut du composant : « Créer une fiche à valider » (`fiche_en_attente`),
     // déjà sélectionné — aucun radio à cliquer. Nom et prénom sont préremplis depuis le
     // participant externe (champs contrôlés).
+    const confirmation = capterConfirmation(page)
     await ligneATraiter.getByRole('button', { name: 'Convertir' }).click()
+    // CONTRÔLE POSITIF de la confirmation de M11, branche du chemin 1.
+    await expect.poll(() => confirmation.texte).toContain("l'écran des demandes")
 
     // La conversion crée une fiche `en_attente` ET une demande d'origine
     // `conversion_participant` (D65, D66) — attendu par sondage : la Server Action termine
