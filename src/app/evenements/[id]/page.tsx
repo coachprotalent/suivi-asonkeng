@@ -1,12 +1,20 @@
 import Link from 'next/link'
-import { notFound } from 'next/navigation'
-import { evenementParId, typesEvenementActifs } from '@/lib/donnees/evenements'
+import { notFound, redirect } from 'next/navigation'
+import { evenementParId, participantsDEvenement, typesEvenementActifs } from '@/lib/donnees/evenements'
+import { TAILLE_PAGE_PARTICIPANTS } from '@/lib/donnees/evenements-lots'
 import { formaterDateSeule } from '@/lib/format/date'
 import { estModerateurOuAdministrateur, exigerProfilActif } from '@/lib/securite/garde'
 import { FormulaireEvenement } from '../formulaire-evenement'
 import { modifierEvenement } from './actions'
+import { SectionParticipants } from './participants'
 
-export default async function PageEvenement({ params }: { params: Promise<{ id: string }> }) {
+export default async function PageEvenement({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>
+  searchParams: Promise<{ pageParticipants?: string }>
+}) {
   // Consultation de l'en-tête : TOUT COMPTE ACTIF.
   await exigerProfilActif()
   const { id } = await params
@@ -20,6 +28,47 @@ export default async function PageEvenement({ params }: { params: Promise<{ id: 
     typesEvenementActifs(),
     estModerateurOuAdministrateur(),
   ])
+
+  const { pageParticipants: pageBrute } = await searchParams
+  const pageParticipants = Math.max(1, Number(pageBrute ?? '1') || 1)
+
+  // LA LECTURE N'EST PAS FAITE DU TOUT hors modérateur et administrateur, et ce n'est pas
+  // une optimisation. Un compte ordinaire lit `participations` sous RLS et obtient ZÉRO
+  // ligne : un évènement à cent participants lui paraîtrait DÉSERT. Charger puis ne pas
+  // afficher laisserait ce zéro se glisser un jour dans un compteur ou dans un « aucun
+  // participant » — c'est le pendant exact du mode de défaillance de D71, dans l'autre
+  // sens : une lecture VIDÉE PAR LA RLS ne doit jamais être affichée comme un résultat.
+  const participants = peutGerer
+    ? await participantsDEvenement(evenement.id, pageParticipants)
+    : null
+
+  // BORNE HAUTE DE LA PAGINATION — une adresse pointant au-delà de la dernière page réelle
+  // est un signet périmé (ou une liste qui a rétréci depuis une suppression, D78). Sans ce
+  // garde, `/evenements/<id>?pageParticipants=99` sur un évènement de cent participants
+  // affiche EN MÊME TEMPS trois vérités contradictoires : « Participants (100) » en
+  // en-tête (qui lit `participants.total`), « Aucun participant enregistré. » dans le corps
+  // (`participants.lignes` étant vide), et « Page 99 sur 2 » au pied. Le message du corps
+  // devient littéralement faux.
+  // Ce défaut a déjà été payé et corrigé une fois par ce projet, sur l'annuaire : voir
+  // `src/app/membres/page.tsx`, lignes 51-62, dont le commentaire le décrit mot pour mot.
+  // On corrige l'adresse vers la dernière page réelle plutôt que de laisser tenir ce
+  // mensonge.
+  // PAS DE BOUCLE POSSIBLE : `pagesParticipants` vaut toujours au moins 1, et la cible de
+  // la redirection est `pagesParticipants` lui-même — la page rechargée aura donc
+  // `pageParticipants === pagesParticipants`, qui ne redéclenche pas la condition.
+  // HORS DE TOUT `try` : `redirect()` lève une exception de contrôle Next.js que ce fichier
+  // ne doit pas intercepter (aucun `try` dans ce fichier — vérifié).
+  // Sous `if (participants)` : hors modérateur et administrateur, rien n'est lu, il n'y a
+  // aucune page à borner, et rediriger serait divulguer qu'il y a des participants.
+  let pagesParticipants = 1
+  if (participants) {
+    pagesParticipants = Math.max(
+      1, Math.ceil(participants.total / TAILLE_PAGE_PARTICIPANTS),
+    )
+    if (pageParticipants > pagesParticipants) {
+      redirect(`/evenements/${evenement.id}?pageParticipants=${pagesParticipants}`)
+    }
+  }
 
   const lignes: Array<[string, string | null]> = [
     ['Type', evenement.typeLibelle],
@@ -86,13 +135,26 @@ export default async function PageEvenement({ params }: { params: Promise<{ id: 
       ) : null}
 
       {/*
-        SECTION PARTICIPANTS — livrée par la Task 19.
-        ELLE NE SE VIDE PAS PAR RLS, ELLE NE SE REND PAS DU TOUT hors modérateur et
-        administrateur. Un compte ordinaire qui lirait `participations` sous RLS obtiendrait
-        ZÉRO ligne : un évènement à cent participants lui paraîtrait DÉSERT, ce qui est un
-        mensonge et non une protection. C'est le pendant exact du mode de défaillance de
-        D71, dans l'autre sens.
+        LA SECTION NE SE VIDE PAS PAR RLS, ELLE NE SE REND PAS DU TOUT hors modérateur et
+        administrateur (design §8.1). Un compte ordinaire obtiendrait zéro ligne sous RLS,
+        et un évènement à cent participants lui paraîtrait désert — un mensonge, pas une
+        protection.
+
+        `pages` reçoit `pagesParticipants`, calculé plus haut EN MÊME TEMPS que le garde de
+        borne haute — surtout PAS une seconde expression recalculée ici. Deux calculs
+        séparés de la même quantité divergeraient au premier changement de
+        `TAILLE_PAGE_PARTICIPANTS`, et le pied de page se remettrait à annoncer une page
+        que le garde interdit d'atteindre.
       */}
+      {peutGerer && participants ? (
+        <SectionParticipants
+          evenementId={evenement.id}
+          participants={participants.lignes}
+          total={participants.total}
+          page={pageParticipants}
+          pages={pagesParticipants}
+        />
+      ) : null}
     </main>
   )
 }
