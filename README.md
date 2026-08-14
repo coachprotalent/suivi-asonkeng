@@ -59,7 +59,13 @@ l'amorçage du catalogue des statuts dans `20260813100000_statuts.sql` : il ins�
 statuts sans condition, et échouera pour la même raison (`groupes_statut_nom_key`,
 `statuts_libelle_unique_par_groupe`) si une restauration les retrouve déjà présents. Les
 migrations de la phase 1c (`20260814100000` à `20260814140000`) ne créent aucun amorçage de
-données : rien à ajouter sur ce point pour elles.
+données : rien à ajouter sur ce point pour elles. **Même défaut dans la phase 3** :
+`20260817100000_calendriers_ael.sql` insère trois créneaux (mardi, mercredi, samedi) pour chaque
+antenne **active** au moment de son application, sans vérifier leur présence. Une restauration qui
+la rejouerait sur une base où ces créneaux existent déjà échouera sur
+`calendriers_ael_creneau_unique` — la contrainte porte sur `(antenne_id, jour_semaine, heure)` en
+`nulls not distinct`, donc les créneaux amorcés, qui n'ont pas d'heure, en relèvent bien. Échec
+bruyant, comme pour les antennes et les statuts, et non doublon silencieux.
 
 **Les déclencheurs posés par la phase 1c ne sont pas non plus idempotents.** Chacun est créé par
 un simple `create trigger`, sans `drop trigger if exists` en amont (contrairement à
@@ -122,6 +128,25 @@ minutes), et l'exception insérée dans `annuler_demande_membre` pour éprouver 
 atomicité. Chacune a été restaurée à l'identique après sa preuve, vérifiée par
 `pg_get_functiondef` — voir les tâches correspondantes du plan de la phase 2b pour
 le détail de chaque restauration.
+
+**Le design de la phase 3 supposait `calendriers_ael` déjà amorcée par une phase
+antérieure ; elle ne l'était pas dans ce dépôt.** Vérifié par recherche sur
+`supabase/migrations/` avant d'écrire le plan de la phase 3 (aucune occurrence de
+« calendrier »), et confirmé par le §1 du design de cette même phase, qui le dit
+explicitement — en contradiction avec son propre §4.1. La migration
+`20260817100000_calendriers_ael.sql` comble l'écart avec le contenu déjà fixé par le §4.5
+de la spécification maîtresse, sans rouvrir aucune décision de la phase 3.
+
+**Supprimer un membre qui est l'enseignant d'une séance AEL déjà `tenue` échoue, malgré le
+`on delete set null`.** La mise à null déclenche `seances_ael_tenue_complete`
+(`20260817120000_seances_ael_completude.sql`), qui refuse toute séance à l'état résultant
+`tenue` sans thème ni enseignant : la suppression du membre est donc rejetée avec le
+marqueur `seance_sans_enseignant`. Ce n'est pas un défaut — l'application archive, elle ne
+supprime jamais de membre —, mais la déclaration de la clé étrangère promet seule le
+contraire. Conséquence pratique pour toute suite de tests : **supprimer les séances avant
+leurs membres**, jamais l'inverse. Le modérateur d'une séance (`moderateur_membre_id`)
+n'est surveillé par aucun déclencheur : là, `on delete set null` fait exactement ce qu'il
+dit.
 
 ### Le message d'erreur perdu en production, et ce qu'il reste d'exposé
 
@@ -421,7 +446,8 @@ réelle est décrite ci-dessus.
 **`/inscription` est rendue DYNAMIQUEMENT, à chaque requête** — comme toutes les
 routes du projet, depuis que la cloche de notifications est montée dans le layout
 racine (elle appelle `cookies()`). Constaté par construction réelle : `next build`
-classe les 20 routes en `ƒ (Dynamic)`, et retirer `<Cloche />` du layout suffit à
+classe la totalité des routes en `ƒ (Dynamic)` (24 au moment de la phase 3, contre 20
+avant elle — la phase 3 en a ajouté 4), et retirer `<Cloche />` du layout suffit à
 reclasser `/inscription` en `○ (Static)`. Conséquence à connaître avant d'ouvrir la
 porte : **chaque GET anonyme sur cette page exécute une lecture en base avec la clé
 de service** (`listerAntennesPubliques`). C'est modeste — quatre colonnes d'une
@@ -460,14 +486,21 @@ pas servir d'oracle sur la validité d'un token.
 ### Règle de sécurité
 
 Toute page et toute Server Action **qui lit ou écrit des données** passe par `exigerProfilActif`,
-`exigerAdministrateur` ou `exigerAutoriteSur` (`src/lib/securite/garde.ts`) — c'est l'unique
-famille de points d'entrée qui vérifie la session et, le cas échéant, le rôle ou la position dans
-l'arbre.
+`exigerAdministrateur`, `exigerAutoriteSur` ou `exigerModerateurOuAdministrateur`
+(`src/lib/securite/garde.ts`) — c'est l'unique famille de points d'entrée qui vérifie la session
+et, le cas échéant, le rôle ou la position dans l'arbre. `exigerModerateurOuAdministrateur`
+(phase 3) réserve au modérateur et à l'administrateur le calendrier AEL, la génération et la
+tenue des séances, le pointage, et le rattachement d'un membre à une antenne (D22, D42, D50) :
+une autorisation PAR RÔLE, distincte de `exigerAutoriteSur`, qui répond à une question
+différente (la position dans l'arbre des faiseurs de disciple).
 
 **Les exceptions, recensées contre le code et non contre l'intention** (les deux affirmations qui
 tenaient ici la place de cette liste — « aucun appel direct à `profilCourant` ailleurs » et
-« exception unique » — étaient devenues fausses ; corrigées d'après un audit des 18 `page.tsx`, des
-14 fichiers `'use server'` et de toutes les occurrences de `profilCourant`) :
+« exception unique » — étaient devenues fausses ; corrigées d'après un audit des `page.tsx` et
+des fichiers `'use server'` du dépôt, et de toutes les occurrences de `profilCourant`. L'audit
+original (phase 2b) portait sur 18 `page.tsx` et 14 fichiers `'use server'` ; la phase 3 en a
+ajouté 4 et 5 respectivement, tous vérifiés directement — 22 `page.tsx` et 19 fichiers
+`'use server'` au total à ce jour, sans changer la liste des exceptions ci-dessous) :
 
 - **`profilCourant` est appelé directement à UN seul endroit hors de `garde.ts`** :
   `src/app/notifications/cloche.tsx`. C'est délibéré et justifié sur place — la cloche est montée
@@ -477,7 +510,7 @@ tenaient ici la place de cette liste — « aucun appel direct à `profilCourant
 - **`sInscrire`** (`src/app/inscription/actions.ts`) n'appelle aucun garde : `/inscription`
   s'affiche sans session, par construction, il n'existe littéralement aucun profil à exiger.
   Exception ajoutée par la phase 2b, détaillée plus bas.
-- **Cinq `page.tsx` sur 18 n'appellent aucun garde**, et aucun n'expose de donnée :
+- **Cinq `page.tsx` sur 22 n'appellent aucun garde**, et aucun n'expose de donnée :
   `src/app/page.tsx` (une seule instruction, `redirect('/tableau-de-bord')`),
   `/connexion` et `/changer-mot-de-passe` (antérieures ; la seconde est un composant client dont
   l'action vérifie elle-même la session et le drapeau `doit_changer_mdp`),
@@ -502,3 +535,123 @@ comptes passent exclusivement par des Server Actions exécutées côté serveur,
 direct du client à Supabase. Côté base, les politiques RLS n'autorisent que des `SELECT` sur
 toutes les tables : toute écriture transite par le serveur, qui agit avec la clé de service,
 jamais exposée au navigateur.
+
+## Phase 3 : l'AEL
+
+La phase 3 remplace le suivi de présence actuel (spec §9) par un calendrier récurrent, une
+génération idempotente des séances, leur tenue et le pointage des présences.
+
+- **Gestion des membres d'une antenne** (`/antennes/[id]`, réservé au modérateur et à
+  l'administrateur pour la gestion, ouvert en lecture à tout compte actif) — rattacher ou
+  détacher un membre sans passer par sa fiche (D50-D53). Livrée **avant** le pointage :
+  D29 tire la liste de pointage de ce même rattachement. Le détachement est strictement
+  PROSPECTIF (D48, D52) : aucune présence ni aucun compteur déjà écrit n'en est affecté ;
+  seules les listes de pointage pré-remplies de futures séances cessent de proposer le
+  membre par défaut — il reste ajoutable à la main (D47). L'écran est atteignable depuis
+  `/antennes` pour un administrateur, et depuis la section « Antennes » de `/ael/seances`
+  pour tous les autres comptes actifs : `/antennes` reste réservé à l'administrateur,
+  parce qu'il porte la création et la désactivation des antennes (spec §5.2).
+- **Calendrier récurrent** (`/ael/calendriers`, réservé au modérateur et à l'administrateur,
+  aucune consultation ouverte — D22) — créneaux par antenne (jour de semaine, heure
+  optionnelle), ajout et désactivation. Un créneau est unique par
+  `(antenne, jour, heure)`, heures nulles comprises
+  (`calendriers_ael_creneau_unique`, `nulls not distinct`) : sans cette contrainte, un
+  doublon ferait générer deux séances identiques à chaque occurrence, indistinguables et
+  sans geste de suppression prévu. Un créneau ne peut pas être ajouté sur une antenne
+  désactivée, et la génération ignore les créneaux actifs des antennes désactivées.
+- **Génération des séances** (`/ael/seances`, bouton « Générer les séances ») — geste
+  explicite, jamais automatique (D28), sur un horizon glissant de 8 semaines
+  (`HORIZON_GENERATION_SEMAINES`, D40). Idempotente par une contrainte unique
+  (`seances_ael_generation_unique` sur `(calendrier_id, genere_pour_le)`, D38), pas par
+  une vérification applicative : rejouer le geste ne crée jamais de doublon. La colonne
+  additive `genere_pour_le`, distincte de `date` et jamais modifiée après la création,
+  ancre cette unicité indépendamment d'un déplacement de séance (D39) — déplacer une
+  séance du samedi au dimanche ne la fait pas recréer à sa date d'origine au prochain
+  geste de génération.
+- **Tenue d'une séance** (`/ael/seances/[id]`) — thème, enseignant, modérateur (chacun un
+  membre de l'équipe ou un intervenant extérieur, exclusifs par une contrainte CHECK,
+  D36) ; passage à `tenue` bloqué tant que le thème ou l'enseignant manquent, avec deux
+  marqueurs d'erreur distincts nommant le champ fautif (D37). L'état reste RÉVERSIBLE
+  ensuite (D49) : un modérateur peut ramener une séance `tenue` par erreur à `prevue` ou
+  `annulee`, sans effacer le pointage déjà fait — le déclencheur de complétude ne
+  surveille que la transition VERS `tenue`, jamais le sens retour.
+- **Pointage** — liste complète des membres actifs des antennes ciblées, sans pagination
+  (D29), avec un filtre client (D46) distinct du sélecteur à recherche serveur qui permet
+  d'ajouter n'importe quel autre membre (D47). Écriture ligne à ligne : chaque case
+  déclenche un `upsert` unitaire sur `(seance_id, membre_id)` (D43) — deux modérateurs
+  pointant la même séance ne se marchent dessus que sur les membres qu'ils cochent tous
+  les deux. Une présence pointée sur un membre absent de la liste courante (détaché de
+  l'antenne, archivé, ou ajouté hors liste par D47) reste visible, dans un bloc distinct
+  (« Présences hors de la liste courante ») plutôt que de disparaître : la RLS reste seule
+  juge de ce qui s'affiche, l'écran dit honnêtement quand elle refuse une fiche
+  (« Fiche non consultable ») au lieu de la taire.
+- **Compteur AEL** (vue `compteurs_ael`, affichée sur la fiche membre) — report initial +
+  présences aux séances TENUES, rien d'autre (D4). Vue calculée, `security_invoker`, pas de
+  colonne stockée : le total ne peut pas diverger de son historique, et il ne varie
+  JAMAIS rétroactivement avec l'archivage ou un changement d'antenne du membre (D48) — un
+  compte ordinaire interrogeant le compteur d'un membre archivé ne voit simplement aucune
+  ligne, jamais un chiffre faux.
+
+Aucun journal des présences symétrique à `journal_statuts` (D45) : `pointe_par` et
+`pointe_le`, déjà sur `presences_ael`, donnent la traçabilité minimale. Aucune tâche
+planifiée ni génération automatique (D28) ; aucune fusion automatique de calendriers
+multi-antennes en une seule séance générée (D41) — seule l'édition manuelle le permet.
+
+### Deux remèdes différents à la même troncature silencieuse, et pourquoi
+
+`membresDesAntennesParLots` (`src/lib/donnees/membres-lots.ts`) et `presencesDeSeanceParLots`
+(`src/lib/donnees/presences-lots.ts`) parcourent chacune leur table **par lots, jusqu'à
+épuisement**, plutôt que de lire une seule fois sans borne : PostgREST tronque
+silencieusement toute lecture non bornée au-delà de `max_rows` (1000,
+`supabase/config.toml`), et rendre une page tronquée comme complète y ferait disparaître
+des membres, ou pire, écraser une présence réelle avec `present: false` en la confondant
+avec une case jamais cochée. `listerSeances` (`src/lib/donnees/ael.ts`), au contraire,
+**échoue bruyamment** si le nombre de séances dépasse son plafond de lecture, plutôt que
+de paginer. Ce n'est pas une incohérence : `listerSeances` n'est croisée avec aucune autre
+lecture, un dépassement y est donc simplement visible et sans risque de corruption d'une
+écriture — alors que la liste des présences est croisée avec la liste des membres pour
+décider de l'état de chaque case à l'écran, et un écart entre une liste complète et une
+liste tronquée s'y lirait comme « absent ». Paginer y rend la troncature IMPOSSIBLE plutôt
+que seulement DÉTECTABLE ; échouer bruyamment protège une lecture qui n'a rien à faire
+converger avec une autre.
+
+`compteurAel()` (`src/lib/domaine/ael.ts`), la fonction pure qui porte la formule du
+compteur, n'est appelée par **aucun** code de production : la fiche membre passe par la
+vue `compteurs_ael`, qui exécute la même formule côté SQL. Les deux portent la formule
+identique (vérifié), mais aucune exécution croisée ne le garantit — seuls leurs tests
+respectifs les exercent chacun de leur côté.
+
+### La génération de séances touche de vraies données, en production
+
+Rappel de la section « Attention » ci-dessus, avec une conséquence propre à la phase 3 :
+`genererSeances` ne prend aucun paramètre de portée — elle parcourt **tous les
+calendriers actifs réels** de la base, pas seulement ceux créés par une suite de tests.
+Une suite qui appellerait ce geste sans précaution créerait donc de vraies séances de
+production, sans préfixe ni marqueur qui les distingue des séances légitimes, hors de
+portée de tout nettoyage par motif de nom. Le remède retenu dans les suites e2e et RLS de
+cette phase est une **empreinte-et-delta** : relever l'ensemble des identifiants de
+`seances_ael` avant le geste, le relever à nouveau après, ne supprimer que la différence,
+sous une **garde bruyante** qui lève plutôt que suppose (elle refuse par exemple de
+nettoyer une séance retrouvée qui ne serait plus `prevue` ou qui porterait déjà une
+présence). Ce mécanisme a réellement servi : la dernière ronde de preuves de la phase
+(Task 19, `tests/e2e/ael-preuves.spec.ts`) a généré puis nettoyé **72 séances** sur les
+calendriers réels, vérifié par comptage à chaque exécution.
+
+### Préoccupations résiduelles laissées par la Task 19
+
+Deux points signalés plutôt que corrigés en silence, faute d'entrer dans le périmètre
+strict des tâches qui les ont trouvés :
+
+- **Aucune preuve e2e dédiée au cas « présence sur un membre archivé »** dans le bloc
+  « Présences hors de la liste courante » ci-dessus. Le mécanisme est le même que pour un
+  membre détaché de son antenne (RLS identique, même fonction `membresBrefsParIds`) et ce
+  dernier cas est bien éprouvé de bout en bout, mais le cas « archivé » spécifiquement ne
+  l'est pas encore.
+- **Aucun test ne verrouille directement la garantie « aucune mise en cache » qui a
+  justifié le retrait de `revalidatePath` de `pointerPresence`** : le pointage porte
+  désormais l'effet visuel entièrement côté client (état optimiste), et un rechargement
+  relit la vérité en base parce qu'aucune directive de cache n'est posée sur cette route
+  aujourd'hui — mais cette garantie n'est vraie que par absence, et rien ne la romprait
+  qu'un test si une future modification de la page ou de son layout introduisait une mise
+  en cache partielle. Seul le comportement observable (rechargement = vérité) est éprouvé
+  indirectement par les suites e2e existantes qui rechargent après écriture.
