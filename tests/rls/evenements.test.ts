@@ -250,7 +250,7 @@ describe('types_evenement (preuve n°17)', () => {
     expect((data ?? []).length).toBe(4)
   })
 
-  it("rejouer l'amorçage ne crée aucun doublon (D57), avec le total mesuré avant et après", async () => {
+  it("réinsérer les quatre libellés de l'amorçage ne crée aucun doublon, avec le total mesuré avant et après", async () => {
     const { count: avant, error: erreurAvant } = await admin
       .from('types_evenement')
       .select('id', { count: 'exact', head: true })
@@ -258,8 +258,24 @@ describe('types_evenement (preuve n°17)', () => {
     // Contrôle positif : une base sans aucun type rendrait cette preuve VIDE.
     expect(avant).toBeGreaterThan(0)
 
-    // Exactement l'instruction de la migration, `on conflict` compris. Si la clause avait
-    // été omise, cet insert lèverait un 23505 et le test tomberait ici.
+    // I5 DE LA REVUE FINALE — CE COMMENTAIRE PROMETTAIT CE QU'IL N'ÉPROUVAIT PAS, ET LE
+    // TITRE AVEC LUI. Il disait : « Exactement l'instruction de la migration, `on conflict`
+    // compris. Si la clause avait été omise, cet insert lèverait un 23505 et le test
+    // tomberait ici. » Les deux phrases étaient fausses :
+    //  - le `on conflict` réellement exercé est celui que CE TEST construit
+    //    (`{ onConflict: 'libelle', ignoreDuplicates: true }`). Retirer le
+    //    `on conflict (libelle) do nothing` de `20260818120000:49` laisserait ce test VERT :
+    //    il ne rejoue jamais la migration, il refait un `insert` de son cru ;
+    //  - ce n'est pas non plus la même instruction : la migration insère `(libelle, ordre)`,
+    //    ce test n'envoie que `libelle`.
+    // Et le dépôt a lui-même DÉMENTI la propriété que ce test prétendait verrouiller :
+    // `20260818270000:22-31` établit empiriquement qu'une VARIANTE DE CASSE préexistante
+    // fait lever un vrai `23505` sur `types_evenement_libelle_normalise_unique`. Ce cas-là
+    // est désormais éprouvé par le test suivant, au lieu d'être nié par celui-ci.
+    //
+    // CE QUE CE TEST PROUVE RÉELLEMENT, et qui reste utile : que `types_evenement` porte une
+    // contrainte unique sur `libelle` (sans quoi PostgREST lèverait `42P10` sur `onConflict`)
+    // et que réinsérer les quatre libellés à l'identique ne change pas le total.
     const { error: erreurRejeu } = await admin
       .from('types_evenement')
       .upsert(
@@ -279,6 +295,44 @@ describe('types_evenement (preuve n°17)', () => {
     // DELTA nul, et non un total absolu : un comptage absolu serait vrai au premier
     // lancement et faux pour toujours ensuite.
     expect(apres).toBe(avant)
+  })
+
+  it("l'amorçage N'EST PAS idempotent face à une VARIANTE DE CASSE préexistante : 23505 réel sur l'index normalisé", async () => {
+    // I5 DE LA REVUE FINALE — LE CAS QUE LE TEST VOISIN NIAIT, ÉPROUVÉ ICI.
+    // `20260818190000` a fermé le trou de normalisation par un index unique sur
+    // `lower(trim(libelle))`, et `20260818270000:22-31` a consigné la conséquence : le
+    // `on conflict (libelle)` de l'amorçage ne neutralise QUE SON PROPRE ARBITRE. Une base
+    // portant déjà « webinaire » verrait donc l'insertion de « Webinaire » LEVER, et non
+    // « ne rien faire ». C'est une hypothèse corrigée puis ressuscitée depuis un document
+    // dérivé plus ancien — la troisième fois de cette phase.
+    //
+    // LA CASSE NE VARIE QUE DANS LE SUFFIXE : `LIKE` est sensible à la casse en Postgres, et
+    // minuscule le préfixe sortirait ces lignes de la famille `ZZEvt-%` que l'`afterAll`
+    // balaie — elles deviendraient des résidus que plus rien ne retrouve, en base de
+    // production.
+    const libelle = `${PREFIXE}-Casse`
+    const variante = `${PREFIXE}-CASSE`
+
+    const { error: erreurPremier } = await admin.from('types_evenement').insert({ libelle })
+    expect(erreurPremier, 'la première insertion doit réussir').toBeNull()
+
+    // Exactement la forme de l'amorçage : `on conflict (libelle) do nothing`, ici via
+    // l'`upsert` équivalent de PostgREST. La clause NE SUFFIT PAS.
+    const { error: erreurVariante } = await admin
+      .from('types_evenement')
+      .upsert([{ libelle: variante }], { onConflict: 'libelle', ignoreDuplicates: true })
+    expect(erreurVariante, 'la variante de casse doit être REFUSÉE').not.toBeNull()
+    expect(erreurVariante!.code).toBe('23505')
+    // Le refus vient bien de l'index NORMALISÉ, pas de la contrainte littérale — sans quoi
+    // ce test prouverait l'inverse de ce qu'il annonce.
+    expect(erreurVariante!.message).toContain('types_evenement_libelle_normalise_unique')
+
+    // CONSTATÉ EN BASE : une seule des deux lignes existe, et c'est la première.
+    const { count } = await admin
+      .from('types_evenement')
+      .select('id', { count: 'exact', head: true })
+      .in('libelle', [libelle, variante])
+    expect(count).toBe(1)
   })
 
   it('un compte actif lit le catalogue ; un visiteur anonyme non', async () => {
@@ -531,6 +585,18 @@ describe('participants_a_traiter et les désirs fermés (preuve n°7)', () => {
   })
 
   it("un compte actif ne peut écrire dans AUCUNE des quatre tables de la phase", async () => {
+    // MESURÉ AVANT — et ce n'est pas une précaution de style. Le montage de ce fichier crée
+    // DÉJÀ une participation sur ce couple (évènement, membre) : un comptage ABSOLU après
+    // coup rendrait 1 et ferait échouer le test sur une ligne qu'il n'a pas écrite,
+    // confondant « la tentative a écrit » et « la donnée de départ existait ». Constaté à
+    // l'exécution en écrivant ce correctif. Les trois autres tables se comptent en absolu,
+    // leur libellé `-interdit` n'existant nulle part avant.
+    const { count: participationsAvant } = await admin
+      .from('participations')
+      .select('id', { count: 'exact', head: true })
+      .eq('evenement_id', idEvenement)
+      .eq('membre_id', idMembreActif)
+
     const tentatives: Array<[string, () => Promise<{ error: { code?: string } | null }>]> = [
       ['types_evenement', async () => clientSimple.from('types_evenement').insert({ libelle: `${PREFIXE}-interdit` })],
       ['evenements', async () => clientSimple.from('evenements').insert({ titre: `${PREFIXE}-interdit`, type_id: idTypeWebinaire, date_debut: '2026-09-01' })],
@@ -543,17 +609,34 @@ describe('participants_a_traiter et les désirs fermés (preuve n°7)', () => {
       expect(error!.code, `écriture sur ${nom}`).toBe('42501')
     }
 
-    // AUCUNE des quatre tentatives n'a écrit : constaté EN BASE, pas déduit de l'erreur.
+    // M5 DE LA REVUE FINALE — L'EN-TÊTE ANNONÇAIT QUATRE CONSTATS ET N'EN FAISAIT QUE DEUX.
+    // `evenements` et `participations` n'étaient vérifiées que par leur code d'erreur,
+    // c'est-à-dire DÉDUITES de l'erreur — exactement ce que la phrase disait ne pas faire.
+    // Les quatre sont désormais recomptées en base.
     const { count: typesEcrits } = await admin
       .from('types_evenement')
       .select('id', { count: 'exact', head: true })
       .eq('libelle', `${PREFIXE}-interdit`)
-    expect(typesEcrits).toBe(0)
+    expect(typesEcrits, 'types_evenement').toBe(0)
+    const { count: evenementsEcrits } = await admin
+      .from('evenements')
+      .select('id', { count: 'exact', head: true })
+      .eq('titre', `${PREFIXE}-interdit`)
+    expect(evenementsEcrits, 'evenements').toBe(0)
     const { count: externesEcrits } = await admin
       .from('participants_externes')
       .select('id', { count: 'exact', head: true })
       .eq('nom', `${PREFIXE}-interdit`)
-    expect(externesEcrits).toBe(0)
+    expect(externesEcrits, 'participants_externes').toBe(0)
+    // La participation visée n'a AUCUNE colonne nommable : elle se retrouve par son couple
+    // (évènement, membre), qui est précisément ce que la tentative aurait écrit — d'où le
+    // DELTA plutôt qu'un total.
+    const { count: participationsApres } = await admin
+      .from('participations')
+      .select('id', { count: 'exact', head: true })
+      .eq('evenement_id', idEvenement)
+      .eq('membre_id', idMembreActif)
+    expect(participationsApres, 'participations').toBe(participationsAvant)
   })
 })
 
@@ -610,6 +693,40 @@ describe('privilèges des passerelles (preuve n°8)', () => {
       .single()
     expect(relu!.converti_en_membre_id).toBeNull()
     expect(relu!.classe_le).toBeNull()
+
+    // M6 DE LA REVUE FINALE — LE CONTRÔLE POSITIF NE COUVRAIT QUE `classer_...`. Les DEUX
+    // refus portant sur `convertir_participant_externe` n'en avaient AUCUN, ce qui laissait
+    // ouverte, pour cette fonction-là précisément, la branche « ses paramètres ont changé de
+    // nom » que ce commentaire nomme lui-même. La conversion étant IRRÉVERSIBLE, elle a
+    // besoin d'une CIBLE À ELLE : la convertir ferait ensuite refuser son classement
+    // (`participant_deja_converti`), et le contrôle positif du classement tomberait sur la
+    // précondition de son voisin plutôt que sur l'assertion qu'il vise.
+    const { data: cibleConv, error: erreurCibleConv } = await admin
+      .from('participants_externes')
+      .insert({ nom: `${PREFIXE}-privileges-conv` })
+      .select('id')
+      .single()
+    if (erreurCibleConv || !cibleConv) {
+      throw new Error(`préparation impossible : ${erreurCibleConv?.message}`)
+    }
+    const { error: erreurServiceConv } = await admin.rpc('convertir_participant_externe', {
+      p_participant: cibleConv.id as string,
+      p_chemin: 'membre_existant',
+      p_membre_cible: idMembreActif,
+      p_nom: null,
+      p_prenom: null,
+      p_faiseur: null,
+      p_dirigeant: null,
+      p_dirigeant_force: false,
+      p_par: null,
+    })
+    expect(erreurServiceConv, 'contrôle positif de convertir_participant_externe').toBeNull()
+    const { data: converti } = await admin
+      .from('participants_externes')
+      .select('converti_en_membre_id')
+      .eq('id', cibleConv.id as string)
+      .single()
+    expect(converti!.converti_en_membre_id).toBe(idMembreActif)
 
     // CONTRÔLE POSITIF : `service_role` réussit, avec le MÊME appel. Sans lui, les quatre
     // refus ci-dessus pourraient signifier « la fonction n'existe pas » ou « ses paramètres
