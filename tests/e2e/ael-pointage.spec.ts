@@ -8,7 +8,15 @@ import { expect, test } from '@playwright/test'
 // de ce parcours.
 test.describe.configure({ mode: 'serial', timeout: 60_000 })
 
-const IDENT_MODERATEUR = 'test.e2e.ael.moderateur'
+// Mineur 4 de la revue finale de branche — COLLISION D'IDENTIFIANT LEVÉE. Ce fichier
+// déclarait `test.e2e.ael.moderateur`, EXACTEMENT le même identifiant que
+// `tests/e2e/ael-seance-detail.spec.ts:21`, deux fichiers neufs de la même phase : chaque
+// `nettoyer()` supprimait donc le compte de l'autre. Sans effet sous `workers: 1`
+// (`playwright.config.ts`, exécution séquentielle), mais le registre atteste que des
+// exécutions CONCURRENTES ont réellement eu lieu sur cette base. L'identifiant suit
+// désormais la famille de ce fichier (`ZZAelPointage-`), donc il est unique par
+// construction plutôt que par convention.
+const IDENT_MODERATEUR = 'test.e2e.aelpointage.moderateur'
 const MDP_MODERATEUR = `Test-${crypto.randomUUID()}`
 // Préfixe de FAMILLE stable pour le nettoyage (I6 de la ronde de correction) : une
 // exécution interrompue entre `beforeAll` et `afterAll` laisse une antenne, des
@@ -54,7 +62,14 @@ async function supprimerCompte(identifiant: string) {
   // d'un compte orphelin (profil supprimé, utilisateur auth resté) échouerait EN SILENCE
   // dès le 51e compte, laissant un compte de test actif en production — et le
   // `createUser` de l'exécution suivante échouerait alors sur un doublon d'adresse, pour
-  // une raison introuvable. On parcourt jusqu'à épuisement, comme partout ailleurs.
+  // une raison introuvable. On parcourt donc jusqu'à épuisement — DANS CE FICHIER.
+  //
+  // Mineur 1 de la revue finale de branche : ce commentaire disait « comme partout
+  // ailleurs », et c'est FAUX. 25 des 27 fichiers de test du dépôt appellent encore
+  // `listUsers()` sans parcours, et le README le documente comme une limite connue et
+  // non traitée. Un commentaire qui promet plus que le dépôt ne tient, écrit dans le
+  // correctif d'un constat : le motif exact que cette phase traque. La phrase ne décrit
+  // plus que ce fichier.
   const PAR_PAGE = 200
   for (let page = 1; ; page++) {
     const { data: comptes, error } = await admin.auth.admin.listUsers({ page, perPage: PAR_PAGE })

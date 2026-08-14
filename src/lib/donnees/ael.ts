@@ -37,18 +37,56 @@ export type CalendrierAel = {
   actif: boolean
 }
 
+/**
+ * Plafond de lecture des DEUX lectures de `calendriers_ael`, strictement sous `max_rows`
+ * de PostgREST (1000, `supabase/config.toml:18`) — même discipline et même raison que
+ * `LIMITE_LECTURE_SEANCES_AEL` plus bas.
+ *
+ * Mineur 3 de la revue finale de branche : c'étaient les DEUX DERNIÈRES lectures non
+ * bornées de l'AEL, et elles manquaient à la « carte des lectures non bornées » du
+ * registre. La cardinalité est naturellement petite (9 créneaux aujourd'hui ; il en
+ * faudrait plus de cent pour approcher le plafond), MAIS le mode de défaillance de
+ * `calendriersActifs` est le pire de toute la phase : elle ALIMENTE LA GÉNÉRATION. Une
+ * troncature silencieuse y produirait une SOUS-GÉNÉRATION — des créneaux réels dont
+ * aucune séance ne serait jamais créée, sans erreur, sans page vide, sans rien à voir.
+ * C'est le motif dominant du projet appliqué à une écriture, pas à un affichage.
+ *
+ * Forme retenue : échouer bruyamment, comme `listerSeances` et pour la même raison —
+ * aucune de ces deux lectures n'est CROISÉE avec une autre pour décider d'une écriture
+ * ligne à ligne (ce qui imposerait de paginer, cf. `presences-lots.ts`). Le jour où un
+ * dépassement se produit, il doit être VU, pas absorbé.
+ */
+const LIMITE_LECTURE_CALENDRIERS_AEL = 999
+
+/**
+ * Contrôle commun aux deux lectures de `calendriers_ael`. `count: 'exact'` rend le total
+ * réel indépendamment du `.range()` — fait établi contre la base réelle pour
+ * `listerSeances`, réemployé ici.
+ */
+function refuserTroncature(count: number | null, lues: number, fonction: string): void {
+  if (count !== null && count > lues) {
+    throw new Error(
+      `${fonction} : ${count} créneaux existent, au-delà du plafond de lecture de ` +
+        `${LIMITE_LECTURE_CALENDRIERS_AEL} lignes — cette fonction refuse de rendre une ` +
+        'liste tronquée comme complète. Il faut désormais borner ou paginer cette lecture.',
+    )
+  }
+}
+
 /** Tous les calendriers, actifs et désactivés, triés par état puis jour de semaine. */
 export async function listerCalendriers(): Promise<CalendrierAel[]> {
   const supabase = await clientServeur()
-  const { data, error } = await supabase
+  const { data, error, count } = await supabase
     .from('calendriers_ael')
-    .select('id, antenne_id, jour_semaine, heure, actif, antennes(nom)')
+    .select('id, antenne_id, jour_semaine, heure, actif, antennes(nom)', { count: 'exact' })
     .order('actif', { ascending: false })
     .order('jour_semaine')
+    .range(0, LIMITE_LECTURE_CALENDRIERS_AEL - 1)
 
   if (error) {
     throw new Error(`Lecture des calendriers AEL impossible : ${error.message}`)
   }
+  refuserTroncature(count, (data ?? []).length, 'listerCalendriers')
   return (data ?? []).map((l) => ({
     id: l.id as string,
     antenneId: l.antenne_id as string,
@@ -88,15 +126,19 @@ export type CalendrierPourGeneration = {
  */
 export async function calendriersActifs(): Promise<CalendrierPourGeneration[]> {
   const supabase = await clientServeur()
-  const { data, error } = await supabase
+  const { data, error, count } = await supabase
     .from('calendriers_ael')
-    .select('id, antenne_id, jour_semaine, heure, actif, antennes!inner(actif)')
+    .select('id, antenne_id, jour_semaine, heure, actif, antennes!inner(actif)', { count: 'exact' })
     .eq('actif', true)
     .eq('antennes.actif', true)
+    .range(0, LIMITE_LECTURE_CALENDRIERS_AEL - 1)
 
   if (error) {
     throw new Error(`Lecture des calendriers actifs impossible : ${error.message}`)
   }
+  // Voir l'encadré de `LIMITE_LECTURE_CALENDRIERS_AEL` : une troncature ICI ne produit
+  // pas un affichage incomplet mais une SOUS-GÉNÉRATION silencieuse.
+  refuserTroncature(count, (data ?? []).length, 'calendriersActifs')
   return (data ?? []).map((l) => ({
     id: l.id as string,
     antenneId: l.antenne_id as string,

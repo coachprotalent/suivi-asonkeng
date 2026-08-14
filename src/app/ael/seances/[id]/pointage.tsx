@@ -89,9 +89,21 @@ export function Pointage({ seanceId, membres, presencesInitiales, presencesHorsL
   // serveur (I2).
   const presentsCount = Object.values(presences).filter(Boolean).length
 
+  // Mineur 7 de la revue finale de branche : après le `router.refresh()` différé, un
+  // membre ajouté par « Ajouter quelqu'un d'autre » apparaissait DEUX FOIS — une ligne
+  // dans `membresAjoutes` (état client, préservé par le refresh) et une seconde dans
+  // `presencesHorsListe`, recalculé côté serveur qui vient, lui, d'apprendre l'existence
+  // de cette présence. Les deux cases lisent le même `presences[id]`, donc rien
+  // d'incohérent — mais deux lignes pour une personne, sur un contrôle destructif. Le
+  // serveur gagne : dès qu'un identifiant est rendu dans le bloc « hors liste », la
+  // ligne cliente correspondante disparaît. La personne reste visible et cochable, à un
+  // seul endroit.
+  const idsHorsListe = new Set(presencesHorsListe.map((entree) => entree.id))
   const listeComplete = [
     ...membres,
-    ...membresAjoutes.filter((ajoute) => !membres.some((m) => m.id === ajoute.id)),
+    ...membresAjoutes.filter(
+      (ajoute) => !membres.some((m) => m.id === ajoute.id) && !idsHorsListe.has(ajoute.id),
+    ),
   ]
 
   const membresAffiches =

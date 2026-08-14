@@ -156,6 +156,19 @@ export async function listerMembres(filtres?: {
       .select(COLONNES_LISTE, { count: 'exact' })
       .order('nom')
       .order('prenom')
+      // I4 de la revue finale de branche — TRI TOTAL, troisième critère obligatoire.
+      // `(nom, prenom)` n'est pas unique : deux HOMONYMES EXACTS à cheval sur une
+      // frontière de page peuvent, sous une pagination par décalage, être rendus DEUX
+      // FOIS ou JAMAIS — « jamais » étant la disparition silencieuse d'un membre de
+      // l'annuaire, l'écran le plus fréquenté de l'application. Sur une liste de membres
+      // d'église, les homonymes ne sont pas une hypothèse d'école. C'est mot pour mot le
+      // défaut corrigé sur `membresDesAntennesParLots` (`membres-lots.ts:146`), qui
+      // survivait ici, dans le fichier qui IMPORTE le module corrigé.
+      // Doctrine du registre (ronde Q1-Q7, Q4) : `.order('id')` est correct EN TOUTE
+      // GÉNÉRALITÉ — aucune spécification SQL ne garantit l'ordre des ex æquo sans tri
+      // total —, même quand une mutation sur deux lignes ne parvient pas à mettre le
+      // défaut en évidence sur un plan Postgres donné.
+      .order('id')
       .range(debut, debut + TAILLE_PAGE_ANNUAIRE - 1),
     filtres,
   )

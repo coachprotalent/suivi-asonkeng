@@ -91,6 +91,16 @@ export async function reactiverCalendrier(donnees: FormData): Promise<void> {
 }
 
 async function basculerCalendrier(donnees: FormData, actif: boolean): Promise<void> {
+  // Mineur 5 de la revue finale de branche : cette fonction n'avait AUCUNE garde et
+  // reposait entièrement sur ses deux appelants exportés, qui en ont une. Son symétrique
+  // exact de la même phase, `changerEtatSeance`
+  // (`src/app/ael/seances/[id]/actions.ts`), en porte une malgré la même situation —
+  // deux motifs opposés pour le même patron. Elle écrit avec la CLÉ DE SERVICE : un
+  // futur troisième appelant, ou un appelant dont la garde serait retirée par
+  // inadvertance, écrirait sans barrière. La garde est idempotente et bon marché ; la
+  // redondance est le point, pas un oubli.
+  await exigerModerateurOuAdministrateur()
+
   const id = donnees.get('id')
   if (typeof id !== 'string' || id.length === 0) {
     console.error('basculerCalendrier : identifiant manquant dans le formulaire', { actif })
