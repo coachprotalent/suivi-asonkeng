@@ -1,0 +1,28 @@
+-- Ronde de correction (constat A). 20260818200000_corriger_commentaire_seminaires_assistes.sql
+-- a remplacé le commentaire de la vue EN ENTIER au lieu d'en corriger la seule partie fausse
+-- (la description du mode de défaillance service_role), et a emporté au passage DEUX clauses
+-- ENCORE VRAIES du commentaire initial (20260818170000) :
+--   1. le renvoi à l'assertion sur information_schema.columns de tests/rls/evenements.test.ts,
+--      qui attraperait une colonne ajoutée un jour « pour la commodité » ;
+--   2. et surtout LE PLUS DANGEREUX DES DEUX MODES DE DÉFAILLANCE — celui où l'hypothèse
+--      BYPASSRLS du propriétaire de la vue serait fausse : cette vue ne lèverait ALORS AUCUNE
+--      erreur, elle rendrait ZÉRO LIGNE POUR TOUT LE MONDE, et les étiquettes de séminaires
+--      disparaîtraient de toutes les fiches membres SANS LA MOINDRE TRACE. Un mode MUET,
+--      remplacé par la description d'un mode BRUYANT et sans conséquence de sécurité
+--      (service_role, 42501) : le remplacement intégral a rendu le commentaire plus rassurant
+--      que ce que le code ne tient, exactement dans le sens dangereux.
+--
+-- LA LEÇON, générale et pas seulement de ce fichier : remplacer un texte en entier au lieu
+-- d'en corriger la partie fausse coûte les parties vraies.
+--
+-- Cette migration réémet le commentaire en portant LES DEUX modes de défaillance à la fois,
+-- plus le renvoi à l'assertion sur les colonnes exposées :
+--   - le mode BRUYANT, vérifié empiriquement par la ronde précédente (ee096b6) : un appel
+--     service_role échoue TOUJOURS avec une erreur 42501 (refus de privilège d'EXECUTE sur
+--     prive.peut_lire_membre), que la table sous-jacente soit vide ou non — CONSERVÉ tel quel,
+--     il est exact ;
+--   - le mode MUET, jamais observé (il suppose l'hypothèse BYPASSRLS fausse, ce qui ne
+--     s'observe qu'en la rendant vraie artificiellement, hors périmètre de cette correction) —
+--     RESTAURÉ, parce que c'est le seul des deux qui aurait une conséquence de sécurité.
+comment on view public.seminaires_assistes is
+  'Séminaires assistés par un membre, lisibles de TOUT COMPTE ACTIF (spec §4.4, D2, D16). SEULE VUE DU PROJET EN security_invoker = false (D71), écrit explicitement et non laissé au défaut : elle contourne délibérément la RLS de participations, fermée à l''administrateur et au modérateur, parce que le partage à faire est colonne à colonne là où la RLS est ligne à ligne. Elle NE contourne PAS la RLS de membres : prive.peut_lire_membre (D72) la réimpose, une seule définition partagée avec la politique membres_lecture. auth.uid() continue de désigner l''appelant. Union et non union all (D70) : une même personne peut figurer à un événement comme membre ET comme externe converti. CINQ COLONNES, aucune ne portant un désir, une note ou une identité externe (D73) — une colonne ajoutée un jour « pour la commodité » serait attrapée par l''assertion sur information_schema.columns de tests/rls/evenements.test.ts. DEUX MODES DE DÉFAILLANCE À CONNAÎTRE, PAS UN SEUL (ronde de correction, restaure le second, emporté à tort par 20260818200000) : (1) BRUYANT ET VÉRIFIÉ — un appel service_role (PostgREST, clientAdmin()) échoue TOUJOURS avec une erreur 42501 (« permission denied for function peut_lire_membre »), que la table sous-jacente soit vide ou non, service_role n''ayant jamais eu EXECUTE sur prive.peut_lire_membre ; seul le canal `postgres` (éditeur SQL, `supabase db query --linked`) contourne aussi ce contrôle et rend un résultat vide sans erreur, ce canal n''étant PAS représentatif de service_role. (2) MUET, JAMAIS OBSERVÉ, ET LE PLUS DANGEREUX DES DEUX — si l''hypothèse BYPASSRLS du propriétaire de cette vue était fausse, elle ne lèverait AUCUNE erreur : elle rendrait zéro ligne POUR TOUT LE MONDE, et les étiquettes de séminaires disparaîtraient de toutes les fiches membres SANS LA MOINDRE TRACE — à surveiller à chaque modification du propriétaire de la vue. Aucune ligne ne fuit dans le premier mode ; aucun code de production ne lit cette vue via clientAdmin() : seminairesAssistes (T15) passe par clientServeur(), sous l''identité de l''appelant.';

@@ -7324,6 +7324,17 @@ git commit -m "feat: valider et afficher l'origine conversion_participant, sans 
 
 ### Task 23 : `tests/rls/evenements.test.ts` — schéma, RLS et les deux vues (preuves 1, 2, 4, 5, 6, 7, 8, 17)
 
+⚠️ **CONSTAT REPORTÉ DE LA RONDE DE CORRECTION (registre, Tasks 7-9 / I3), TOUJOURS OUVERT AU
+MOMENT OÙ CETTE NOTE EST ÉCRITE : la promesse centrale de la phase n'est encore vérifiée par
+rien.** Le seul canal employé jusqu'ici (`supabase db query --linked`) s'exécute comme
+`postgres`, qui contourne la RLS et rendrait des lignes même si `security_invoker` valait
+`true` sur `seminaires_assistes` — il ne distingue pas les deux régimes. **C'est la preuve
+n°5 ci-dessous, et ELLE SEULE, qui ferme ce sens** : lire la vue par `clientSimple` (compte
+ordinaire, JWT réel) et obtenir des lignes, **dans le même test** que celui qui constate que
+`participations` rend zéro ligne pour ce même compte — seule façon de distinguer « la vue
+contourne comme prévu » de « l'hypothèse BYPASSRLS est fausse et tout le monde voit du vide ».
+Tant que cette tâche n'est pas exécutée, le cas POSITIF de la vue reste sans preuve.
+
 **Fichiers :**
 - Créer : `tests/rls/evenements.test.ts`
 
@@ -8044,6 +8055,20 @@ git commit -m "test: schema, RLS et les deux vues des evenements (preuves 1, 2, 
 ---
 
 ### Task 24 : `tests/rls/conversion-participants.test.ts` (preuves 3, 9, 10, 11, 12, 13)
+
+⚠️ **CONSTAT REPORTÉ DE LA RONDE DE CORRECTION (registre, Tasks 4-6 / I2, et revue
+20260818140000), TOUJOURS OUVERT AU MOMENT OÙ CETTE NOTE EST ÉCRITE : l'opérateur
+`is distinct from` de `prive.refuser_reouverture_participant`
+(20260818140000_participants_externes.sql:96 et :102) — dont le commentaire dit que `<>`
+« laisserait passer » une remise à NULL — n'est éprouvé PAR RIEN aujourd'hui.** `grep` sur
+`tests/` rend zéro occurrence de `participant_deja_converti` et de `classement_definitif`.
+**C'est la preuve n°9 ci-dessous, et elle seule, qui doit fermer ce sens** : l'étape « le
+DÉCLENCHEUR refuse aussi une écriture DIRECTE, y compris la remise à NULL — c'est le cas que
+`<>` laisserait passer » exerce précisément la remise à `null` de `converti_en_membre_id` sur
+une ligne déjà convertie, avec un contrôle positif par relecture. Vérifier à l'exécution de
+cette tâche que cette assertion existe bel et bien et qu'elle porte sur la remise à NULL
+(le cas où `<>` rend NULL et court-circuite le `if`), pas seulement sur une seconde valeur
+non nulle.
 
 **Fichiers :**
 - Créer : `tests/rls/conversion-participants.test.ts`

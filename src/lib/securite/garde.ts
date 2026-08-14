@@ -156,3 +156,23 @@ export async function exigerModerateurOuAdministrateur(): Promise<Profil> {
   }
   return profil
 }
+
+/**
+ * Le compte connecté est-il administrateur ? Rend un booléen pour cette décision de rôle
+ * précise — elle ne redirige jamais pour la départager. Elle PEUT néanmoins rediriger en
+ * amont, vers `/deconnexion`, via `exigerProfilActif` si aucun profil actif n'existe : ce
+ * n'est pas un verdict de rôle, c'est le même barrage de session que devant toute page.
+ *
+ * À n'employer que pour DÉCIDER D'AFFICHER un formulaire ou un bouton — même mise en garde
+ * que `aAutoriteSur` et `estModerateurOuAdministrateur`. La protection réelle, c'est
+ * `exigerAdministrateur`, et elle seule.
+ *
+ * Écrite pour `/evenements/a-traiter` (D55), le premier écran du projet dont la
+ * CONSULTATION est ouverte au modérateur alors que DEUX de ses gestes sont réservés à
+ * l'administrateur. Jusqu'ici, les écrans réservés à l'administrateur l'étaient en entier.
+ */
+export async function estAdministrateur(): Promise<boolean> {
+  const profil = await exigerProfilActif()
+  const roles = await rolesDuProfil(profil.id)
+  return roles.includes('administrateur')
+}

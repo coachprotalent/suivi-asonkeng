@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import { compteurAelMembre } from '@/lib/donnees/ael'
 import { disciplesDe } from '@/lib/donnees/arbre'
 import { etatCompteLie } from '@/lib/donnees/comptes'
+import { seminairesAssistes } from '@/lib/donnees/evenements'
 import { membreBrefParId, membreParId } from '@/lib/donnees/membres'
 import { rolesDuProfil } from '@/lib/donnees/profils'
 import { statutsDuMembre } from '@/lib/donnees/statuts'
@@ -36,19 +37,29 @@ export default async function PageFicheMembre({
     notFound()
   }
 
-  const [roles, statuts, disciples, faiseur, dirigeant, peutEcrireStatuts, compteLie, compteurAel] =
-    await Promise.all([
-      rolesDuProfil(profil.id),
-      statutsDuMembre(membre.id),
-      disciplesDe(membre.id),
-      membre.faiseurDeDiscipleId
-        ? membreBrefParId(membre.faiseurDeDiscipleId)
-        : Promise.resolve(null),
-      membre.dirigeantId ? membreBrefParId(membre.dirigeantId) : Promise.resolve(null),
-      aAutoriteSur(membre.id),
-      etatCompteLie(membre.id),
-      compteurAelMembre(membre.id),
-    ])
+  const [
+    roles,
+    statuts,
+    disciples,
+    faiseur,
+    dirigeant,
+    peutEcrireStatuts,
+    compteLie,
+    compteurAel,
+    seminaires,
+  ] = await Promise.all([
+    rolesDuProfil(profil.id),
+    statutsDuMembre(membre.id),
+    disciplesDe(membre.id),
+    membre.faiseurDeDiscipleId
+      ? membreBrefParId(membre.faiseurDeDiscipleId)
+      : Promise.resolve(null),
+    membre.dirigeantId ? membreBrefParId(membre.dirigeantId) : Promise.resolve(null),
+    aAutoriteSur(membre.id),
+    etatCompteLie(membre.id),
+    compteurAelMembre(membre.id),
+    seminairesAssistes(membre.id),
+  ])
   const estAdmin = roles.includes('administrateur')
 
   const lignes: Array<[string, string | null]> = [
@@ -218,6 +229,51 @@ export default async function PageFicheMembre({
                 {statut.dateAcquisition ? (
                   <span className="text-neutral-500"> · {formaterDateSeule(statut.dateAcquisition)}</span>
                 ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className="mt-8">
+        <h2 className="mb-3 text-lg font-medium">Séminaires assistés</h2>
+        {/*
+          Lue depuis la vue `seminaires_assistes` (D70, D71), la SEULE vue du projet en
+          `security_invoker = false` : elle contourne délibérément la RLS de
+          `participations` — OUVERTE au seul administrateur et modérateur (policy
+          `participations_lecture`, `prive.est_moderateur_ou_admin()`), FERMÉE à tout
+          compte ordinaire — pour rendre le seul FAIT de la participation lisible de tout
+          compte actif (§4.4, D2, D16). Elle ne contourne PAS la RLS de `membres` —
+          `prive.peut_lire_membre` (D72) la réimpose.
+
+          L'HISTORIQUE DES CONVERTIS EST COMPRIS : la seconde branche de la vue projette les
+          participations d'externes convertis sur `converti_en_membre_id`, résolu à la
+          LECTURE. Aucune écriture passée n'a bougé (D69) — repointer
+          `participations.membre_id` effacerait le fait que cette personne est entrée par un
+          séminaire, ce que D13 veut précisément mesurer.
+
+          SI CETTE SECTION EST VIDE SUR TOUTES LES FICHES, la première chose à vérifier est
+          `reloptions` de la vue : `security_invoker = true` la rendrait silencieusement
+          vide pour tout compte ordinaire, sans la moindre erreur (piège n°8 du design).
+          AUCUN DÉSIR N'EST AFFICHÉ ICI, et la vue n'en expose aucun (D73) : ils restent
+          réservés à l'administrateur et au modérateur, sur l'écran de l'évènement.
+        */}
+        {seminaires.length === 0 ? (
+          <p className="text-sm text-neutral-600">Aucun séminaire enregistré.</p>
+        ) : (
+          <ul className="flex flex-wrap gap-2">
+            {seminaires.map((seminaire) => (
+              <li
+                key={seminaire.evenementId}
+                className="rounded-full border border-neutral-300 px-3 py-1 text-sm"
+              >
+                <Link href={`/evenements/${seminaire.evenementId}`} className="underline underline-offset-4">
+                  {seminaire.titre}
+                </Link>
+                <span className="text-neutral-500">
+                  {' '}
+                  · {seminaire.type} · {formaterDateSeule(seminaire.dateDebut)}
+                </span>
               </li>
             ))}
           </ul>

@@ -1,0 +1,28 @@
+-- Ronde de correction (constat propre, découvert en vérifiant la Task 8 depuis un vrai
+-- compte service_role plutôt que depuis l'éditeur SQL) : le commentaire posé par
+-- 20260818170000_seminaires_assistes.sql (appliquée, non modifiée) affirme qu'une requête
+-- service_role sur cette vue « rend zéro ligne, sans la moindre erreur ». C'est FAUX,
+-- vérifié empiriquement, dans les deux sens :
+--
+-- - une requête service_role (via PostgREST, `createClient(..., CLE_SERVICE)`, exactement
+--   ce que `clientAdmin()` construit) sur seminaires_assistes échoue TOUJOURS avec une
+--   ERREUR 42501 (« permission denied for function peut_lire_membre »), QUE LA TABLE
+--   participations SOIT VIDE OU NON : le contrôle d'exécution (EXECUTE) sur une fonction
+--   SECURITY DEFINER est vérifié pour le RÔLE APPELANT au moment de la planification de la
+--   requête, PAS ligne par ligne à l'exécution — service_role n'a jamais eu ce grant
+--   (`revoke ... from ... service_role` dans 20260818110000). Ce n'est donc pas « la
+--   fonction répond faux » mais « l'appel lui-même est refusé ».
+-- - la confusion vient de l'éditeur SQL du projet Supabase (et de `supabase db query
+--   --linked`, canal utilisé pour vérifier cette phase) : ces deux canaux s'exécutent comme
+--   le rôle `postgres`, propriétaire, qui LUI a EXECUTE sur la fonction — une requête là
+--   rend bien un résultat vide sans erreur, mais ce n'est PAS le comportement de
+--   service_role, exactement l'avertissement que la Task 8 donnait déjà sur ce canal pour
+--   un usage différent.
+--
+-- Conclusion pratique inchangée (celle qui compte pour la sécurité) : AUCUNE des deux
+-- manifestations ne laisse fuir une ligne à service_role, et le brief le disait déjà —
+-- « aucun code de production ne lit cette vue via clientAdmin() ». Seule la DESCRIPTION du
+-- mode de défaillance était trop précise par rapport à ce que le code tient : la légende
+-- ci-dessous dit ce qui est vérifié.
+comment on view public.seminaires_assistes is
+  'Séminaires assistés par un membre, lisibles de TOUT COMPTE ACTIF (spec §4.4, D2, D16). SEULE VUE DU PROJET EN security_invoker = false (D71), écrit explicitement et non laissé au défaut : elle contourne délibérément la RLS de participations, fermée à l''administrateur et au modérateur, parce que le partage à faire est colonne à colonne là où la RLS est ligne à ligne. Elle NE contourne PAS la RLS de membres : prive.peut_lire_membre (D72) la réimpose, une seule définition partagée avec la politique membres_lecture. auth.uid() continue de désigner l''appelant. Union et non union all (D70) : une même personne peut figurer à un événement comme membre ET comme externe converti. CINQ COLONNES, aucune ne portant un désir, une note ou une identité externe (D73). MODE DE DÉFAILLANCE VÉRIFIÉ (ronde de correction, corrige la légende initiale) : un appel service_role (PostgREST, clientAdmin()) échoue TOUJOURS avec une erreur 42501 (« permission denied for function peut_lire_membre »), que la table sous-jacente soit vide ou non — service_role n''a jamais eu EXECUTE sur prive.peut_lire_membre, et ce refus est vérifié pour le rôle appelant à la planification, pas ligne par ligne. AUCUNE ligne ne fuit dans les deux cas ; seul le canal `postgres` (éditeur SQL, `supabase db query --linked`) contourne aussi ce contrôle et rend un résultat vide sans erreur — ce canal n''est PAS représentatif de service_role. Aucun code de production ne lit cette vue via clientAdmin() : seminairesAssistes (T15) passe par clientServeur(), sous l''identité de l''appelant.';

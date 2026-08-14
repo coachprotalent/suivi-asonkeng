@@ -165,15 +165,29 @@ test('un administrateur génère un token générique, le voit une seule fois, p
   // révocation ne serait donc jamais déclenchée, et l'assertion suivante resterait
   // bloquée jusqu'au timeout. Même précaution que `tests/e2e/archivage-compte.spec.ts`
   // pour son bouton « Archiver ».
+  // COMPTAGE AVANT, ET C'EST TOUT L'OBJET DU CORRECTIF CI-DESSOUS.
+  const revocablesAvant = await page.getByRole('button', { name: 'Révoquer' }).count()
+
   page.once('dialog', (dialogue) => dialogue.accept())
   await page.getByRole('button', { name: 'Révoquer' }).first().click()
-  await expect(page.getByText('Révoqué le')).toBeVisible()
+  await expect(page.getByText('Révoqué le').first()).toBeVisible()
 
-  // Le bouton disparaît : preuve que `revocable` est bien retombé à faux côté
-  // interface. Mais une ligne qui porte une date de révocation ne prouve rien du
+  // Le bouton de CETTE ligne disparaît : preuve que `revocable` est bien retombé à faux
+  // côté interface. Mais une ligne qui porte une date de révocation ne prouve rien du
   // comportement RÉEL de la consommation (avertissement du brief) — la preuve
   // suivante est la seule qui compte.
-  await expect(page.getByRole('button', { name: 'Révoquer' })).toHaveCount(0)
+  //
+  // ⚠️ DELTA, PAS UN TOTAL ABSOLU — CORRIGÉ PAR LA VAGUE POST-REVUE, APRÈS UN ÉCHEC RÉEL.
+  // Cette ligne lisait `expect(...'Révoquer').toHaveCount(0)`, c'est-à-dire « PLUS AUCUN
+  // bouton Révoquer SUR TOUTE LA PAGE ». Elle tenait tant que la seule ligne révocable de
+  // la production était celle de ce test. Elle a cessé de tenir le jour où
+  // l'administrateur RÉEL a émis une invitation nominative depuis l'application : ce token
+  // légitime, non révoqué et non expiré, porte lui aussi un bouton « Révoquer », et la
+  // suite est devenue ROUGE POUR TOUJOURS sans qu'une seule ligne de code applicatif ait
+  // changé. C'est le piège que le registre nomme : sur une base JAMAIS réinitialisée, tout
+  // comptage ABSOLU est une bombe à retardement — vraie au premier lancement, fausse
+  // ensuite. Le delta, lui, ne dépend pas de ce que la production contient par ailleurs.
+  await expect(page.getByRole('button', { name: 'Révoquer' })).toHaveCount(revocablesAvant - 1)
 
   // LA PREUVE QUI COMPTE : ce code, désormais révoqué, est réellement refusé par
   // `consommer_token_inscription` — pas seulement marqué en base. Un token

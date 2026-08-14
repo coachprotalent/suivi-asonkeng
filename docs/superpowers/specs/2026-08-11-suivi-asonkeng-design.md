@@ -61,6 +61,37 @@ pendant l'implémentation sans validation.
 > l'ordre de grandeur d'une équipe restreinte. La liste d'adjacence reste le bon choix — la
 > profondeur du parcours reste faible — mais les sélecteurs et l'annuaire en tiennent compte.
 
+> **Ajout du 2026-08-14 — où vivent les décisions D30 à D80.** La table ci-dessus s'arrête
+> à D29. Elle ne les recopie pas, et ce n'est pas un oubli : les décisions prises pendant le
+> cadrage d'une phase vivent dans le design de cette phase, avec leur justification
+> complète. Cette note dit **où chercher**, pour qu'un lecteur partant d'ici n'ignore plus
+> leur existence — plus de la moitié des décisions du projet étaient invisibles depuis ce
+> document.
+>
+> | Plage | Document |
+> |---|---|
+> | D1 à D16, D22 à D29 | **ce document**, table du §2 ci-dessus |
+> | D17 à D21 | `2026-08-12-phase-1c-design.md` |
+> | D30 à D43 | `2026-08-13-phase-2b-design.md` (D43 au §7.1, hors table) |
+> | D36 à D53 | `2026-08-13-phase-3-ael-design.md` |
+> | D54 à D80 | `2026-08-14-phase-4-evenements-design.md` |
+>
+> **⚠️ D36 à D43 apparaissent DEUX FOIS dans ce tableau, et ce n'est pas une coquille.**
+> Ces huit numéros sont **attribués deux fois**, avec des contenus **différents** : le
+> design de la phase 3 annonce que « D30 à D35 appartiennent au design de la 2b » et
+> reprend à D36, alors que la table du §3 de la 2b va jusqu'à **D42**, plus une
+> « Correction du 2026-08-13 (**D43**) » au §7.1. Ainsi, **D36** désigne à la fois
+> « le plafond de tentatives fixé à 10 par adresse et par tranche de 15 minutes » (2b) et
+> « l'exclusivité enseignant/modérateur par contrainte CHECK » (phase 3) ; **D42**, à la
+> fois « la fiche `en_attente` d'une demande annulée est supprimée » (2b) et « le nouveau
+> garde `exigerModerateurOuAdministrateur` » (phase 3) ; et ainsi de suite pour les huit.
+>
+> **Rien n'est renuméroté, et rien ne le sera** : ces numéros sont cités dans des
+> `comment on` **déjà appliqués en base**, et renuméroter créerait une seconde vérité sans
+> supprimer la première — le code se mettrait à mentir. **Règle à appliquer désormais :
+> toute citation d'un de ces huit numéros écrit la phase**, sous la forme « D36 (2b) » ou
+> « D36 (phase 3) ». Les numéros à venir restent globaux et continuent au-delà de D80.
+
 **Hors périmètre, volontairement** : envoi d'emails, SMS, temps réel, exports, tableau de bord
 statistique, photos de profil. Aucun de ces éléments n'est nécessaire aux usages décrits, et
 chacun pourra s'ajouter sans remise en cause du modèle.
@@ -340,6 +371,8 @@ Cette règle est implémentée par une fonction unique `peutModifier(profil, mem
 | Rattacher ou détacher un membre d'une antenne | ❌ | ✅ | ✅ |
 | Créer un événement et saisir les trois désirs | ❌ | ✅ | ✅ |
 | Convertir un participant externe en membre | ❌ | ❌ | ✅ |
+| Classer sans suite un participant externe | ❌ | ❌ | ✅ |
+| Consulter la liste « à traiter » des participants externes | ❌ | ✅ | ✅ |
 | Valider ou rejeter une demande de suivi | ❌ | ❌ | ✅ |
 | Générer un token, créer un compte, lier un compte à une fiche | ❌ | ❌ | ✅ |
 | Réinitialiser le mot de passe d'autrui, attribuer les rôles | ❌ | ❌ | ✅ |
@@ -368,6 +401,23 @@ Cette règle est implémentée par une fonction unique `peutModifier(profil, mem
 > voyant ces confidences s'élargit donc d'un rôle — c'est le vrai coût de cet amendement,
 > et il est dit ici plutôt que découvert à l'implémentation. Sans effet sur les phases 0
 > à 1c, qui ne livrent aucun événement — **à appliquer au plan de la phase 4.**
+>
+> **Amendement du 2026-08-14 (D55).** Les deux lignes « Classer sans suite un participant
+> externe » et « Consulter la liste "à traiter" » sont **nouvelles** : la matrice était
+> **silencieuse** sur ces deux gestes, qui n'existaient dans aucun document avant les
+> décisions utilisateur qui les ont créés. Son silence est **constaté et comblé**, jamais
+> réinterprété — même méthode que D50 pour le rattachement à une antenne.
+>
+> **Le classement est réservé à l'administrateur, comme la conversion.** Ce sont les
+> **deux seules** façons de vider la liste ; en réserver une et ouvrir l'autre serait
+> incohérent — un modérateur pourrait **vider la liste de travail de l'administrateur sans
+> convertir personne**.
+>
+> **La consultation, elle, est ouverte au modérateur**, et cette ligne ne lui accorde rien
+> de nouveau : la liste est **intégralement dérivée** de `desir_suivi_spirituel`, que la
+> ligne « Voir les trois désirs exprimés lors d'un événement » lui ouvre déjà depuis D23.
+> Elle est écrite parce qu'une capacité qui se déduit d'une autre finit par se perdre —
+> c'est exactement ce qui est arrivé au §4.4 pendant deux phases.
 
 ### 5.3 Traduction technique
 

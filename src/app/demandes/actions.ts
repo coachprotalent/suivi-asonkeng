@@ -119,18 +119,22 @@ export async function annulerDemandeSuivi(donnees: FormData): Promise<ResultatDe
 }
 
 /**
- * Valide une demande comme NOUVELLE PERSONNE (design 2b §7.3) — les deux origines
- * partagent cette action, avec un comportement différent selon l'`origine` de la
- * demande, RELUE depuis `demandes_membre` (voir plus bas — I2, revue post-Task-17) :
+ * Valide une demande comme NOUVELLE PERSONNE (design 2b §7.3, D66 de la phase 4) — les
+ * TROIS ORIGINES partagent cette action, avec un comportement différent selon l'`origine`
+ * de la demande, RELUE depuis `demandes_membre` (voir plus bas — I2, revue post-Task-17) :
  * - auto_inscription : fiche -> actif, profils.membre_id du demandeur posé sur
  *   cette fiche. Aucune écriture d'arbre.
- * - demande_suivi : fiche -> actif, faiseur_de_disciple_id = la fiche du
- *   demandeur, RELUE depuis `profils.membre_id` et non prise du formulaire
- *   (mineur de la revue finale — le commentaire l'annonçait déjà ainsi, le code
- *   ne le faisait pas). PEUT être NULL si le demandeur n'a pas de fiche liée —
- *   cas du compte racine, registre 1c piège n°3 : traité en silence, pas en
- *   échec. `dirigeant_id` et `dirigeant_force` restent, EUX, lus du formulaire :
- *   ce sont les seules valeurs que l'administrateur décide sur cet écran.
+ * - demande_suivi : `faiseur_de_disciple_id`, `dirigeant_id` et `dirigeant_force`
+ *   écrits PAR LA PASSERELLE `public.definir_arbre`, qui prend le verrou consultatif
+ *   « arbre » (20260814,1) — voir le commentaire dans le corps. PUIS fiche -> actif.
+ *   L'ordre compte. `faiseur_de_disciple_id` est RELU depuis `profils.membre_id` et
+ *   non pris du formulaire ; il PEUT être NULL (compte racine, D11).
+ * - conversion_participant (D66, phase 4, ajoutée après la rédaction initiale de ce
+ *   docblock — I4 de la revue des Tasks 22-24, qui disait encore « les deux origines ») :
+ *   fiche -> actif SEUL, RIEN D'AUTRE. Ni `profils.membre_id` (le demandeur est
+ *   l'administrateur qui a converti, pas la personne convertie), ni écriture d'arbre (le
+ *   chemin 1 de la conversion n'en pose pas — le rattachement se fait ensuite, séparément,
+ *   depuis `/membres/<id>/arbre`). Voir le bloc dédié plus bas dans le corps de la fonction.
  *
  * NON ATOMIQUE À TRAVERS SES TROIS ÉCRITURES (membres, éventuellement profils,
  * demandes_membre) : voir la Task 17 du plan pour la justification de ce choix.
@@ -167,7 +171,25 @@ export async function validerDemandeNouvellePersonne(donnees: FormData): Promise
     erreurLecture ||
     !demandeLue ||
     !demandeLue.membre_id ||
-    (demandeLue.origine !== 'auto_inscription' && demandeLue.origine !== 'demande_suivi')
+    // TROIS ORIGINES VALIDABLES DEPUIS CET ÉCRAN. `conversion_participant` (D66) est
+    // ajoutée par la phase 4 : le chemin 1 de la conversion d'un participant externe crée
+    // une fiche `en_attente` et cette demande, et LA VALIDATION EST LE SEUL GESTE DE TOUTE
+    // L'APPLICATION QUI PASSE UNE FICHE `en_attente` À `actif`. Sans elle, la fiche reste
+    // invisible de tout compte ordinaire (`prive.peut_lire_membre` ne l'ouvre qu'à
+    // l'administrateur et à son demandeur), l'historique de séminaire du converti ne
+    // s'affiche nulle part (seconde branche de `seminaires_assistes`), et la conversion
+    // devient irréversible ET inachevable — la demande n'étant pas annulable (D64) et le
+    // membre pas supprimable (`on delete restrict`).
+    // CE QUE CETTE ORIGINE DÉCLENCHE, ET C'EST TOUT : `etat = 'actif'` sur la fiche. Elle
+    // n'entre NI dans le bloc `demande_suivi` (qui poserait le demandeur comme faiseur de
+    // disciple — or le demandeur est ici l'administrateur qui a converti, et il n'est pas
+    // le faiseur de disciple de la personne convertie), NI dans le bloc `auto_inscription`
+    // (qui écrirait `profils.membre_id` du demandeur — or il a déjà sa propre fiche).
+    // Le rattachement à l'arbre est un geste SÉPARÉ, fait ensuite depuis
+    // `/membres/<id>/arbre`.
+    (demandeLue.origine !== 'auto_inscription' &&
+      demandeLue.origine !== 'demande_suivi' &&
+      demandeLue.origine !== 'conversion_participant')
   ) {
     console.error('validerDemandeNouvellePersonne : demande introuvable, déjà traitée, ou sans fiche', {
       demandeId,
@@ -181,20 +203,38 @@ export async function validerDemandeNouvellePersonne(donnees: FormData): Promise
   const membreId = demandeLue.membre_id
   const demandeurProfilId = demandeLue.demandeur_profil_id
 
-  const colonnesMembre: Record<string, unknown> = { etat: 'actif' }
+  // ÉCRITURE DE L'ARBRE, EN PREMIER, ET PAR LA PASSERELLE — PAS PAR UN UPDATE DIRECT.
+  //
+  // Écart signalé au §11, point 8 du design de la phase 4, comblé ici. La 1c (§4.1) a
+  // établi qu'un déclencheur anti-cycle SEUL ne ferme pas la classe de défaut des
+  // réassignations concurrentes : deux transactions voient chacune un arbre sans cycle
+  // et valident toutes les deux. `public.definir_arbre` prend
+  // `pg_advisory_xact_lock(20260814, 1)` en PREMIÈRE instruction pour cela. Cette
+  // fonction, elle, écrivait les trois colonnes d'arbre par un `update` direct via
+  // `clientAdmin()` : la barrière de dernier recours (membres_anti_cycle) jouait, la
+  // SÉRIALISATION ne jouait pas. La fenêtre était étroite — la fiche validée vient de
+  // naître et n'a pas de descendant — mais une transaction concurrente peut, pendant ce
+  // temps, rattacher son futur faiseur de disciple SOUS ELLE via `definir_arbre` sans la
+  // voir. C'est la même nature de défaut que celle que la 1c a jugée inacceptable.
+  //
+  // ORDRE : l'arbre d'abord, l'état ensuite. Cette action reste NON ATOMIQUE à travers
+  // ses écritures (choix documenté de la Task 17 de la 2b) ; ce qui change, c'est ce que
+  // laisse un échec au milieu. « État puis arbre » laisserait une fiche `actif` DÉTACHÉE,
+  // visible dans l'annuaire. « Arbre puis état » laisse une fiche `en_attente` avec son
+  // faiseur déjà posé : invisible, demande toujours `en_attente`, revalidation
+  // idempotente parce que `definir_arbre` l'est elle-même — pas parce que les trois
+  // valeurs seraient relues depuis les mêmes sources : seul `faiseur_de_disciple_id`
+  // l'est (fait relu depuis `profils`, ci-dessous) ; `dirigeant_id` et
+  // `dirigeant_force`, eux, sont RESOUMIS par le formulaire à chaque revalidation, donc
+  // potentiellement différents d'un essai à l'autre. La conclusion (revalidation sans
+  // échec ni incohérence) reste vraie ; la raison donnée ici pour deux des trois
+  // colonnes ne l'était pas (ronde de correction, mineur signalé).
   if (origine === 'demande_suivi') {
-    // `faiseur_de_disciple_id` est un FAIT, pas un choix : c'est la fiche du
-    // demandeur. Il était pris du formulaire (`demandeurMembreId`), alors que le
-    // commentaire de tête le décrivait déjà comme « la fiche du demandeur » —
-    // mineur de la revue finale, et la même faille que I6 sous un autre visage :
-    // un formulaire falsifié pouvait désigner N'IMPORTE QUELLE fiche comme
-    // faiseur de disciple de la personne validée, c'est-à-dire écrire dans
-    // l'arbre une filiation qui n'a jamais eu lieu. Relu depuis `profils`,
-    // exactement la source dont `listerDemandesEnAttente` tire l'affichage.
-    //
-    // `dirigeant_id` et `dirigeant_force`, EUX, restent lus du formulaire, et
-    // c'est délibéré : ce sont les seules valeurs de cet écran que
-    // l'administrateur DÉCIDE (il corrige la proposition automatique). Un fait se
+    // `faiseur_de_disciple_id` est un FAIT, pas un choix : c'est la fiche du demandeur,
+    // RELUE depuis `profils` (I2/mineur de la revue finale de la 2b), jamais prise du
+    // formulaire. NULL toléré, pas un échec : le compte racine n'a aucune fiche liée
+    // (D11). `dirigeant_id` et `dirigeant_force`, EUX, restent lus du formulaire — ce
+    // sont les seules valeurs que l'administrateur DÉCIDE sur cet écran. Un fait se
     // relit, une décision se soumet.
     const { data: profilDemandeur, error: erreurProfilDemandeur } = await admin
       .from('profils')
@@ -209,17 +249,36 @@ export async function validerDemandeNouvellePersonne(donnees: FormData): Promise
       })
       return { erreur: MESSAGE_ECHEC_VALIDATION }
     }
-    // NULL toléré, pas un échec : le compte racine n'a aucune fiche liée (spec
-    // D11, registre 1c piège n°3). Le membre validé n'a alors pas de faiseur de
-    // disciple, ce qui est l'état exact de la réalité.
-    colonnesMembre.faiseur_de_disciple_id = profilDemandeur?.membre_id ?? null
-    colonnesMembre.dirigeant_id = String(donnees.get('dirigeantId') ?? '') || null
-    colonnesMembre.dirigeant_force = donnees.get('dirigeantForce') === '1'
+
+    const { error: erreurArbre } = await admin.rpc('definir_arbre', {
+      p_membre: membreId,
+      p_faiseur_de_disciple: profilDemandeur?.membre_id ?? null,
+      p_dirigeant: String(donnees.get('dirigeantId') ?? '') || null,
+      p_dirigeant_force: donnees.get('dirigeantForce') === '1',
+    })
+    if (erreurArbre) {
+      console.error('validerDemandeNouvellePersonne : échec RPC definir_arbre', {
+        demandeId,
+        membreId,
+        code: erreurArbre.code,
+        details: erreurArbre.details,
+        message: erreurArbre.message,
+      })
+      // Refus RETOURNÉ, jamais levé : voir le commentaire de tête de ce fichier. Aucun
+      // marqueur n'est discriminé ici — `membre_inconnu`, `faiseur_inconnu`,
+      // `dirigeant_inconnu` et `faiseur_de_disciple_archive` appellent tous le même geste
+      // de la part de l'administrateur (recharger la liste et recommencer), et le marqueur
+      // reste JOURNALISÉ ci-dessus, là où il sert : au diagnostic.
+      return { erreur: MESSAGE_ECHEC_VALIDATION }
+    }
   }
 
+  // L'état ensuite, et lui seul : `definir_arbre` a déjà écrit les trois colonnes
+  // d'arbre. Réécrire ici `faiseur_de_disciple_id` par un `update` direct rouvrirait
+  // exactement l'écart que l'appel ci-dessus vient de fermer.
   const { data: ficheMaj, error: erreurFiche } = await admin
     .from('membres')
-    .update(colonnesMembre)
+    .update({ etat: 'actif' })
     .eq('id', membreId)
     .select('id')
   if (erreurFiche || !ficheMaj || ficheMaj.length === 0) {
@@ -280,6 +339,16 @@ export async function validerDemandeNouvellePersonne(donnees: FormData): Promise
   await marquerNouvelleDemandeLue(admin, demandeId)
 
   revalidatePath('/demandes')
+  // M2 DE LA REVUE FINALE — CETTE ACTION FAIT PASSER UNE FICHE À `actif`, et ne revalidait
+  // que `/demandes`. Deux conséquences visibles ailleurs, et non revalidées :
+  //  - la fiche entre dans l'ANNUAIRE (`/membres` ne liste que les actifs) ;
+  //  - pour l'origine `conversion_participant`, son historique de séminaire devient lisible
+  //    de TOUS les comptes actifs (seconde branche de `seminaires_assistes`) — sa fiche
+  //    change donc pour tout le monde, pas seulement pour l'administrateur.
+  // Dette héritée de la 2b, mais la phase 4 a posé exactement ces deux revalidations partout
+  // ailleurs pour ce motif : les laisser absentes ICI était l'incohérence.
+  revalidatePath('/membres')
+  revalidatePath('/membres/[id]', 'page')
   return { erreur: null }
 }
 
