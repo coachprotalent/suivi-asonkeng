@@ -204,6 +204,15 @@ export async function convertirParticipant(
   // Une conversion fait apparaître l'historique de séminaire du converti sur sa fiche
   // (seconde branche de la vue, D70).
   revalidatePath('/membres/[id]', 'page')
+  // MINEUR CORRIGÉ (ronde du 2026-08-14, I3) : la fiche de CHAQUE évènement où ce
+  // participant a une participation affiche `externeConvertiEnMembreId` (` · converti`,
+  // `SectionParticipants`/`LigneParticipant`) — sans cette revalidation, un modérateur qui
+  // garderait la fiche d'évènement ouverte dans un autre onglet continuerait d'y voir la
+  // ligne comme non convertie jusqu'à sa prochaine navigation. Le participant pouvant avoir
+  // participé à PLUSIEURS évènements, `'page'` invalide la route dynamique entière — même
+  // motif que la ligne ci-dessus pour `/membres/[id]`, pas un chemin unique qu'il faudrait
+  // reconstruire depuis `demandeId` ou `participantId`.
+  revalidatePath('/evenements/[id]', 'page')
   return { erreur: null }
 }
 
