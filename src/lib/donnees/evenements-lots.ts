@@ -271,6 +271,29 @@ export async function participantsDEvenementParPage(
 }
 
 /**
+ * Nombre TOTAL de personnes dans la liste « à traiter », sans lire aucune ligne — sert à
+ * BORNER la pagination AVANT de lire une page, jamais après. MÊME MOTIF, MÊME DÉFAUT ET
+ * MÊME CORRECTIF que `compterParticipantsDEvenement` : lire directement la page demandée,
+ * puis comparer au total, fait renvoyer par PostgREST une erreur 416 (`Requested range not
+ * satisfiable`, `PGRST103`) dès que le décalage demandé dépasse le nombre de lignes de la
+ * vue — REPRODUIT ET VÉRIFIÉ EMPIRIQUEMENT (requête directe, `range(2450, 2474)` sur une vue
+ * à zéro ligne : `PGRST103`, « An offset of 2450 was requested, but there are only 0
+ * rows. »). `/evenements/a-traiter` porte le MÊME garde de borne haute que
+ * `/evenements/[id]` (Task 19) ; sans ce comptage préalable, il PLANTERAIT au lieu de
+ * rediriger, exactement comme la fiche d'évènement avant sa correction.
+ */
+export async function compterATraiter(supabase: SupabaseClient): Promise<number> {
+  const { count, error } = await supabase
+    .from('participants_a_traiter')
+    .select('participant_externe_id', { count: 'exact', head: true })
+
+  if (error) {
+    throw new Error(`Comptage de la liste à traiter impossible : ${error.message}`)
+  }
+  return totalObligatoire(count, 'compterATraiter')
+}
+
+/**
  * Une page de la liste « à traiter », lue depuis la vue `participants_a_traiter` (D74).
  * Tri TOTAL : `premiere_expression` puis `participant_externe_id` — deux personnes ayant
  * exprimé leur désir au MÊME séminaire partagent `premiere_expression`, et sans la seconde
@@ -278,8 +301,10 @@ export async function participantsDEvenementParPage(
  * RECONTACTER : « disparue » n'est pas un défaut d'affichage.
  *
  * `count` sur une vue AGRÉGÉE : PostgREST le calcule bien, la vue étant interrogée comme
- * une relation ordinaire — à VÉRIFIER contre la base à l'étape 3 de cette tâche, jamais à
- * supposer.
+ * une relation ordinaire — VÉRIFIÉ contre la base (voir `compterATraiter` ci-dessus, dont
+ * le comptage sert de garde à `/evenements/a-traiter` AVANT tout appel à cette fonction).
+ * Cette fonction elle-même doit toujours être appelée avec une `page` déjà bornée par
+ * l'appelant — jamais avec une valeur brute venue de l'adresse.
  */
 export async function participantsATraiterParPage(
   supabase: SupabaseClient,
