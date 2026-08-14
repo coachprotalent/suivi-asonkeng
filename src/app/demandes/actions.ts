@@ -198,7 +198,13 @@ export async function validerDemandeNouvellePersonne(donnees: FormData): Promise
   // laisse un échec au milieu. « État puis arbre » laisserait une fiche `actif` DÉTACHÉE,
   // visible dans l'annuaire. « Arbre puis état » laisse une fiche `en_attente` avec son
   // faiseur déjà posé : invisible, demande toujours `en_attente`, revalidation
-  // idempotente puisque les mêmes valeurs sont relues depuis les mêmes sources.
+  // idempotente parce que `definir_arbre` l'est elle-même — pas parce que les trois
+  // valeurs seraient relues depuis les mêmes sources : seul `faiseur_de_disciple_id`
+  // l'est (fait relu depuis `profils`, ci-dessous) ; `dirigeant_id` et
+  // `dirigeant_force`, eux, sont RESOUMIS par le formulaire à chaque revalidation, donc
+  // potentiellement différents d'un essai à l'autre. La conclusion (revalidation sans
+  // échec ni incohérence) reste vraie ; la raison donnée ici pour deux des trois
+  // colonnes ne l'était pas (ronde de correction, mineur signalé).
   if (origine === 'demande_suivi') {
     // `faiseur_de_disciple_id` est un FAIT, pas un choix : c'est la fiche du demandeur,
     // RELUE depuis `profils` (I2/mineur de la revue finale de la 2b), jamais prise du
