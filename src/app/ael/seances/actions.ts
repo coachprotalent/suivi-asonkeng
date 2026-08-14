@@ -4,9 +4,12 @@ import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { calculerOccurrences, HORIZON_GENERATION_SEMAINES } from '@/lib/domaine/ael'
 import { calendriersActifs } from '@/lib/donnees/ael'
+import { antenneParId } from '@/lib/donnees/antennes'
 import { exigerModerateurOuAdministrateur } from '@/lib/securite/garde'
 import { clientAdmin } from '@/lib/supabase/admin'
 import {
+  MESSAGE_ANTENNE_INACTIVE,
+  MESSAGE_ANTENNE_INCONNUE,
   MESSAGE_ANTENNE_MANQUANTE,
   MESSAGE_DATE_OBLIGATOIRE,
   MESSAGE_ECHEC_CREATION_MANUELLE,
@@ -128,6 +131,31 @@ export async function creerSeanceManuelle(
     .filter((valeur) => valeur.length > 0)
   if (antenneIds.length === 0) {
     return { erreur: MESSAGE_ANTENNE_MANQUANTE }
+  }
+
+  // I6 de la revue finale de branche — contrôle amont, nommé, sur le motif EXACT de ses
+  // deux sœurs de la même phase (`ajouterCalendrier`, `src/app/ael/calendriers/actions.ts:46-52`
+  // et `definirAntenneMembre`, `src/app/antennes/[id]/actions.ts:64-70`), et pour le même
+  // scénario : le formulaire ne propose que des antennes actives, mais rien n'empêche un
+  // onglet resté ouvert de reposter l'identifiant d'une antenne désactivée entre-temps.
+  // RIEN NE RATTRAPE EN AVAL : la clé étrangère `seances_ael_antennes.antenne_id` n'exige
+  // que l'EXISTENCE de l'antenne, jamais son état. Sans ce contrôle, une séance manuelle
+  // pouvait être liée EN SILENCE à une antenne hors service — sa liste de pointage serait
+  // alors vide (`membresDesAntennes` ne rend que des membres actifs, et
+  // `definirAntenneMembre` refuse d'en rattacher à une antenne désactivée), c'est-à-dire
+  // exactement la « séance fantôme que rien ne signale » contre laquelle la GÉNÉRATION est
+  // protégée par `calendriersActifs` (`src/lib/donnees/ael.ts:70-88`) et que la création
+  // manuelle laissait passer.
+  // Séquentiel et non `Promise.all` : le refus doit nommer la PREMIÈRE antenne fautive
+  // dans l'ordre du formulaire, et le nombre d'antennes cochées est de l'ordre de l'unité.
+  for (const antenneId of antenneIds) {
+    const antenne = await antenneParId(antenneId)
+    if (!antenne) {
+      return { erreur: MESSAGE_ANTENNE_INCONNUE }
+    }
+    if (!antenne.actif) {
+      return { erreur: MESSAGE_ANTENNE_INACTIVE }
+    }
   }
 
   const { data: seance, error } = await clientAdmin()

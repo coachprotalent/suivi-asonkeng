@@ -165,7 +165,14 @@ async function supprimerCompte(identifiant: string) {
   // d'un compte orphelin (profil supprimé, utilisateur auth resté) échouerait EN SILENCE
   // dès le 51e compte, laissant un compte de test actif en production — et le
   // `createUser` de l'exécution suivante échouerait alors sur un doublon d'adresse, pour
-  // une raison introuvable. On parcourt jusqu'à épuisement, comme partout ailleurs.
+  // une raison introuvable. On parcourt donc jusqu'à épuisement — DANS CE FICHIER.
+  //
+  // Mineur 1 de la revue finale de branche : ce commentaire disait « comme partout
+  // ailleurs », et c'est FAUX. 25 des 27 fichiers de test du dépôt appellent encore
+  // `listUsers()` sans parcours, et le README le documente comme une limite connue et
+  // non traitée. Un commentaire qui promet plus que le dépôt ne tient, écrit dans le
+  // correctif d'un constat : le motif exact que cette phase traque. La phrase ne décrit
+  // plus que ce fichier.
   const PAR_PAGE = 200
   for (let page = 1; ; page++) {
     const { data: comptes, error } = await admin.auth.admin.listUsers({ page, perPage: PAR_PAGE })
@@ -313,6 +320,19 @@ async function nettoyer() {
       admin,
       'id, etat, calendrier_id',
     )
+    // `calendrier_id !== null` est une protection DÉLIBÉRÉE : elle interdit à ce
+    // nettoyage de toucher une séance créée À LA MAIN, qui n'a jamais pu naître d'une
+    // génération.
+    //
+    // MINEUR 8 DE LA REVUE FINALE — SA CONTREPARTIE, DITE PLUTÔT QUE TUE : ce filtre
+    // exclut donc AUSSI toute séance manuelle créée PAR cette suite ou pendant son
+    // exécution. Le registre atteste qu'une séance manuelle a réellement été créée en
+    // production pendant une session de vérification humaine (Tasks 13-14, « 90 générées
+    // + 1 manuelle »). Une telle séance n'est rattrapée ici que si elle porte une
+    // jonction vers une antenne de la FAMILLE (balayage de `nettoyerFamille` plus haut) ;
+    // sans jonction, elle échappe aux deux mécanismes. C'est le même trou que l'I3 de la
+    // revue finale a refermé côté RLS par un marqueur `cree_par` — la même prise n'existe
+    // pas ici, la séance étant créée par la Server Action et non par la suite.
     const creees = apres.filter((l) => l.calendrier_id !== null && !idsSeancesAvant.has(l.id))
     let supprimees = 0
     for (const seance of creees) {
@@ -795,6 +815,79 @@ test('genererSeances : un compte simple ne peut pas générer, avec canari modé
   } finally {
     await contexteModerateur.close()
   }
+})
+
+// ---------------------------------------------------------------------------
+// I6 de la revue finale de branche — creerSeanceManuelle et l'antenne DÉSACTIVÉE.
+// ---------------------------------------------------------------------------
+
+test("creerSeanceManuelle refuse une antenne désactivée, avec contrôle positif", async ({ page }) => {
+  // La génération, elle, est protégée par `calendriersActifs` — c'est le test
+  // ci-dessus. La création MANUELLE ne l'était pas : elle lisait `antenneIds`, vérifiait
+  // seulement que le tableau n'était pas vide, et insérait la jonction. La clé étrangère
+  // n'exige que l'EXISTENCE de l'antenne, jamais son état, donc rien ne rattrapait en
+  // aval. Constat de la revue des Tasks 13-14, marqué « à corriger » au registre et
+  // tombé entre deux rondes.
+  //
+  // Le formulaire ne propose que des antennes ACTIVES (`/ael/seances` passe par
+  // `listerAntennes`), donc le refus ne peut être éprouvé que par une REQUÊTE FORGÉE —
+  // exactement le scénario qu'un onglet resté ouvert reproduit, et le même motif de
+  // preuve que sa sœur `definirAntenneMembre` (`tests/e2e/antennes-membres.spec.ts`).
+  const DATE_REFUSEE = '2026-11-11'
+  const DATE_ACCEPTEE = '2026-11-12'
+
+  await seConnecter(page, IDENT_MODERATEUR, MDP_MODERATEUR)
+  await page.goto('/ael/seances')
+  // Le formulaire vit dans un `<details>` REPLIÉ (`page.tsx`) : tant qu'il l'est, son
+  // contenu est masqué et `getByRole` ne le voit pas — un `filter({ has: … })` y attend
+  // en vain jusqu'au délai. On déplie d'abord, comme un utilisateur le ferait.
+  await page.getByText('Créer une séance manuellement').click()
+  const formulaire = page
+    .locator('form')
+    .filter({ has: page.getByRole('button', { name: 'Créer la séance' }) })
+  const champs = extraireChampsCaches(await formulaire.evaluate((el) => el.outerHTML))
+  verifierCaptureAction(champs)
+
+  // CONTRÔLE D'ENTRÉE : ces deux dates sont vierges avant le geste. Sans lui, une
+  // assertion « aucune séance à cette date » pourrait être verte pour la mauvaise
+  // raison.
+  const { data: avant } = await admin
+    .from('seances_ael')
+    .select('id')
+    .in('date', [DATE_REFUSEE, DATE_ACCEPTEE])
+  expect(avant).toEqual([])
+
+  await page.request.post('/ael/seances', {
+    multipart: { ...champs, date: DATE_REFUSEE, heure: '', antenneIds: idAntenneInactive },
+  })
+  const { data: apresRefus } = await admin.from('seances_ael').select('id').eq('date', DATE_REFUSEE)
+  expect(apresRefus).toEqual([])
+
+  // CONTRÔLE POSITIF, DANS LE MÊME TEST, avec le MÊME compte et la MÊME requête forgée :
+  // seule l'antenne change. Sans lui, le refus ci-dessus serait indistinguable d'un
+  // formulaire forgé qui ne fonctionne plus (champs `$ACTION*` périmés, garde de rôle
+  // qui aurait mordu, etc.).
+  await page.request.post('/ael/seances', {
+    multipart: { ...champs, date: DATE_ACCEPTEE, heure: '', antenneIds: idAntenneDeplacement },
+  })
+  await expect(async () => {
+    const { data } = await admin.from('seances_ael').select('id').eq('date', DATE_ACCEPTEE)
+    expect(data).toHaveLength(1)
+  }).toPass()
+
+  // La séance du contrôle positif porte une jonction vers une antenne de la FAMILLE :
+  // le balayage de `nettoyerFamille` la retrouverait même si la suppression explicite
+  // ci-dessous était sautée par une assertion tombée plus haut. On la supprime quand
+  // même, et on le vérifie par comptage.
+  const { data: creee } = await admin.from('seances_ael').select('id').eq('date', DATE_ACCEPTEE)
+  const idSeanceCreee = creee![0].id as string
+  await admin.from('seances_ael_antennes').delete().eq('seance_id', idSeanceCreee)
+  await admin.from('seances_ael').delete().eq('id', idSeanceCreee)
+  const { count } = await admin
+    .from('seances_ael')
+    .select('id', { count: 'exact', head: true })
+    .in('date', [DATE_REFUSEE, DATE_ACCEPTEE])
+  expect(count).toBe(0)
 })
 
 // ---------------------------------------------------------------------------
