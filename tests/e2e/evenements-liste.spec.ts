@@ -11,7 +11,17 @@ const IDENT_SIMPLE = 'test.e2e.evliste.simple'
 const MDP_ADMIN = `Test-${crypto.randomUUID()}`
 const MDP_MODERATEUR = `Test-${crypto.randomUUID()}`
 const MDP_SIMPLE = `Test-${crypto.randomUUID()}`
-const PREFIXE = `ZZEvListe-${crypto.randomUUID().slice(0, 8)}`
+// M9 DE LA REVUE FINALE — NETTOYAGE SUR LA FAMILLE, PAS SUR LE SUFFIXE ALÉATOIRE.
+// Le suffixe évite une collision entre deux exécutions ; le BALAYAGE, lui, doit porter sur
+// la FAMILLE, sans quoi une seule exécution interrompue laisse en base de PRODUCTION des
+// lignes que plus rien ne retrouvera jamais — leur suffixe étant mort avec le processus.
+// La revue signale que ce défaut se nourrit d'un autre : `test.e2e.autorite.lie` fuit sous
+// exécution CONCURRENTE, et c'est exactement une exécution concurrente interrompue qui
+// produit des résidus. Convention reprise de `tests/rls/evenements.test.ts:14-19`.
+// TIRET LITTÉRAL dans la famille : `ZZEvListe-%` ne peut pas ramasser une famille voisine
+// qui commencerait par les mêmes lettres.
+const FAMILLE = 'ZZEvListe-'
+const PREFIXE = `${FAMILLE}${crypto.randomUUID().slice(0, 8)}`
 const TYPE_LIBELLE = 'Séminaire académique'
 
 const admin = createClient(
@@ -34,10 +44,21 @@ async function supprimerCompte(identifiant: string) {
 }
 
 async function nettoyer() {
-  await admin.from('evenements').delete().like('titre', `${PREFIXE}%`)
+  const { error } = await admin.from('evenements').delete().like('titre', `${FAMILLE}%`)
+  if (error) throw new Error(`nettoyage des évènements impossible : ${error.message}`)
   await supprimerCompte(IDENT_ADMIN)
   await supprimerCompte(IDENT_MODERATEUR)
   await supprimerCompte(IDENT_SIMPLE)
+}
+
+/** NETTOYAGE VÉRIFIÉ PAR COMPTAGE, sur la MÊME famille que la suppression (M9). */
+async function verifierAucunResidu() {
+  const { count, error } = await admin
+    .from('evenements')
+    .select('id', { count: 'exact', head: true })
+    .like('titre', `${FAMILLE}%`)
+  if (error) throw new Error(`comptage des résidus impossible : ${error.message}`)
+  expect(count, 'résidu dans evenements').toBe(0)
 }
 
 async function creerCompte(identifiant: string, mdp: string, role: 'administrateur' | 'moderateur' | null) {
@@ -65,14 +86,35 @@ async function creerCompte(identifiant: string, mdp: string, role: 'administrate
   }
 }
 
+// M3 — TÉMOIN DE LISTE NON VIDE. Le premier test de ce fichier s'exécute AVANT que le
+// moindre évènement de la famille n'existe (ils sont créés par les tests suivants) : c'est
+// ce qui avait conduit à un contrôle positif inerte, satisfait par « Aucun évènement pour le
+// moment. » Ce témoin existe donc dès le montage, et il porte le PRÉFIXE, donc `nettoyer()`
+// le ramasse avec le reste.
+const TITRE_VISIBLE_PAR_TOUS = `${PREFIXE}-Temoin`
+
 test.beforeAll(async () => {
   await nettoyer()
   await creerCompte(IDENT_ADMIN, MDP_ADMIN, 'administrateur')
   await creerCompte(IDENT_MODERATEUR, MDP_MODERATEUR, 'moderateur')
   await creerCompte(IDENT_SIMPLE, MDP_SIMPLE, null)
+
+  const { data: type, error: erreurType } = await admin
+    .from('types_evenement')
+    .select('id')
+    .eq('libelle', TYPE_LIBELLE)
+    .single()
+  if (erreurType || !type) throw new Error(`type « ${TYPE_LIBELLE} » introuvable : ${erreurType?.message}`)
+  const { error: erreurTemoin } = await admin
+    .from('evenements')
+    .insert({ titre: TITRE_VISIBLE_PAR_TOUS, type_id: type.id as string, date_debut: '2026-09-20' })
+  if (erreurTemoin) throw new Error(`création du témoin impossible : ${erreurTemoin.message}`)
 })
 
-test.afterAll(nettoyer)
+test.afterAll(async () => {
+  await nettoyer()
+  await verifierAucunResidu()
+})
 
 async function seConnecter(page: Page, identifiant: string, mdp: string) {
   await page.goto('/connexion')
@@ -107,7 +149,14 @@ test("un compte simple voit la liste, sans le bloc de création ni le lien rése
   // Contrôle POSITIF : la page fonctionne réellement pour ce compte (pas une page cassée
   // qui masquerait tout par accident).
   await expect(page.getByRole('heading', { name: 'Évènements' })).toBeVisible()
-  await expect(page.getByText(/évènement/).first()).toBeVisible()
+  // M3 DE LA REVUE FINALE — LE CONTRÔLE POSITIF ÉTAIT INERTE. Il lisait
+  // `page.getByText(/évènement/).first()`, satisfait aussi bien par « Aucun évènement pour
+  // le moment. » (page.tsx:111) que par « 0 évènement » (page.tsx:107) : il aurait été vert
+  // sur une liste que ce compte ne voit PAS DU TOUT, c'est-à-dire dans le cas même qu'il
+  // était censé écarter. On assère désormais que l'évènement CRÉÉ PAR CE FICHIER est
+  // réellement rendu — une chaîne qui ne peut apparaître que si la liste est peuplée et
+  // lisible par ce compte.
+  await expect(page.getByText(TITRE_VISIBLE_PAR_TOUS)).toBeVisible()
 
   await expect(page.getByText('Nouvel évènement')).toHaveCount(0)
   await expect(page.getByRole('link', { name: 'Participants à traiter' })).toHaveCount(0)

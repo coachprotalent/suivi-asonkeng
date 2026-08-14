@@ -10,11 +10,30 @@ import {
  * PREUVE REJOUABLE CONTRE UN BUILD DE PRODUCTION (`next build` + `next start`, voir
  * `playwright.prod.config.ts`).
  *
- * `npm run test:e2e` sert `npm run dev`, et ce mode NE PEUT PAS révéler la classe de défaut
- * éprouvée ici : une exception LEVÉE depuis une Server Action est transmise intacte au
- * client en développement, mais perd son message EN PRODUCTION SEULEMENT — React la
- * remplace par un digest interne (« Minified React error #441 »). Ce motif est apparu CINQ
- * FOIS dans ce projet.
+ * ⚠️ AFFIRMATION CORRIGÉE (revue du dernier lot). Ce bloc concluait que « `npm run test:e2e`
+ * sert `npm run dev`, et ce mode NE PEUT PAS révéler la classe de défaut éprouvée ici ».
+ * C'ÉTAIT TROP GÉNÉRAL, et le mécanisme invoqué ne tient pas dans ce cas précis. Mesuré :
+ *
+ *  - AUCUN test de `tests/e2e/` n'assère `MESSAGE_MOTIF_OBLIGATOIRE_CLASSEMENT` (grep : zéro
+ *    occurrence). La suite ordinaire est verte parce qu'elle NE COUVRE PAS ce chemin, pas
+ *    parce qu'elle serait aveugle par nature ;
+ *  - `ligne-a-traiter.tsx` consomme les deux actions par `useActionState`, SANS AUCUN
+ *    `try`/`catch`. Une exception levée n'est donc transmise à personne : elle remonte à la
+ *    limite d'erreur EN DÉVELOPPEMENT COMME EN PRODUCTION. C'est exactement ce que la
+ *    mutation de la Task 27 a produit — « element(s) not found », toute la ligne disparue —
+ *    et NON le « Minified React error #441 » que le brief annonçait.
+ *
+ * LE DÉFAUT DU DIGEST RESTE RÉEL : il a été observé directement en phase 2b, avec le message
+ * exact. Mais il ne se manifeste QUE là où le composant ATTRAPE l'exception et affiche
+ * `error.message` — dans ce dépôt, `src/app/comptes/ligne-compte.tsx` (`useTransition` +
+ * `try`/`catch`, trois sites) est le seul de cette forme. Ailleurs, un refus levé ne devient
+ * pas un digest : il devient un écran d'erreur, ce qui est un autre défaut.
+ *
+ * CE QUE CE FICHIER ÉTABLIT DONC, ET C'EST DÉJÀ BEAUCOUP : qu'un refus métier RETOURNÉ
+ * atteint réellement l'écran contre un VRAI BUILD DE PRODUCTION (`next build` + `next start`,
+ * voir `playwright.prod.config.ts`) — et, par sa mutation, qu'un refus LEVÉ n'y est affichable
+ * d'aucune manière. Un refus doit être RETOURNÉ pour être affichable ; c'est cela qui est
+ * prouvé, pas une cécité de principe de la suite ordinaire.
  *
  * Les messages sont IMPORTÉS depuis `src/`, jamais recopiés : recopiés, ce fichier
  * resterait vert le jour où le message change, et n'éprouverait plus rien.

@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { expect, test } from '@playwright/test'
+import { MESSAGE_TYPE_EXISTE_DEJA } from '../../src/app/evenements/types/messages'
 
 // Même discipline que tests/e2e/statuts.spec.ts et autorite.spec.ts : ordre du scénario
 // et comptes partagés entre les tests de ce fichier.
@@ -15,7 +16,13 @@ const IDENT_SIMPLE = 'test.e2e.evtypes.simple'
 const MDP_ADMIN = `Test-${crypto.randomUUID()}`
 const MDP_MODERATEUR = `Test-${crypto.randomUUID()}`
 const MDP_SIMPLE = `Test-${crypto.randomUUID()}`
-const PREFIXE = `ZZEvenementsType-${crypto.randomUUID().slice(0, 8)}`
+// M9 DE LA REVUE FINALE — NETTOYAGE SUR LA FAMILLE, PAS SUR LE SUFFIXE ALÉATOIRE. Le
+// suffixe évite une collision entre deux exécutions ; le BALAYAGE doit porter sur la
+// FAMILLE, sans quoi une exécution interrompue laisse en base de PRODUCTION des lignes que
+// plus rien ne retrouvera — leur suffixe étant mort avec le processus. Convention reprise de
+// `tests/rls/evenements.test.ts:14-19`, tiret littéral compris.
+const FAMILLE = 'ZZEvenementsType-'
+const PREFIXE = `${FAMILLE}${crypto.randomUUID().slice(0, 8)}`
 
 const admin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -37,10 +44,21 @@ async function supprimerCompte(identifiant: string) {
 }
 
 async function nettoyer() {
-  await admin.from('types_evenement').delete().like('libelle', `${PREFIXE}%`)
+  const { error } = await admin.from('types_evenement').delete().like('libelle', `${FAMILLE}%`)
+  if (error) throw new Error(`nettoyage des types impossible : ${error.message}`)
   await supprimerCompte(IDENT_ADMIN)
   await supprimerCompte(IDENT_MODERATEUR)
   await supprimerCompte(IDENT_SIMPLE)
+}
+
+/** NETTOYAGE VÉRIFIÉ PAR COMPTAGE, sur la MÊME famille que la suppression (M9). */
+async function verifierAucunResidu() {
+  const { count, error } = await admin
+    .from('types_evenement')
+    .select('id', { count: 'exact', head: true })
+    .like('libelle', `${FAMILLE}%`)
+  if (error) throw new Error(`comptage des résidus impossible : ${error.message}`)
+  expect(count, 'résidu dans types_evenement').toBe(0)
 }
 
 async function creerCompte(identifiant: string, mdp: string, role: 'administrateur' | 'moderateur' | null) {
@@ -75,7 +93,10 @@ test.beforeAll(async () => {
   await creerCompte(IDENT_SIMPLE, MDP_SIMPLE, null)
 })
 
-test.afterAll(nettoyer)
+test.afterAll(async () => {
+  await nettoyer()
+  await verifierAucunResidu()
+})
 
 async function seConnecter(page: import('@playwright/test').Page, identifiant: string, mdp: string) {
   await page.goto('/connexion')
@@ -118,7 +139,11 @@ test('un doublon de casse est refusé avec un message clair, et la saisie est co
   // Le message métier, PAS la page d'erreur générique de digest React (#441) : si l'action
   // levait au lieu de retourner, cette assertion échouerait — c'est exactement ce que ce
   // test vise à distinguer.
-  await expect(page.locator(ALERTE)).toContainText("Ce type d'événement existe déjà.")
+  // CHAÎNE IMPORTÉE DEPUIS `src/`, plus recopiée à la main (M17) : la version en dur avait
+  // figé l'ancienne graphie « événement » et aurait fait échouer ce test sur une correction
+  // d'orthographe plutôt que sur un défaut. Son jumeau de production importait déjà la
+  // constante.
+  await expect(page.locator(ALERTE)).toContainText(MESSAGE_TYPE_EXISTE_DEJA)
   // La saisie n'est pas perdue : l'administrateur n'a pas à retaper son libellé.
   await expect(page.getByLabel('Libellé')).toHaveValue(libelleDoublon)
   // Et surtout : aucune ligne n'a été créée sous cette casse.

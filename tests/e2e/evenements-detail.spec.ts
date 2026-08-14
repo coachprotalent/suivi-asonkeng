@@ -9,8 +9,19 @@ const IDENT_SIMPLE = 'test.e2e.evdetail.simple'
 const MDP_ADMIN = `Test-${crypto.randomUUID()}`
 const MDP_MODERATEUR = `Test-${crypto.randomUUID()}`
 const MDP_SIMPLE = `Test-${crypto.randomUUID()}`
-const PREFIXE_EVENEMENTS = `ZZEvDetail-${crypto.randomUUID().slice(0, 8)}`
-const PREFIXE_TYPES = `ZZEvDetailType-${crypto.randomUUID().slice(0, 8)}`
+// M9 DE LA REVUE FINALE — NETTOYAGE SUR LES FAMILLES, PAS SUR LES SUFFIXES ALÉATOIRES. Le
+// suffixe évite une collision entre deux exécutions ; le BALAYAGE doit porter sur la
+// FAMILLE, sans quoi une exécution interrompue laisse en base de PRODUCTION des lignes que
+// plus rien ne retrouvera — leur suffixe étant mort avec le processus. Convention reprise de
+// `tests/rls/evenements.test.ts:14-19`.
+// LE TIRET LITTÉRAL EST INDISPENSABLE ICI, ET PAS SEULEMENT PAR CONVENTION : `ZZEvDetail`
+// est un PRÉFIXE de `ZZEvDetailType`. Balayer `ZZEvDetail%` ramasserait les types avec les
+// évènements et violerait l'ordre de suppression (`type_id` en `on delete restrict`).
+// `ZZEvDetail-%` s'arrête au tiret et ne peut pas atteindre `ZZEvDetailType-...`.
+const FAMILLE_EVENEMENTS = 'ZZEvDetail-'
+const FAMILLE_TYPES = 'ZZEvDetailType-'
+const PREFIXE_EVENEMENTS = `${FAMILLE_EVENEMENTS}${crypto.randomUUID().slice(0, 8)}`
+const PREFIXE_TYPES = `${FAMILLE_TYPES}${crypto.randomUUID().slice(0, 8)}`
 
 const admin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -31,12 +42,37 @@ async function supprimerCompte(identifiant: string) {
 
 async function nettoyer() {
   // Les événements d'abord (`type_id` est en `on delete restrict` : supprimer un type
-  // encore référencé échouerait).
-  await admin.from('evenements').delete().like('titre', `${PREFIXE_EVENEMENTS}%`)
-  await admin.from('types_evenement').delete().like('libelle', `${PREFIXE_TYPES}%`)
+  // encore référencé échouerait). L'ORDRE compte davantage encore depuis le balayage par
+  // famille : il ramasse aussi les résidus d'exécutions antérieures, donc des évènements
+  // qu'aucune ligne de ce processus n'a créés.
+  const { error: erreurEvts } = await admin
+    .from('evenements')
+    .delete()
+    .like('titre', `${FAMILLE_EVENEMENTS}%`)
+  if (erreurEvts) throw new Error(`nettoyage des évènements impossible : ${erreurEvts.message}`)
+  const { error: erreurTypes } = await admin
+    .from('types_evenement')
+    .delete()
+    .like('libelle', `${FAMILLE_TYPES}%`)
+  if (erreurTypes) throw new Error(`nettoyage des types impossible : ${erreurTypes.message}`)
   await supprimerCompte(IDENT_ADMIN)
   await supprimerCompte(IDENT_MODERATEUR)
   await supprimerCompte(IDENT_SIMPLE)
+}
+
+/** NETTOYAGE VÉRIFIÉ PAR COMPTAGE, sur les MÊMES familles que la suppression (M9). */
+async function verifierAucunResidu() {
+  for (const [table, colonne, famille] of [
+    ['evenements', 'titre', FAMILLE_EVENEMENTS],
+    ['types_evenement', 'libelle', FAMILLE_TYPES],
+  ] as const) {
+    const { count, error } = await admin
+      .from(table)
+      .select('id', { count: 'exact', head: true })
+      .like(colonne, `${famille}%`)
+    if (error) throw new Error(`comptage des résidus impossible : ${error.message}`)
+    expect(count, `résidu dans ${table}`).toBe(0)
+  }
 }
 
 async function creerCompte(identifiant: string, mdp: string, role: 'administrateur' | 'moderateur' | null) {
@@ -97,7 +133,10 @@ test.beforeAll(async () => {
   idEvenement = evenement.id as string
 })
 
-test.afterAll(nettoyer)
+test.afterAll(async () => {
+  await nettoyer()
+  await verifierAucunResidu()
+})
 
 async function seConnecter(page: Page, identifiant: string, mdp: string) {
   await page.goto('/connexion')

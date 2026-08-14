@@ -97,6 +97,22 @@ const REQUIS: Record<CheminConversion, readonly ChampConversion[]> = {
   // Chemin 2 : la fiche naît ACTIVE. Sans faiseur de disciple, elle naîtrait DÉTACHÉE de
   // l'arbre — visible dans l'annuaire, hors de toute portée d'autorité, et sans le moindre
   // signal. C'est le cas que le design nomme « une fiche muette plutôt qu'une erreur ».
+  //
+  // M13 DE LA REVUE FINALE — L'ASYMÉTRIE AVEC LE CHEMIN 1 EST RÉELLE, ET LA JUSTIFICATION
+  // CI-DESSUS NE LA DISAIT PAS. Le chemin 1 aboutit LUI AUSSI, après validation, à une fiche
+  // `actif` SANS FAISEUR DE DISCIPLE : exactement l'état que cette ligne-ci refuse pour le
+  // chemin 2 en le qualifiant de « fiche muette ». La différence n'est donc pas dans l'état
+  // atteint — il est le même — mais dans CE QUI SÉPARE LA SAISIE DE CET ÉTAT :
+  //  - chemin 2 : la fiche est active À L'INSTANT DU CLIC, sans qu'aucun autre œil ne la
+  //    voie. Le faiseur ne peut être exigé que LÀ, ou il ne le sera jamais ;
+  //  - chemin 1 : la fiche passe par `/demandes`, où un administrateur la relit avant de la
+  //    valider, et où son absence de rattachement est VISIBLE. Le rattachement à l'arbre est
+  //    alors un geste séparé, assumé comme tel (D66).
+  // Ce n'est donc pas un oubli, et ce n'est pas non plus une garantie : le chemin 1 HÉRITE
+  // d'`auto_inscription` (2b) une fenêtre où une fiche active peut rester détachée si
+  // personne ne fait le geste suivant. Dette ANTÉRIEURE à cette phase, dite ici pour qu'on
+  // ne « corrige » pas l'asymétrie en croyant combler un trou, et pour que le trou réel —
+  // qui est en 2b — ne se perde pas.
   fiche_active: ['nom', 'prenom', 'faiseur'],
   // Chemin 3 : aucune fiche n'est créée. Le nom et le prénom de la fiche cible existent
   // déjà et ne doivent surtout pas être écrasés par ceux du participant externe.

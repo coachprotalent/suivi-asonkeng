@@ -112,4 +112,16 @@ test('en production, le doublon de casse du catalogue des types affiche son mess
   // Et la saisie n'est pas perdue (étape 5 du brief) : vérifié ici aussi, contre le
   // build qui compte réellement pour un administrateur en production.
   await expect(page.getByLabel('Libellé')).toHaveValue(libelleOriginal.toLowerCase())
+
+  // M15 DE LA REVUE FINALE — LE REFUS EST UN REFUS, PAS UN DEMI-SUCCÈS. Ce test asserait le
+  // message affiché sans jamais vérifier qu'AUCUNE ligne n'avait été créée, contrairement à
+  // son jumeau de développement (`e2e/evenements-types.spec.ts:125`). Un message de refus
+  // affiché AU-DESSUS d'une écriture qui a bel et bien eu lieu serait le pire des deux
+  // mondes, et rien ici ne l'aurait vu.
+  const { count, error: erreurComptage } = await admin
+    .from('types_evenement')
+    .select('id', { count: 'exact', head: true })
+    .eq('libelle', libelleOriginal.toLowerCase())
+  if (erreurComptage) throw new Error(`comptage impossible : ${erreurComptage.message}`)
+  expect(count, 'la variante de casse ne doit pas avoir été créée').toBe(0)
 })

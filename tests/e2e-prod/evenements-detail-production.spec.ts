@@ -81,7 +81,19 @@ test('en production, éditer un évènement avec une période incohérente affic
 }) => {
   await creerCompteModerateur(IDENT_MODERATEUR)
 
-  const { data: type } = await admin.from('types_evenement').select('id').eq('actif', true).limit(1).single()
+  // M16 DE LA REVUE FINALE — SEUL APPEL DE PRÉPARATION DU FICHIER DONT L'ERREUR N'ÉTAIT PAS
+  // VÉRIFIÉE. Un catalogue sans aucun type actif faisait échouer ce test sur une `TypeError`
+  // à `type!.id`, sans aucun rapport avec ce qu'il annonce éprouver — le piège de l'`insert`
+  // de préparation dont l'erreur est jetée, trouvé quatre fois dans ce projet.
+  const { data: type, error: erreurType } = await admin
+    .from('types_evenement')
+    .select('id')
+    .eq('actif', true)
+    .limit(1)
+    .single()
+  if (erreurType || !type) {
+    throw new Error(`préparation impossible : aucun type actif au catalogue (${erreurType?.message})`)
+  }
   const titre = `${PREFIXE}-Edition`
   const { data: evenement, error } = await admin
     .from('evenements')

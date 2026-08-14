@@ -209,6 +209,20 @@ describe('pagination et tri total (preuve n°14)', () => {
     // Le total ANNONCÉ est le total RÉEL.
     expect(total).toBe(3)
     expect(ids.length).toBe(total)
+
+    // M8 DE LA REVUE FINALE — LA PRÉMISSE DES EX ÆQUO N'ÉTAIT CONVERTIE EN AUCUNE ASSERTION
+    // D'ORDRE. L'en-tête annonce que « les ex æquo sont le cœur de cette preuve », et les
+    // assertions ci-dessus ne portaient que sur des ENSEMBLES et des TOTAUX — ce qui explique
+    // la mutation restée verte que le registre a consignée sans conclure : retirer
+    // `.order('id')` d'`evenementsParPage` laisse l'ensemble parcouru identique tant que le
+    // plan Postgres rend les ex æquo dans un ordre stable, et rien ne le contredisait.
+    //
+    // Ces trois évènements PARTAGENT `date_debut` : le tri `date_debut desc` les laisse donc
+    // départager par la SECONDE clé, `id` ascendant. C'est la seule assertion qui distingue
+    // « le tri est total » de « le tri se trouve stable aujourd'hui ».
+    // Le tri lexicographique d'un uuid canonique (hex minuscule, tirets à position fixe)
+    // coïncide avec l'ordre d'octets de Postgres.
+    expect(ids).toEqual([...idsEvenements].sort())
   })
 
   it("participantsDEvenementParPage : quatre participations au MÊME `saisi_le`, taille de page 3 — dernière page partielle", async () => {
@@ -225,7 +239,10 @@ describe('pagination et tri total (preuve n°14)', () => {
     }
   })
 
-  it("participantsDEvenementParPage : taille de page 2 — le total est un MULTIPLE… non, 7 n'en est pas un ; on éprouve donc aussi une taille qui DIVISE exactement", async () => {
+  // M7 DE LA REVUE FINALE — L'INTITULÉ DÉCRIVAIT UNE TAILLE DE PAGE 2 QUE LE CORPS N'EMPLOIE
+  // PAS : il passe `taillePage: 7`, et c'est bien 7 qu'il FAUT ici, 7 étant le total exact.
+  // C'est tout l'objet du test : la dernière page demandée démarre au nombre total de lignes.
+  it('participantsDEvenementParPage : taille de page 7, soit EXACTEMENT le total — la page suivante est vide, pas une erreur', async () => {
     // Cas particulier réel : quand le total est un multiple EXACT de la taille de page, la
     // dernière page demandée démarre au nombre total de lignes. Établi contre cette base en
     // phase 3 : PostgREST répond alors une PAGE VIDE, jamais PGRST103. Le parcours doit
@@ -253,6 +270,14 @@ describe('pagination et tri total (preuve n°14)', () => {
     for (const idExterne of idsExternesATraiter) {
       expect(ids).toContain(idExterne)
     }
+
+    // M8 — ASSERTION D'ORDRE, en RELATIF. Cette liste est globale et d'autres lignes peuvent
+    // s'y intercaler : on ne peut pas comparer la séquence entière. Mais NOS trois personnes
+    // partagent `premiere_expression`, donc la seconde clé
+    // (`participant_externe_id` ascendant) doit à elle seule décider de leur ordre relatif —
+    // et c'est exactement ce que le tri total promet.
+    const notresDansLOrdreParcouru = ids.filter((id) => idsExternesATraiter.includes(id))
+    expect(notresDansLOrdreParcouru).toEqual([...idsExternesATraiter].sort())
   })
 
   it('refuse une taille de page hors bornes plutôt que de la borner en silence', async () => {
