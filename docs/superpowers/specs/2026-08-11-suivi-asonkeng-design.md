@@ -237,13 +237,28 @@ non nulle. Unicité sur (`evenement_id`, `membre_id`) et sur (`evenement_id`,
 `participant_externe_id`).
 
 Les participations d'externes portant `desir_suivi_spirituel = true` et dont le participant
-n'est pas encore converti alimentent la liste « à traiter » de l'admin.
+n'est pas encore converti alimentent la liste « à traiter ».
 
 **Vue `seminaires_assistes`** — `(membre_id, evenement_id, titre, type, date_debut)`. Elle
 expose uniquement le fait qu'un membre a participé à un événement, sans les trois désirs. C'est
 elle qui alimente les « tags des séminaires assistés » sur la fiche membre, lisible par tout
-compte actif, tandis que la table `participations` elle-même reste réservée à l'administrateur.
-Les trois désirs sont des informations sensibles : ils ne quittent jamais le périmètre admin.
+compte actif, tandis que la table `participations` elle-même reste réservée à l'administrateur
+**et au modérateur**. Les trois désirs sont des informations sensibles : ils ne quittent jamais
+ce cercle.
+
+> **Correction du 2026-08-14 (D54).** Ce paragraphe se terminait par « la table `participations`
+> elle-même reste réservée à **l'administrateur** » et « les trois désirs [...] ne quittent
+> jamais le **périmètre admin** ». La phrase précédente réservait de même la liste « à traiter »
+> à l'admin. **C'était faux depuis l'amendement D23 du 2026-08-12**, qui ouvre au modérateur la
+> création d'un événement, la **saisie** et — conséquence tirée en même temps et assumée dans le
+> texte de D23 — la **consultation** des trois désirs. D16, la matrice du §5.2 et la RLS du §5.3
+> le disaient déjà ; seuls ce paragraphe et le parcours « Événement et conversion » du §6 étaient
+> restés en arrière, et la contradiction a survécu à deux phases parce que personne n'était allé
+> les relire.
+>
+> Le coût de cet élargissement n'est pas rouvert ici : il est déjà écrit dans D23 — le cercle des
+> personnes voyant ces confidences s'élargit d'un rôle. Ce qui est corrigé, c'est le texte, pas
+> la décision. Voir `2026-08-14-phase-4-evenements-design.md`, §2 et D54.
 
 ### 4.5 AEL
 
@@ -454,11 +469,18 @@ celle du jour, saisit le thème, l'enseignant et le modérateur, et pointe une l
 avec les membres actifs des antennes ciblées. Il peut ajouter à la main n'importe quel autre
 membre. La séance passe à `tenue` ; les compteurs suivent d'eux-mêmes.
 
-**Événement et conversion.** L'admin crée l'événement, coche les membres participants, ajoute
-les participants externes, et renseigne pour chacun les trois désirs. Les externes ayant
-exprimé le désir d'être suivis spirituellement apparaissent dans une liste « à traiter » ; un
-clic les convertit en fiche membre, avec attribution d'un faiseur de disciple, et renseigne
-`converti_en_membre_id`.
+**Événement et conversion.** Un modérateur ou un administrateur crée l'événement, coche les
+membres participants, ajoute les participants externes, et renseigne pour chacun les trois
+désirs. Les externes ayant exprimé le désir d'être suivis spirituellement apparaissent dans une
+liste « à traiter » ; **l'administrateur seul** les convertit en fiche membre, avec attribution
+d'un faiseur de disciple, ce qui renseigne `converti_en_membre_id`.
+
+> **Correction du 2026-08-14 (D54).** Ce parcours commençait par « **L'admin** crée
+> l'événement », en contradiction avec D23 (2026-08-12), qui ouvre ce geste et la saisie des
+> trois désirs au modérateur. La **conversion**, elle, reste bien réservée à l'administrateur —
+> D23 ne l'a jamais élargie, et la matrice du §5.2 le dit déjà. Même correction, même cause que
+> celle du §4.4 : un amendement appliqué à la matrice mais pas aux paragraphes qui la
+> paraphrasent.
 
 ---
 
