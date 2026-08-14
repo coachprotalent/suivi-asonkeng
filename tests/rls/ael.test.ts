@@ -24,8 +24,51 @@ const IDENT = 'test.rls.ael.simple'
 // `ZZAel-` exige le tiret littéral : il ne peut pas ramasser `ZZAelPointage-`,
 // `ZZAelPreuves-` ni `ZZAelPresencesLots-`, qui ont chacun leur propre famille.
 const FAMILLE = 'ZZAel-'
+// SECONDE famille de ce fichier, remontée ici depuis le describe qui l'emploie (I3 de la
+// revue finale) : les membres du describe « presencesDeSeance » portent ce préfixe, que
+// `ZZAel-%` — tiret littéral — ne peut pas ramasser. Tant qu'elle n'était balayée que par
+// l'`afterAll` de ce describe, avec un suffixe tiré PAR EXÉCUTION, une interruption
+// laissait des membres que plus rien ne retrouvait.
+const FAMILLE_LOT = 'ZZAelPresencesLots-'
+const FAMILLES_MEMBRES = [FAMILLE, FAMILLE_LOT]
 const PREFIXE = `${FAMILLE}${crypto.randomUUID().slice(0, 8)}`
 const NOM_ANTENNE = `${PREFIXE}-Antenne`
+
+/**
+ * I3 DE LA REVUE FINALE DE BRANCHE — LA PRISE QUI MANQUAIT SUR UNE SÉANCE « NUE ».
+ *
+ * `seances_ael` n'a ni `nom`, ni thème obligatoire, ni marqueur : un balayage par préfixe
+ * ne peut l'atteindre que par des chemins INDIRECTS (jonction d'antenne, calendrier,
+ * intervenant, présence). Or ce fichier crée des séances qui n'ont AUCUN de ces chemins —
+ * `insert({ date: '2026-10-01' })`, sans antenne, sans calendrier, sans intervenant —
+ * suivies par le seul tableau EN MÉMOIRE `idsSeancesTest`. Un `Ctrl-C` ou un kill de
+ * timeout, et elles restaient en production, `prevue`, sans thème, visibles de tout compte
+ * actif sur `/ael/seances`, sans aucun moyen de les rattacher ni de les supprimer depuis
+ * l'application. L'autre mécanisme du dépôt capable de retrouver une séance sans nom —
+ * l'empreinte-et-delta persistée d'`ael-preuves.spec.ts` — les EXCLUT par construction :
+ * son filtre `calendrier_id !== null` protège délibérément les séances créées à la main,
+ * c'est-à-dire exactement leur forme. Deux corrections justes dont l'intersection laissait
+ * un trou.
+ *
+ * REMÈDE RETENU : `cree_par`, colonne qui existait déjà et que les tests ne renseignaient
+ * pas. Toute séance écrite par ce fichier la porte, et le balayage la relit. Préféré au
+ * portage de l'empreinte persistée pour trois raisons :
+ *  - le marqueur est écrit DANS LA MÊME INSTRUCTION que la ligne qu'il désigne, donc il
+ *    n'existe AUCUNE fenêtre entre la création et son enregistrement — là où une empreinte
+ *    sur disque ne protège jamais d'une interruption survenue avant son écriture (limite
+ *    dite dans `ael-preuves.spec.ts`) ;
+ *  - il vit en base, donc il survit à un disque effacé, à un autre poste, à un `git clean` ;
+ *  - une empreinte-et-delta serait ici DANGEREUSE et non seulement inutile : ce fichier
+ *    crée des séances SANS `calendrier_id`, donc le delta devrait renoncer au filtre qui
+ *    protège les séances manuelles de PRODUCTION — le garde-fou deviendrait la menace.
+ * LIMITE, DITE PLUTÔT QUE TUE : si le profil de test est supprimé pendant que ses séances
+ * subsistent, `cree_par` repasse à NULL (`on delete set null`) et la prise disparaît. C'est
+ * pourquoi le balayage s'exécute AVANT `supprimerCompte(IDENT)` dans le `beforeAll` comme
+ * dans l'`afterAll` — l'ordre fait partie du remède, pas de la cosmétique.
+ */
+function avecMarqueur<T extends Record<string, unknown>>(colonnes: T): T & { cree_par: string } {
+  return { ...colonnes, cree_par: idProfil }
+}
 
 const admin = createClient(URL, CLE_SERVICE, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -72,12 +115,17 @@ async function nettoyerFamille() {
   if (erreurAntennes) throw new Error(`balayage des antennes de la famille impossible : ${erreurAntennes.message}`)
   const idsAntennes = (antennesFamille ?? []).map((a) => a.id as string)
 
-  const { data: membresFamille, error: erreurMembres } = await admin
-    .from('membres')
-    .select('id')
-    .like('nom', `${FAMILLE}%`)
-  if (erreurMembres) throw new Error(`balayage des membres de la famille impossible : ${erreurMembres.message}`)
-  const idsMembres = (membresFamille ?? []).map((m) => m.id as string)
+  const idsMembres: string[] = []
+  for (const famille of FAMILLES_MEMBRES) {
+    const { data: membresFamille, error: erreurMembres } = await admin
+      .from('membres')
+      .select('id')
+      .like('nom', `${famille}%`)
+    if (erreurMembres) {
+      throw new Error(`balayage des membres de la famille ${famille} impossible : ${erreurMembres.message}`)
+    }
+    idsMembres.push(...(membresFamille ?? []).map((m) => m.id as string))
+  }
 
   const idsSeances = new Set<string>()
   let idsCalendriers: string[] = []
@@ -133,6 +181,30 @@ async function nettoyerFamille() {
     for (const ligne of parPresence ?? []) idsSeances.add(ligne.seance_id as string)
   }
 
+  // I3 — LE SEUL CHEMIN QUI ATTEIGNE UNE SÉANCE NUE. Les blocs ci-dessus ne trouvent une
+  // séance que par un objet nommable qui la référence ; celui-ci la trouve par elle-même.
+  // Le profil est relu PAR IDENTIFIANT, jamais depuis une variable de l'exécution
+  // courante : c'est ce qui permet de rattraper les séances d'une exécution ANTÉRIEURE
+  // interrompue, dont le profil (identifiant fixe) est encore en base.
+  const { data: profilTest, error: erreurProfilTest } = await admin
+    .from('profils')
+    .select('id')
+    .eq('identifiant', IDENT)
+    .maybeSingle()
+  if (erreurProfilTest) {
+    throw new Error(`lecture du profil de test impossible : ${erreurProfilTest.message}`)
+  }
+  if (profilTest) {
+    const { data: parCreateur, error: erreurParCreateur } = await admin
+      .from('seances_ael')
+      .select('id')
+      .eq('cree_par', profilTest.id as string)
+    if (erreurParCreateur) {
+      throw new Error(`balayage des séances par cree_par impossible : ${erreurParCreateur.message}`)
+    }
+    for (const ligne of parCreateur ?? []) idsSeances.add(ligne.id as string)
+  }
+
   if (idsSeances.size > 0) {
     const ids = [...idsSeances]
     await admin.from('presences_ael').delete().in('seance_id', ids)
@@ -149,7 +221,15 @@ async function nettoyerFamille() {
       throw new Error(`nettoyage des calendriers de la famille impossible : ${erreurSuppressionCalendriers.message}`)
     }
   }
-  await admin.from('membres').delete().like('nom', `${FAMILLE}%`)
+  if (idsMembres.length > 0) {
+    // Par ID et non par `like`, pour supprimer exactement ce que le balayage des DEUX
+    // familles a relevé plus haut — et pour que la liste des familles n'ait qu'un seul
+    // endroit où être tenue à jour.
+    const { error: erreurSuppressionMembres } = await admin.from('membres').delete().in('id', idsMembres)
+    if (erreurSuppressionMembres) {
+      throw new Error(`nettoyage des membres des familles impossible : ${erreurSuppressionMembres.message}`)
+    }
+  }
   const { error: erreurSuppressionAntennes } = await admin
     .from('antennes')
     .delete()
@@ -160,8 +240,13 @@ async function nettoyerFamille() {
 }
 
 beforeAll(async () => {
-  await supprimerCompte(IDENT)
+  // ORDRE INVERSÉ PAR I3, ET CE N'EST PAS COSMÉTIQUE. `supprimerCompte` supprime le
+  // profil de l'exécution précédente ; `seances_ael.cree_par` étant en `on delete set
+  // null`, la seule prise sur les séances NUES qu'une exécution interrompue aurait
+  // laissées disparaîtrait AVANT que le balayage ne puisse les voir. Le balayage passe
+  // donc en premier, tant que le profil de la fuite existe encore.
   await nettoyerFamille()
+  await supprimerCompte(IDENT)
 
   // Une antenne fraîchement créée n'a AUCUNE ligne dans `calendriers_ael` : l'amorçage
   // de la migration est un `insert ... select` ponctuel, joué UNE SEULE FOIS au moment
@@ -278,25 +363,40 @@ afterAll(async () => {
   // suppression non, et l'écart rendait la suite définitivement rouge après une seule
   // interruption.
   await nettoyerFamille()
+
+  // I3 — VÉRIFICATION PAR COMPTAGE DU NOUVEAU FILET, ET ELLE DOIT PRÉCÉDER
+  // `supprimerCompte` : une fois le profil supprimé, `cree_par` repasse à NULL et cette
+  // question ne peut plus être posée. C'est l'assertion qui couvre les séances NUES, que
+  // ni le préfixe de famille ni l'empreinte-et-delta ne pouvaient atteindre.
+  const { count: seancesMarqueesRestantes, error: erreurSeancesMarquees } = await admin
+    .from('seances_ael')
+    .select('id', { count: 'exact', head: true })
+    .eq('cree_par', idProfil)
+  expect(erreurSeancesMarquees).toBeNull()
+  expect(seancesMarqueesRestantes).toBe(0)
+
   await supprimerCompte(IDENT)
 
-  // Nettoyage VÉRIFIÉ PAR COMPTAGE (contrainte globale n°13), sur la MÊME famille que la
-  // suppression ci-dessus — c'est cette concordance qui manquait. `ZZAel-%` exige le
+  // Nettoyage VÉRIFIÉ PAR COMPTAGE (contrainte globale n°13), sur les MÊMES familles que
+  // la suppression ci-dessus — c'est cette concordance qui manquait. `ZZAel-%` exige le
   // tiret littéral et ne peut donc pas ramasser les préfixes voisins (`ZZAelPointage-`,
-  // `ZZAelPreuves-`, `ZZAelPresencesLots-`). Un reste ici signale une fuite dans un des
-  // blocs `afterAll` internes, pas un faux positif hérité d'une exécution passée.
+  // `ZZAelPreuves-`) ; `ZZAelPresencesLots-` a rejoint la liste balayée (I3), il est donc
+  // compté ici aussi. Un reste signale une fuite dans un des blocs `afterAll` internes,
+  // pas un faux positif hérité d'une exécution passée.
   const { count: antennesRestantes, error: erreurAntennesRestantes } = await admin
     .from('antennes')
     .select('id', { count: 'exact', head: true })
     .like('nom', `${FAMILLE}%`)
   expect(erreurAntennesRestantes).toBeNull()
   expect(antennesRestantes).toBe(0)
-  const { count: membresRestants, error: erreurMembresRestants } = await admin
-    .from('membres')
-    .select('id', { count: 'exact', head: true })
-    .like('nom', `${FAMILLE}%`)
-  expect(erreurMembresRestants).toBeNull()
-  expect(membresRestants).toBe(0)
+  for (const famille of FAMILLES_MEMBRES) {
+    const { count: membresRestants, error: erreurMembresRestants } = await admin
+      .from('membres')
+      .select('id', { count: 'exact', head: true })
+      .like('nom', `${famille}%`)
+    expect(erreurMembresRestants).toBeNull()
+    expect(membresRestants).toBe(0)
+  }
 })
 
 describe('calendriers_ael', () => {
@@ -437,7 +537,7 @@ describe("compte désactivé (Q3) : le refus vient de la RLS + est_actif(), pas 
 
     const { data: seance, error: erreurSeance } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-11-01', calendrier_id: idCalendrierQ3, genere_pour_le: '2026-11-01' })
+      .insert(avecMarqueur({ date: '2026-11-01', calendrier_id: idCalendrierQ3, genere_pour_le: '2026-11-01' }))
       .select('id')
       .single()
     if (erreurSeance || !seance) {
@@ -505,7 +605,7 @@ describe('seances_ael, seances_ael_antennes, presences_ael', () => {
 
     const { data: seance, error: erreurSeance } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-09-01' })
+      .insert(avecMarqueur({ date: '2026-09-01' }))
       .select('id')
       .single()
     if (erreurSeance || !seance) throw new Error(`création de la séance impossible : ${erreurSeance?.message}`)
@@ -574,6 +674,11 @@ describe('seances_ael, seances_ael_antennes, presences_ael', () => {
   })
 
   it('un compte actif ne peut écrire sur aucune des trois tables', async () => {
+    // SEULE insertion de `seances_ael` de ce fichier SANS `avecMarqueur` (I3), et
+    // délibérément : elle doit être REFUSÉE par la RLS, donc elle n'écrit rien qu'il
+    // faudrait ensuite retrouver — un marqueur y serait décoratif. Toute AUTRE
+    // insertion de cette table sans `avecMarqueur` est un oubli : `grep
+    // "from('seances_ael')" -A3` le montre en une lecture.
     const { error: erreurSeance } = await clientSimple.from('seances_ael').insert({ date: '2026-09-08' })
     expect(erreurSeance).not.toBeNull()
     expect(erreurSeance!.code).toBe('42501')
@@ -610,20 +715,20 @@ describe('seances_ael, seances_ael_antennes, presences_ael', () => {
   it("l'exclusivité enseignant/modérateur (D36) refuse les deux champs à la fois, avec contrôle positif", async () => {
     const { error: erreurExclusiviteEnseignant } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-09-09', enseignant_membre_id: idMembre, enseignant_libre: 'Un intervenant' })
+      .insert(avecMarqueur({ date: '2026-09-09', enseignant_membre_id: idMembre, enseignant_libre: 'Un intervenant' }))
     expect(erreurExclusiviteEnseignant).not.toBeNull()
     expect(erreurExclusiviteEnseignant!.code).toBe('23514')
 
     const { error: erreurExclusiviteModerateur } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-09-09', moderateur_membre_id: idMembre, moderateur_libre: 'Un intervenant' })
+      .insert(avecMarqueur({ date: '2026-09-09', moderateur_membre_id: idMembre, moderateur_libre: 'Un intervenant' }))
     expect(erreurExclusiviteModerateur).not.toBeNull()
     expect(erreurExclusiviteModerateur!.code).toBe('23514')
 
     // CONTRÔLE POSITIF : un seul des deux champs, dans chaque paire, doit être accepté.
     const { data: seanceValide, error: erreurValide } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-09-09', enseignant_libre: 'Un intervenant', moderateur_membre_id: idMembre })
+      .insert(avecMarqueur({ date: '2026-09-09', enseignant_libre: 'Un intervenant', moderateur_membre_id: idMembre }))
       .select('id')
       .single()
     expect(erreurValide).toBeNull()
@@ -650,7 +755,7 @@ describe('seances_ael, seances_ael_antennes, presences_ael', () => {
 
     const { data: premiere, error: erreurPremiere } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-09-15', calendrier_id: idCalendrier, genere_pour_le: '2026-09-15' })
+      .insert(avecMarqueur({ date: '2026-09-15', calendrier_id: idCalendrier, genere_pour_le: '2026-09-15' }))
       .select('id')
       .single()
     expect(erreurPremiere).toBeNull()
@@ -659,7 +764,7 @@ describe('seances_ael, seances_ael_antennes, presences_ael', () => {
 
     const { error: erreurDoublon } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-09-15', calendrier_id: idCalendrier, genere_pour_le: '2026-09-15' })
+      .insert(avecMarqueur({ date: '2026-09-15', calendrier_id: idCalendrier, genere_pour_le: '2026-09-15' }))
     expect(erreurDoublon).not.toBeNull()
     expect(erreurDoublon!.code).toBe('23505')
 
@@ -668,7 +773,7 @@ describe('seances_ael, seances_ael_antennes, presences_ael', () => {
     // peut plus rien générer », pas « cette occurrence précise existe déjà ».
     const { data: autreDate, error: erreurAutreDate } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-09-22', calendrier_id: idCalendrier, genere_pour_le: '2026-09-22' })
+      .insert(avecMarqueur({ date: '2026-09-22', calendrier_id: idCalendrier, genere_pour_le: '2026-09-22' }))
       .select('id')
       .single()
     expect(erreurAutreDate).toBeNull()
@@ -699,7 +804,7 @@ describe('seances_ael, seances_ael_antennes, presences_ael', () => {
     // `generer_seances_ael` (Task 10).
     const { data: origine, error: erreurOrigine } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-09-16', calendrier_id: idCalendrier, genere_pour_le: '2026-09-16' })
+      .insert(avecMarqueur({ date: '2026-09-16', calendrier_id: idCalendrier, genere_pour_le: '2026-09-16' }))
       .select('id')
       .single()
     expect(erreurOrigine).toBeNull()
@@ -722,7 +827,7 @@ describe('seances_ael, seances_ael_antennes, presences_ael', () => {
     // collisionne avec `origine` (même ancre '2026-09-16') et doit être refusé.
     const { error: erreurReGeneration } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-09-20', calendrier_id: idCalendrier, genere_pour_le: '2026-09-16' })
+      .insert(avecMarqueur({ date: '2026-09-20', calendrier_id: idCalendrier, genere_pour_le: '2026-09-16' }))
     expect(erreurReGeneration).not.toBeNull()
     expect(erreurReGeneration!.code).toBe('23505')
 
@@ -734,7 +839,7 @@ describe('seances_ael, seances_ael_antennes, presences_ael', () => {
     // jamais `date`.
     const { data: autreAncre, error: erreurAutreAncre } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-09-17', calendrier_id: idCalendrier, genere_pour_le: '2026-09-30' })
+      .insert(avecMarqueur({ date: '2026-09-17', calendrier_id: idCalendrier, genere_pour_le: '2026-09-30' }))
       .select('id')
       .single()
     expect(erreurAutreAncre).toBeNull()
@@ -745,7 +850,7 @@ describe('seances_ael, seances_ael_antennes, presences_ael', () => {
   it('deux séances créées à la main (calendrier_id NULL) ne se bloquent jamais entre elles', async () => {
     const { data: premiere, error: erreurPremiere } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-10-01' })
+      .insert(avecMarqueur({ date: '2026-10-01' }))
       .select('id')
       .single()
     expect(erreurPremiere).toBeNull()
@@ -754,7 +859,7 @@ describe('seances_ael, seances_ael_antennes, presences_ael', () => {
 
     const { data: seconde, error: erreurSeconde } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-10-01' })
+      .insert(avecMarqueur({ date: '2026-10-01' }))
       .select('id')
       .single()
     expect(erreurSeconde).toBeNull()
@@ -780,8 +885,11 @@ describe('presencesDeSeance : correction de la troncature silencieuse (max_rows)
   // seulement, au lieu des centaines qu'il faudrait pour atteindre la valeur de
   // production (`TAILLE_LOT_PRESENCES_SEANCE`, 500).
   // Famille stable (IMPORTANT 3) : le balayage de rattrapage ne dépendait que du
-  // suffixe de l'exécution courante.
-  const FAMILLE_LOT = 'ZZAelPresencesLots-'
+  // suffixe de l'exécution courante. `FAMILLE_LOT` est REMONTÉE en tête de fichier (I3
+  // de la revue finale) : tant qu'elle ne vivait que dans ce describe, elle n'était
+  // balayée QUE par l'`afterAll` ci-dessous — donc jamais si l'exécution était
+  // interrompue avant lui, et jamais par le filet global, `ZZAel-%` ne pouvant pas la
+  // ramasser (tiret littéral).
   const PREFIXE_LOT = `${FAMILLE_LOT}${crypto.randomUUID().slice(0, 8)}`
   let idSeanceLots: string
   const idsMembresLots: string[] = []
@@ -791,7 +899,7 @@ describe('presencesDeSeance : correction de la troncature silencieuse (max_rows)
   beforeAll(async () => {
     const { data: seance, error: erreurSeance } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-09-01' })
+      .insert(avecMarqueur({ date: '2026-09-01' }))
       .select('id')
       .single()
     if (erreurSeance || !seance) throw new Error(`création de la séance impossible : ${erreurSeance?.message}`)
@@ -938,7 +1046,7 @@ describe('déclencheur de complétude (D37)', () => {
   })
 
   it('refuse une insertion directement à `tenue` sans thème ni enseignant', async () => {
-    const { error } = await admin.from('seances_ael').insert({ date: '2026-09-29', etat: 'tenue' })
+    const { error } = await admin.from('seances_ael').insert(avecMarqueur({ date: '2026-09-29', etat: 'tenue' }))
     expect(error).not.toBeNull()
     expect(error!.details).toBe('seance_sans_theme')
   })
@@ -946,7 +1054,7 @@ describe('déclencheur de complétude (D37)', () => {
   it('refuse un thème présent mais un enseignant absent, avec un marqueur distinct', async () => {
     const { error } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-09-29', etat: 'tenue', theme: 'Un thème' })
+      .insert(avecMarqueur({ date: '2026-09-29', etat: 'tenue', theme: 'Un thème' }))
     expect(error).not.toBeNull()
     expect(error!.details).toBe('seance_sans_enseignant')
   })
@@ -960,7 +1068,7 @@ describe('déclencheur de complétude (D37)', () => {
     // `tenue` était refusée avec le marqueur `seance_sans_theme` — celui censé nommer
     // le champ manquant nommait le MAUVAIS champ. `etat: null` explicite reproduit ce
     // NULL directement, sans avoir besoin d'un insert en lot.
-    const { error } = await admin.from('seances_ael').insert({ date: '2026-09-29', etat: null })
+    const { error } = await admin.from('seances_ael').insert(avecMarqueur({ date: '2026-09-29', etat: null }))
     expect(error).not.toBeNull()
     // APRÈS le correctif (`is distinct from`) : NULL est traité comme distinct de
     // 'tenue', le déclencheur laisse donc passer la ligne sans réclamer de thème — et
@@ -973,7 +1081,7 @@ describe('déclencheur de complétude (D37)', () => {
   it('refuse la TRANSITION vers `tenue` sur une séance existante incomplète', async () => {
     const { data: seance, error: erreurCreation } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-09-29' })
+      .insert(avecMarqueur({ date: '2026-09-29' }))
       .select('id')
       .single()
     expect(erreurCreation).toBeNull()
@@ -1001,7 +1109,7 @@ describe('déclencheur de complétude (D37)', () => {
 
     const { data: seance, error: erreurCreation } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-09-29', theme: 'Un thème', enseignant_membre_id: membre!.id, etat: 'tenue' })
+      .insert(avecMarqueur({ date: '2026-09-29', theme: 'Un thème', enseignant_membre_id: membre!.id, etat: 'tenue' }))
       .select('id')
       .single()
     expect(erreurCreation).toBeNull()
@@ -1031,12 +1139,14 @@ describe('déclencheur de complétude (D37)', () => {
   it('laisse tenir une séance complète, avec enseignant libre', async () => {
     const { data: seance, error } = await admin
       .from('seances_ael')
-      .insert({
-        date: '2026-09-29',
-        etat: 'tenue',
-        theme: 'Un thème',
-        enseignant_libre: 'Un intervenant extérieur',
-      })
+      .insert(
+        avecMarqueur({
+          date: '2026-09-29',
+          etat: 'tenue',
+          theme: 'Un thème',
+          enseignant_libre: 'Un intervenant extérieur',
+        }),
+      )
       .select('id')
       .single()
     expect(error).toBeNull()
@@ -1064,12 +1174,14 @@ describe('déclencheur de complétude (D37)', () => {
 
     const { data: seanceTenue, error: erreurSeanceTenue } = await admin
       .from('seances_ael')
-      .insert({
-        date: '2026-09-30',
-        etat: 'tenue',
-        theme: 'Un thème',
-        enseignant_membre_id: enseignantTenue.id,
-      })
+      .insert(
+        avecMarqueur({
+          date: '2026-09-30',
+          etat: 'tenue',
+          theme: 'Un thème',
+          enseignant_membre_id: enseignantTenue.id,
+        }),
+      )
       .select('id')
       .single()
     expect(erreurSeanceTenue).toBeNull()
@@ -1108,7 +1220,7 @@ describe('déclencheur de complétude (D37)', () => {
 
     const { data: seancePrevue, error: erreurSeancePrevue } = await admin
       .from('seances_ael')
-      .insert({ date: '2026-09-30', enseignant_membre_id: enseignantPrevue.id })
+      .insert(avecMarqueur({ date: '2026-09-30', enseignant_membre_id: enseignantPrevue.id }))
       .select('id')
       .single()
     expect(erreurSeancePrevue).toBeNull()
@@ -1163,9 +1275,9 @@ describe('vue compteurs_ael (D4, D44, D48)', () => {
     const { data: seances, error: erreurSeances } = await admin
       .from('seances_ael')
       .insert([
-        { date: '2026-09-01', etat: 'tenue', theme: 'T1', enseignant_membre_id: idEnseignant },
-        { date: '2026-09-02', etat: 'tenue', theme: 'T2', enseignant_membre_id: idEnseignant },
-        { date: '2026-09-03', etat: 'prevue' },
+        avecMarqueur({ date: '2026-09-01', etat: 'tenue', theme: 'T1', enseignant_membre_id: idEnseignant }),
+        avecMarqueur({ date: '2026-09-02', etat: 'tenue', theme: 'T2', enseignant_membre_id: idEnseignant }),
+        avecMarqueur({ date: '2026-09-03', etat: 'prevue' }),
       ])
       .select('id, date')
     if (erreurSeances || !seances) throw new Error(`création des séances impossible : ${erreurSeances?.message}`)
