@@ -216,15 +216,20 @@ refus métier ; elle ne le lève pas. Un `throw` reste acceptable pour une panne
 technique dont aucun texte n'aiderait l'utilisateur — mais jamais pour un message
 qu'on veut lui montrer.
 
-**`admin.auth.admin.listUsers()` n'est pas paginé** partout où le projet l'emploie —
-notamment `scripts/creer-compte-racine.ts`, pour vérifier qu'aucun compte
+**`admin.auth.admin.listUsers()` n'est paginé que dans DEUX fichiers du dépôt.**
+Vingt-six fichiers de test l'appellent, pour retrouver un compte de test par
+identifiant, plus `scripts/creer-compte-racine.ts`, pour vérifier qu'aucun compte
 d'authentification orphelin ne porte déjà l'email cible avant d'en créer un
-nouveau, et la quasi-totalité des suites RLS et e2e, pour retrouver un compte de
-test par identifiant. L'API rend ses résultats par page (taille par défaut de la
-librairie cliente) ; au-delà de la première page, un compte existant ne serait
-simplement pas trouvé, silencieusement. Sans conséquence tant que le nombre de
-comptes réels et de comptes de test simultanés reste sous ce seuil — à revoir si
-la base de comptes grossit.
+nouveau. Deux seulement le parcourent jusqu'à épuisement —
+`tests/e2e/ael-pointage.spec.ts` et `tests/e2e/ael-preuves.spec.ts`, corrigés par la
+vague de correction finale de la phase 3. **Partout ailleurs, le défaut reste.**
+L'API rend ses résultats par page (50 par défaut) ; au-delà de la première page, un
+compte existant ne serait simplement pas trouvé, silencieusement. Sans conséquence
+tant que le nombre de comptes réels et de comptes de test simultanés reste sous ce
+seuil — à revoir si la base de comptes grossit. (Cette phrase disait « n'est pas
+paginé **partout** où le projet l'emploie », ce qui était devenu faux ; c'est
+exactement le motif dominant du projet, une documentation qui décrit un état que le
+code a quitté.)
 
 ## Phase 1a : le registre des membres
 
@@ -335,7 +340,9 @@ administrateurs :
 - **Annuaire paginé** (`/membres`) — cinquante fiches par page, pour tenir à l'échelle d'un
   millier de membres visée par la phase 1c (D18, voir la spécification maîtresse). Une adresse
   pointant au-delà de la dernière page réelle se corrige vers cette dernière page plutôt que
-  d'afficher un écran qui se contredit lui-même.
+  d'afficher un écran qui se contredit lui-même. Le tri de cette pagination est **total**
+  (`nom`, `prenom`, puis `id`) : voir « Trois remèdes différents à la même troncature
+  silencieuse » plus bas pour pourquoi les deux premiers critères ne suffisaient pas.
 
 ## Phase 2b : tokens d'inscription, inscription publique, demandes de suivi, notifications
 
@@ -522,6 +529,15 @@ ajouté 4 et 5 respectivement, tous vérifiés directement — 22 `page.tsx` et 
   `auth.getUser()` puis redirige), `attribuerStatut` et `retirerStatut` (dont le garde
   `exigerAutoriteSur` DÉPEND du `membreId` lu dans le formulaire, donc ne peut pas le précéder ;
   rien avant ne touche la base). `seConnecter` et `seDeconnecter` n'en ont pas, par nature.
+- **Deux Server Actions de la phase 3 appellent leur garde INDIRECTEMENT** (recensement corrigé
+  par la vague de correction finale, qui les avait omises) : `remettrePrevue` et `annulerSeance`
+  (`src/app/ael/seances/[id]/actions.ts`) délèguent toutes deux à `changerEtatSeance`, dont la
+  PREMIÈRE instruction est `exigerModerateurOuAdministrateur()`. La garde s'exécute donc bien
+  avant toute lecture ou écriture — mais elle n'est pas visible dans le corps des deux fonctions
+  exportées, et c'est ce que ce recensement doit dire. Même motif pour
+  `desactiverCalendrier` / `reactiverCalendrier` (`src/app/ael/calendriers/actions.ts`), qui
+  portent chacune leur garde en première instruction ET dont le `basculerCalendrier` commun en
+  porte désormais une seconde, redondante à dessein.
 
 Voir « Exception ajoutée par la phase 2b : `/inscription` sans garde » plus bas pour ce sur quoi
 repose sa fermeture, et le commentaire posé juste avant `exigerProfilActif` dans `garde.ts` pour
@@ -558,7 +574,11 @@ génération idempotente des séances, leur tenue et le pointage des présences.
   (`calendriers_ael_creneau_unique`, `nulls not distinct`) : sans cette contrainte, un
   doublon ferait générer deux séances identiques à chaque occurrence, indistinguables et
   sans geste de suppression prévu. Un créneau ne peut pas être ajouté sur une antenne
-  désactivée, et la génération ignore les créneaux actifs des antennes désactivées.
+  désactivée, la génération ignore les créneaux actifs des antennes désactivées, et
+  **la création manuelle d'une séance refuse elle aussi une antenne désactivée** — les
+  trois portes sont fermées, alors que la troisième est restée ouverte jusqu'à la vague
+  de correction finale (rien en aval ne la rattrapait : la clé étrangère n'exige que
+  l'existence de l'antenne, jamais son état).
 - **Génération des séances** (`/ael/seances`, bouton « Générer les séances ») — geste
   explicite, jamais automatique (D28), sur un horizon glissant de 8 semaines
   (`HORIZON_GENERATION_SEMAINES`, D40). Idempotente par une contrainte unique
@@ -572,9 +592,15 @@ génération idempotente des séances, leur tenue et le pointage des présences.
   membre de l'équipe ou un intervenant extérieur, exclusifs par une contrainte CHECK,
   D36) ; passage à `tenue` bloqué tant que le thème ou l'enseignant manquent, avec deux
   marqueurs d'erreur distincts nommant le champ fautif (D37). L'état reste RÉVERSIBLE
-  ensuite (D49) : un modérateur peut ramener une séance `tenue` par erreur à `prevue` ou
-  `annulee`, sans effacer le pointage déjà fait — le déclencheur de complétude ne
-  surveille que la transition VERS `tenue`, jamais le sens retour.
+  ensuite (D49), **dans les deux sens et depuis les deux états terminaux apparents** : un
+  modérateur peut ramener à `prevue` une séance marquée `tenue` par erreur **comme une
+  séance annulée par erreur**, sans effacer le pointage déjà fait — le déclencheur de
+  complétude ne surveille que la transition VERS `tenue`, jamais le sens retour. Ce
+  second retour manquait à l'écran jusqu'à la vague de correction finale, et son absence
+  était coûteuse : la génération ne recrée jamais une occurrence déjà générée (son
+  `on conflict (calendrier_id, genere_pour_le) do nothing` la voit présente quel que soit
+  son état), donc un clic de trop sur « Annuler la séance » détruisait l'occurrence
+  définitivement. Les deux textes de confirmation le disent désormais.
 - **Pointage** — liste complète des membres actifs des antennes ciblées, sans pagination
   (D29), avec un filtre client (D46) distinct du sélecteur à recherche serveur qui permet
   d'ajouter n'importe quel autre membre (D47). Écriture ligne à ligne : chaque case
@@ -584,7 +610,10 @@ génération idempotente des séances, leur tenue et le pointage des présences.
   l'antenne, archivé, ou ajouté hors liste par D47) reste visible, dans un bloc distinct
   (« Présences hors de la liste courante ») plutôt que de disparaître : la RLS reste seule
   juge de ce qui s'affiche, l'écran dit honnêtement quand elle refuse une fiche
-  (« Fiche non consultable ») au lieu de la taire.
+  (« Fiche non consultable (réf. XXXXXXXX) », les huit premiers caractères de
+  l'identifiant technique) au lieu de la taire. La référence n'est pas décorative : sans
+  elle, deux fiches masquées rendaient deux lignes STRICTEMENT identiques, chacune portant
+  une case dont le décochage écrit réellement en base.
 - **Compteur AEL** (vue `compteurs_ael`, affichée sur la fiche membre) — report initial +
   présences aux séances TENUES, rien d'autre (D4). Vue calculée, `security_invoker`, pas de
   colonne stockée : le total ne peut pas diverger de son historique, et il ne varie
@@ -597,23 +626,46 @@ Aucun journal des présences symétrique à `journal_statuts` (D45) : `pointe_pa
 planifiée ni génération automatique (D28) ; aucune fusion automatique de calendriers
 multi-antennes en une seule séance générée (D41) — seule l'édition manuelle le permet.
 
-### Deux remèdes différents à la même troncature silencieuse, et pourquoi
+### Trois remèdes différents à la même troncature silencieuse, et pourquoi
 
-`membresDesAntennesParLots` (`src/lib/donnees/membres-lots.ts`) et `presencesDeSeanceParLots`
-(`src/lib/donnees/presences-lots.ts`) parcourent chacune leur table **par lots, jusqu'à
-épuisement**, plutôt que de lire une seule fois sans borne : PostgREST tronque
-silencieusement toute lecture non bornée au-delà de `max_rows` (1000,
-`supabase/config.toml`), et rendre une page tronquée comme complète y ferait disparaître
-des membres, ou pire, écraser une présence réelle avec `present: false` en la confondant
-avec une case jamais cochée. `listerSeances` (`src/lib/donnees/ael.ts`), au contraire,
-**échoue bruyamment** si le nombre de séances dépasse son plafond de lecture, plutôt que
-de paginer. Ce n'est pas une incohérence : `listerSeances` n'est croisée avec aucune autre
-lecture, un dépassement y est donc simplement visible et sans risque de corruption d'une
-écriture — alors que la liste des présences est croisée avec la liste des membres pour
-décider de l'état de chaque case à l'écran, et un écart entre une liste complète et une
-liste tronquée s'y lirait comme « absent ». Paginer y rend la troncature IMPOSSIBLE plutôt
-que seulement DÉTECTABLE ; échouer bruyamment protège une lecture qui n'a rien à faire
-converger avec une autre.
+PostgREST tronque **silencieusement** toute lecture non bornée au-delà de `max_rows`
+(1000, `supabase/config.toml`). Ce dépôt s'en défend de trois façons, et le choix entre
+elles se fait sur une seule question : **cette lecture est-elle CROISÉE avec une autre
+pour décider d'une écriture ?**
+
+1. **Parcours par lots jusqu'à épuisement** — `membresDesAntennesParLots`
+   (`src/lib/donnees/membres-lots.ts`) et `presencesDeSeanceParLots`
+   (`src/lib/donnees/presences-lots.ts`). Ces deux listes sont croisées l'une avec l'autre
+   pour décider de l'état de chaque case de l'écran de pointage : un écart entre une liste
+   complète et une liste tronquée s'y lirait comme « absent », et le geste normal d'un
+   modérateur pour « corriger » une case qu'il croit vide ÉCRASERAIT une présence réelle
+   avec `present: false`. Paginer y rend la troncature IMPOSSIBLE plutôt que seulement
+   DÉTECTABLE.
+2. **Échec bruyant** — `listerSeances`, `listerCalendriers` et `calendriersActifs`
+   (`src/lib/donnees/ael.ts`) lisent sous un plafond de 999 et **lèvent** si le `count`
+   exact le dépasse, plutôt que de rendre une liste tronquée comme complète. Aucune n'est
+   croisée avec une autre lecture : un dépassement y est visible et sans risque de
+   corruption. Voir « L'échéance de `listerSeances` » ci-dessous — le jour où cette levée
+   se produira n'est pas lointain, et sa portée n'est pas celle qu'on croit.
+3. **Parcours par lots dans une SUITE DE TESTS** — `tests/e2e/seances-lots.ts`, ajouté par
+   la vague de correction finale de la phase 3, et **le plus conséquent des trois** : les
+   deux premiers protègent d'un affichage faux, celui-ci protège la production d'une
+   DESTRUCTION. Le garde-fou d'`ael-preuves.spec.ts` relit `seances_ael` avant et après la
+   génération et supprime la différence ; les deux lectures étant croisées l'une avec
+   l'autre, une empreinte tronquée aurait classé de VRAIES séances de production comme
+   « créées par cette suite », donc à supprimer — et la garde bruyante ne les aurait pas
+   arrêtées, une séance générée non tenue étant précisément `prevue` et non pointée. Le
+   défaut de troncature, à l'intérieur du garde-fou lui-même.
+
+Les tris de pagination des lectures paginées sont **totaux**, sans exception :
+`membres-lots.ts` (`.order('id')`), `presences-lots.ts` (`membre_id` seul, unique à
+`seance_id` fixé par la clé primaire composite), `seances-lots.ts` (`id`, clé primaire) et
+`listerMembres` (`nom`, `prenom`, **puis `id`**). Sans ce dernier critère, deux homonymes
+exacts à cheval sur une frontière de page peuvent être rendus deux fois ou jamais —
+« jamais » étant la disparition silencieuse d'un membre de l'annuaire. Aucune
+spécification SQL ne garantit l'ordre des ex æquo sans tri total, **même quand une
+mutation sur deux lignes ne parvient pas à mettre le défaut en évidence** sur un plan
+Postgres donné (résultat négatif consigné tel quel, ronde Q1-Q7 de la phase 3).
 
 `compteurAel()` (`src/lib/domaine/ael.ts`), la fonction pure qui porte la formule du
 compteur, n'est appelée par **aucun** code de production : la fiche membre passe par la
@@ -628,8 +680,8 @@ Rappel de la section « Attention » ci-dessus, avec une conséquence propre à 
 calendriers actifs réels** de la base, pas seulement ceux créés par une suite de tests.
 Une suite qui appellerait ce geste sans précaution créerait donc de vraies séances de
 production, sans préfixe ni marqueur qui les distingue des séances légitimes, hors de
-portée de tout nettoyage par motif de nom. Le remède retenu dans les suites e2e et RLS de
-cette phase est une **empreinte-et-delta** : relever l'ensemble des identifiants de
+portée de tout nettoyage par motif de nom. Le remède retenu dans la suite e2e de cette
+phase est une **empreinte-et-delta** : relever l'ensemble des identifiants de
 `seances_ael` avant le geste, le relever à nouveau après, ne supprimer que la différence,
 sous une **garde bruyante** qui lève plutôt que suppose (elle refuse par exemple de
 nettoyer une séance retrouvée qui ne serait plus `prevue` ou qui porterait déjà une
@@ -637,21 +689,94 @@ présence). Ce mécanisme a réellement servi : la dernière ronde de preuves de
 (Task 19, `tests/e2e/ael-preuves.spec.ts`) a généré puis nettoyé **72 séances** sur les
 calendriers réels, vérifié par comptage à chaque exécution.
 
-### Préoccupations résiduelles laissées par la Task 19
+**L'empreinte est PERSISTÉE SUR DISQUE, pas seulement en mémoire**, et cette distinction
+est opérationnelle. Tant qu'elle ne vivait qu'en mémoire, une suite tuée entre la première
+génération et son `afterAll` laissait jusqu'à ~72 séances RÉELLES en production, que
+l'exécution suivante intégrait à SA propre empreinte — donc ne supprimait jamais. Le
+fichier `.ael-preuves-empreinte.json` (ignoré par git) porte désormais l'empreinte et
+l'instant de début, et n'est effacé qu'après un nettoyage VÉRIFIÉ. Conséquences pour qui
+lance les suites :
 
-Deux points signalés plutôt que corrigés en silence, faute d'entrer dans le périmètre
-strict des tâches qui les ont trouvés :
+- dans les **24 heures**, une exécution interrompue est rattrapée automatiquement par la
+  suivante, sous la même garde bruyante ;
+- **au-delà, la suite REFUSE DE DÉMARRER** avec le message « Reprise refusée » plutôt que
+  de supprimer sur la foi d'une empreinte vieille de plusieurs jours. Recevoir ce message
+  en lançant `npm run test:e2e` n'est pas une panne : c'est le mécanisme qui demande une
+  décision humaine. Le fichier est à examiner, puis à supprimer à la main.
+- Limite dite dans le code : l'empreinte ne protège pas d'une interruption survenue AVANT
+  son écriture — mais rien n'a alors été généré.
 
-- **Aucune preuve e2e dédiée au cas « présence sur un membre archivé »** dans le bloc
-  « Présences hors de la liste courante » ci-dessus. Le mécanisme est le même que pour un
-  membre détaché de son antenne (RLS identique, même fonction `membresBrefsParIds`) et ce
-  dernier cas est bien éprouvé de bout en bout, mais le cas « archivé » spécifiquement ne
-  l'est pas encore.
-- **Aucun test ne verrouille directement la garantie « aucune mise en cache » qui a
-  justifié le retrait de `revalidatePath` de `pointerPresence`** : le pointage porte
-  désormais l'effet visuel entièrement côté client (état optimiste), et un rechargement
-  relit la vérité en base parce qu'aucune directive de cache n'est posée sur cette route
-  aujourd'hui — mais cette garantie n'est vraie que par absence, et rien ne la romprait
-  qu'un test si une future modification de la page ou de son layout introduisait une mise
-  en cache partielle. Seul le comportement observable (rechargement = vérité) est éprouvé
-  indirectement par les suites e2e existantes qui rechargent après écriture.
+**Les suites RLS emploient un mécanisme DIFFÉRENT, et il fallait qu'il le soit.**
+`tests/rls/ael.test.ts` ne génère rien : il insère ses séances lui-même, dont plusieurs
+« nues » — sans antenne, sans calendrier, sans intervenant, donc sans aucun objet nommable
+par lequel un balayage par préfixe pourrait les retrouver. Une empreinte-et-delta y serait
+non seulement inutile mais DANGEREUSE : son filtre `calendrier_id !== null`, qui protège
+les séances créées à la main en production, exclut exactement la forme de ces lignes-là.
+Le remède est donc la colonne **`cree_par`**, que ces tests renseignent désormais avec le
+profil de la suite : un marqueur écrit dans la MÊME instruction que la ligne qu'il désigne,
+donc sans aucune fenêtre entre la création et son enregistrement. L'ordre du nettoyage en
+fait partie — le balayage passe **avant** la suppression du compte de test, faute de quoi
+`on delete set null` effacerait la seule prise sur les séances à retrouver.
+
+### L'échéance de `listerSeances`, et pourquoi elle emporte plus que sa propre liste
+
+`listerSeances` **lève** au-delà de 999 séances (voir « Trois remèdes » ci-dessus, cas 2).
+L'arbitrage est bon et n'est pas rouvert ici ; ce qui suit est son **rayon de souffle**,
+mesuré par la revue finale de branche et inscrit ici pour que l'échéance se corrige avant
+d'arriver plutôt que de se découvrir.
+
+**Le chiffre.** 3 antennes × 3 créneaux = 9 calendriers actifs (valeur réelle
+d'aujourd'hui), soit environ **468 séances par an**. Le plafond est atteint vers
+**2,1 ans** après la première génération — moitié moins si l'équipe double ses antennes,
+ce que l'application encourage.
+
+**La conséquence exacte.** `/ael/seances` appelle `listerSeances()` en PREMIÈRE position
+de son `Promise.all` : la page part en erreur, entière. Or elle est le **seul lien entrant**
+vers trois autres écrans, recensés sur tous les `href` du dépôt :
+
+| Écran devenu injoignable | Seul lien entrant |
+|---|---|
+| `/ael/seances/[id]` — tenue **et pointage** | `/ael/seances` |
+| `/ael/calendriers` | `/ael/seances` (et le bouton « Générer ») |
+| `/antennes/[id]` pour un **modérateur** ou un compte simple | la section « Antennes » de `/ael/seances` |
+
+Ce jour-là, **le pointage devient impossible et un modérateur ne peut plus rattacher un
+membre à une antenne** — `/antennes` reste fermé par `exigerAdministrateur()`, et c'est
+très bien ainsi. Toute la phase 3 s'éteint sur une seule lecture qui lève.
+
+**L'interaction, qui est le vrai multiplicateur.** « `/antennes/[id]` joignable seulement
+par `/ael/seances` » est un arbitrage volontaire et bon (il évite d'ouvrir aux modérateurs
+la création et la désactivation des antennes). Couplé à la levée bruyante, il transforme
+la panne d'UNE lecture en extinction du rattachement d'antenne pour les modérateurs. Les
+deux moitiés sont justes séparément ; c'est leur produit qui ne l'est pas.
+
+**Remède minimal le jour venu, sans changer l'arbitrage** : sortir `listerSeances()` du
+`Promise.all` et rendre la section « Antennes » avant la liste des séances, de sorte que la
+levée n'emporte que la liste. Ou borner l'écran par date, ce que la levée force à décider.
+
+### Le cache CLIENT de Next, et la phrase qui promettait le contraire
+
+`pointerPresence` n'appelle **pas** `revalidatePath` : chaque case cochée est dépêchée
+séparément (D43), et un `revalidatePath` re-rendait la route courante dans la même
+réponse — pointer N personnes coûtait N re-rendus complets d'un écran dimensionné pour
+plus de mille membres.
+
+**Ce que le premier raisonnement avait manqué, et qui est corrigé.** Il ne regardait que
+le cache SERVEUR et concluait « il n'y a ici aucun rendu mis en cache à invalider ». C'était
+faux. Le **cache CLIENT** existe — « An in-memory cache in the browser that stores RSC
+Payload for visited and prefetched routes […] reused during browser back/forward
+navigation » (doc Next du dépôt) — et `revalidatePath` l'invalidait. Sans lui, pointer,
+revenir à la liste, puis appuyer sur **Précédent** rendait les cases ET le total à l'état
+d'AVANT. Ce n'est pas une déduction : le test « retour arrière du navigateur »
+(`tests/e2e/ael-pointage.spec.ts`) a d'abord ÉCHOUÉ contre cette version, puis passe contre
+la suivante. La vérité survivait à un RECHARGEMENT, pas à un RETOUR ARRIÈRE.
+
+**Le remède vit côté client** (`pointage.tsx`) : un `router.refresh()` **différé et
+coalescent** — une minuterie unique de 3 s, réarmée à chaque bascule et annulée au
+démontage. Une rafale de pointages ne coûte donc qu'UN re-rendu au lieu de N, et l'entrée
+de cache de CET écran est purgée tant qu'il est encore la route courante. Le refresh est
+différé et non posé au démontage à dessein : `router.refresh()` purge la route COURANTE, et
+au démontage la route courante est déjà la NOUVELLE — ce serait la mauvaise entrée de cache.
+
+**Ce qui n'est toujours pas couvert, et ne l'était pas davantage avant** : un second onglet
+ouvert sur la même séance ne se met pas à jour tout seul ; son utilisateur doit recharger.
