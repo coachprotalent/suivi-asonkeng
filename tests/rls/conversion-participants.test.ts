@@ -222,6 +222,23 @@ afterAll(async () => {
     expect(count).toBe(0)
   }
 
+  // MINEUR CORRIGÉ (revue des Tasks 22-24) : `demandes_membre` n'était vérifiée par AUCUN
+  // comptage — `nettoyerFamille` les supprime bien (par `membre_id`, AVANT les membres,
+  // voir son corps), mais rien ne confirmait que ce nettoyage avait réellement joué. Un
+  // comptage APRÈS coup sur `membre_id` serait vide de toute façon puisque les membres
+  // eux-mêmes viennent d'être supprimés ci-dessus (`demandes_membre.membre_id` est en
+  // `on delete set null`, pas `restrict` : une demande orpheline y survivrait avec
+  // `membre_id = null`, invisible à un tel filtre). `demandeur_profil_id`, lui, reste
+  // stable : TOUTES les conversions de ce fichier passent `p_par: idProfilSimple` (voir la
+  // note de tête sur `IDENT_TIERS`), donc TOUTE demande créée par cette suite porte ce
+  // demandeur — vérifiable AVANT la suppression du compte, ci-dessous.
+  const { count: demandesResiduelles, error: erreurDemandes } = await admin
+    .from('demandes_membre')
+    .select('id', { count: 'exact', head: true })
+    .eq('demandeur_profil_id', idProfilSimple)
+  expect(erreurDemandes).toBeNull()
+  expect(demandesResiduelles, 'résidu dans demandes_membre').toBe(0)
+
   await supprimerCompte(IDENT_SIMPLE)
   await supprimerCompte(IDENT_TIERS)
 })
@@ -507,7 +524,13 @@ describe('non-reconversion (preuve n°10)', () => {
 
   it("le DÉCLENCHEUR refuse aussi une écriture DIRECTE, y compris la remise à NULL (D63) — c'est le cas que `<>` laisserait passer", async () => {
     const idExterne = await creerExterneAvecDesir('ecriture-directe')
-    const { data } = await admin.rpc('convertir_participant_externe', {
+    // ERREUR DE PRÉPARATION VÉRIFIÉE (mineur signalé par la revue des Tasks 22-24) : sans
+    // `expect(error).toBeNull()`, un échec silencieux de cette conversion de préparation
+    // laisserait `converti_en_membre_id` à `null`, et la remise à `null` ci-dessous ne
+    // violerait alors PLUS RIEN (le déclencheur ne se déclenche que si `old` est
+    // NON NULL) — le test aurait alors éprouvé un tout autre chemin que celui annoncé par
+    // son titre.
+    const { data, error } = await admin.rpc('convertir_participant_externe', {
       p_participant: idExterne,
       p_chemin: 'membre_existant',
       p_membre_cible: idMembreCible,
@@ -518,6 +541,7 @@ describe('non-reconversion (preuve n°10)', () => {
       p_dirigeant_force: false,
       p_par: idProfilSimple,
     })
+    expect(error).toBeNull()
     const ligne = (Array.isArray(data) ? data[0] : data) as { membre_id: string }
 
     const { error: erreurNull } = await admin
@@ -661,7 +685,10 @@ describe('annulation d une demande de conversion (preuve n°11)', () => {
   it("refuse l'annulation avec le marqueur `demande_conversion_non_annulable`, LA FICHE EST TOUJOURS EN BASE, et un `delete` direct échoue en 23503", async () => {
     const idExterne = await creerExterneAvecDesir('annulation')
 
-    const { data } = await admin.rpc('convertir_participant_externe', {
+    // ERREUR DE PRÉPARATION VÉRIFIÉE (mineur signalé par la revue des Tasks 22-24) : un
+    // échec silencieux ici laisserait `ligne` à `undefined`, et `ligne.demande_id` lèverait
+    // plus bas une TypeError sans rapport avec ce que le test annonce éprouver.
+    const { data, error } = await admin.rpc('convertir_participant_externe', {
       p_participant: idExterne,
       p_chemin: 'fiche_en_attente',
       p_membre_cible: null,
@@ -672,6 +699,7 @@ describe('annulation d une demande de conversion (preuve n°11)', () => {
       p_dirigeant_force: false,
       p_par: idProfilSimple,
     })
+    expect(error).toBeNull()
     const ligne = (Array.isArray(data) ? data[0] : data) as { membre_id: string; demande_id: string }
 
     // (a) la passerelle refuse.
