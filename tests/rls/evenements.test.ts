@@ -294,6 +294,33 @@ describe('types_evenement (preuve n°17)', () => {
 })
 
 describe('participations : contrainte et index (preuves n°1 et n°2)', () => {
+  // ⚠️ PREUVE N°1 EXIGE LA MÉTHODOLOGIE PAR MUTATION (design §9, règle 4 : « Les preuves par
+  // mutation (n°1, 2, 9) retirent de vraies contraintes sur le projet UNIQUE : vérifier
+  // l'état avant, restaurer immédiatement après, comparer la définition restaurée à
+  // l'originale »). Le test comportemental ci-dessous (« refuse les DEUX références
+  // nulles... ») établit que la contrainte REFUSE aujourd'hui — il ne peut PAS établir que
+  // c'est ELLE, et non un autre mécanisme, qui refuse : il ne prouve rien par mutation. Le
+  // commit de la Task 23 revendiquait la preuve n°1 sans cette moitié — I3 de la revue des
+  // Tasks 22-24, corrigée ici plutôt qu'un test automatisé (dropper une contrainte sur la
+  // table PRODUCTION unique du projet, même brièvement, n'a pas sa place dans une suite
+  // rejouable) :
+  //
+  //   1. AVANT : `pg_get_constraintdef` sur `participations_une_seule_reference` ->
+  //      `CHECK ((num_nonnulls(membre_id, participant_externe_id) = 1))`.
+  //   2. `alter table public.participations drop constraint participations_une_seule_reference;`
+  //   3. Sous la contrainte ABSENTE : l'insertion des DEUX NULLES réussit (ligne créée,
+  //      constatée par `select`) — ELLE ÉCHOUAIT AVANT (23514, reproduit juste avant le drop,
+  //      même appel). L'insertion des DEUX REMPLIES réussit également, même constat. Comptage
+  //      sur l'évènement de preuve : 0 avant les deux insertions, 2 après — LE FAIT, pas
+  //      l'absence d'erreur, prouve.
+  //   4. Les deux lignes illégitimes supprimées.
+  //   5. `alter table ... add constraint participations_une_seule_reference check
+  //      (num_nonnulls(membre_id, participant_externe_id) = 1);`
+  //   6. APRÈS : `pg_get_constraintdef` -> IDENTIQUE CARACTÈRE POUR CARACTÈRE à l'AVANT.
+  //   7. CONTRÔLE FINAL : les deux mêmes insertions REFUSÉES DE NOUVEAU avec 23514,
+  //      exactement comme avant le drop — la restauration n'est pas seulement la même
+  //      définition affichée, c'est le même comportement observé.
+  //   Fixtures (`ZZI3Preuve-`) nettoyées, vérifié par comptage à zéro sur les quatre tables.
   it("refuse les DEUX références nulles ET les deux remplies (D59) — les deux sens, pas une moitié", async () => {
     const { error: erreurDeuxNulles } = await admin
       .from('participations')
@@ -385,11 +412,18 @@ describe('seminaires_assistes : les cinq colonnes et le contournement (preuves n
     // ⚠️ LECTURE PAR `clientSimple`, PAS PAR `admin`, ET CE N'EST PAS UN DÉTAIL.
     // `seminaires_assistes` est en `security_invoker = false` : elle s'exécute avec les
     // privilèges de son propriétaire, mais `auth.uid()` continue de désigner l'APPELANT
-    // (D72). Or une requête `service_role` n'a PAS de JWT utilisateur : `auth.uid()` y vaut
-    // NULL, `prive.est_actif()` rend donc `false`, et `prive.peut_lire_membre` avec lui —
-    // LA VUE REND ZÉRO LIGNE POUR `service_role`, sans la moindre erreur, alors même que
-    // `service_role` contourne la RLS partout ailleurs. Écrire ce test avec `admin` le
-    // ferait tomber sur `length > 0` pour une raison qui n'a rien à voir avec les colonnes.
+    // (D72). LA LÉGENDE DE CE COMMENTAIRE A ÉTÉ CORRIGÉE — l'affirmation précédente
+    // (« la vue rend zéro ligne pour `service_role`, sans la moindre erreur ») ÉTAIT FAUSSE,
+    // remesurée : `set local role service_role; select count(*) from
+    // public.seminaires_assistes` rend `ERROR 42501: permission denied for function
+    // peut_lire_membre`. `security_invoker = false` déplace vers le PROPRIÉTAIRE le
+    // contrôle d'accès aux TABLES, JAMAIS l'`execute` sur les FONCTIONS — et
+    // `prive.peut_lire_membre` (appelée par la vue) n'accorde `execute` ni à `service_role`
+    // ni à `anon`. C'est donc un mode de défaillance BRUYANT sur le chemin `service_role`,
+    // pas silencieux. Voir le test « `service_role` échoue avec 42501, jamais un vide
+    // silencieux » ci-dessous, qui porte désormais l'assertion qui manquait ici. Écrire
+    // CE test-ci avec `admin` ferait tomber `error` à `not.toBeNull()` pour une raison qui
+    // n'a rien à voir avec les colonnes qu'il vise — d'où `clientSimple`.
     const { data, error } = await clientSimple.from('seminaires_assistes').select('*').limit(1)
     expect(error).toBeNull()
     // Contrôle positif indispensable : sur zéro ligne, l'assertion suivante ne porterait
@@ -398,6 +432,23 @@ describe('seminaires_assistes : les cinq colonnes et le contournement (preuves n
     expect(Object.keys(data![0]).sort()).toEqual(
       ['date_debut', 'evenement_id', 'membre_id', 'titre', 'type'].sort(),
     )
+  })
+
+  it("`service_role` échoue avec 42501, jamais un vide silencieux — l'assertion qui manquait à la légende ci-dessus", async () => {
+    // MESURÉ CONTRE LA VRAIE BASE, PAR LE CANAL QUI COMPTE : la clé `service_role`, exactement
+    // celle qu'emploie `clientAdmin()` en production, pas `postgres` (éditeur SQL), dont
+    // `rolbypassrls = true` ne distinguerait pas les deux régimes. `security_invoker = false`
+    // déplace vers le PROPRIÉTAIRE le contrôle d'accès aux TABLES sous-jacentes, jamais
+    // l'`execute` sur les FONCTIONS que la vue appelle — `prive.peut_lire_membre`
+    // (`security definer`) n'accorde `execute` ni à `service_role` ni à `anon`, seulement à
+    // `authenticated`. D'où ce refus, alors même que `service_role` contourne la RLS de
+    // `participations` directement (BYPASSRLS). SIXIÈME hypothèse de ce projet démentie
+    // contre la base (registre, ronde Tasks 7-9) — et la première fois qu'un test l'assère.
+    const { data, error } = await admin.from('seminaires_assistes').select('*').limit(1)
+    expect(data).toBeNull()
+    expect(error).not.toBeNull()
+    expect(error!.code).toBe('42501')
+    expect(error!.message).toContain('peut_lire_membre')
   })
 
   it("un compte ORDINAIRE lit la vue et obtient des lignes, alors qu'il obtient ZÉRO ligne sur participations — LES DEUX ASSERTIONS DANS LE MÊME TEST (preuve n°5)", async () => {
