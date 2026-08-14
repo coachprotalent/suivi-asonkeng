@@ -35,9 +35,17 @@ export default async function PageTableauDeBord() {
         <Link href="/demandes" className="underline underline-offset-4">
           Voir les demandes
         </Link>
+        <Link href="/evenements" className="underline underline-offset-4">
+          Voir les évènements
+        </Link>
         {estAdmin || estModerateur ? (
           <Link href="/ael/seances" className="underline underline-offset-4">
             Gérer l&apos;AEL
+          </Link>
+        ) : null}
+        {estAdmin || estModerateur ? (
+          <Link href="/evenements/a-traiter" className="underline underline-offset-4">
+            Participants à traiter
           </Link>
         ) : null}
         {estAdmin ? (
