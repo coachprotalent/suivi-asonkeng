@@ -49,9 +49,24 @@ async function supprimerCompte(identifiant: string) {
     await admin.auth.admin.deleteUser(data.id)
     return
   }
-  const { data: comptes } = await admin.auth.admin.listUsers()
-  const orphelin = comptes?.users.find((u) => u.email === `${identifiant}@asonkeng.local`)
-  if (orphelin) await admin.auth.admin.deleteUser(orphelin.id)
+  // Mineur 6 de la revue de la Task 19 — MÊME FAMILLE QUE C1, sur une autre API.
+  // `listUsers()` rend 50 comptes PAR PAGE par défaut : sans parcours, ce rattrapage
+  // d'un compte orphelin (profil supprimé, utilisateur auth resté) échouerait EN SILENCE
+  // dès le 51e compte, laissant un compte de test actif en production — et le
+  // `createUser` de l'exécution suivante échouerait alors sur un doublon d'adresse, pour
+  // une raison introuvable. On parcourt jusqu'à épuisement, comme partout ailleurs.
+  const PAR_PAGE = 200
+  for (let page = 1; ; page++) {
+    const { data: comptes, error } = await admin.auth.admin.listUsers({ page, perPage: PAR_PAGE })
+    if (error) throw new Error(`liste des comptes impossible : ${error.message}`)
+    const utilisateurs = comptes?.users ?? []
+    const orphelin = utilisateurs.find((u) => u.email === `${identifiant}@asonkeng.local`)
+    if (orphelin) {
+      await admin.auth.admin.deleteUser(orphelin.id)
+      return
+    }
+    if (utilisateurs.length < PAR_PAGE) return
+  }
 }
 
 async function nettoyer() {
@@ -207,6 +222,69 @@ async function compteurAelEnBase(membreId: string): Promise<number> {
 test("CONTRÔLE POSITIF : la séance de test existe bien, à l'état prévue, sans présence", async () => {
   expect(await etatSeanceEnBase()).toBe('prevue')
   expect(await presencesEnBase()).toEqual([])
+})
+
+// IMPORTANT 5 de la revue de la Task 19 : « rendre le TOTAL visible AUX GESTIONNAIRES »
+// était l'arbitrage explicite d'I1, le code le fait (`pointage.tsx:38`, `:78-80`), et
+// AUCUN test ne l'assertait — un total figé à zéro passait toutes les portes, très
+// exactement le trou refermé pour le compteur AEL de la fiche membre dans la même ronde
+// et rouvert sur l'autre écran par le même commit.
+//
+// IMPORTANT 1 : la suppression du `revalidatePath` (correction I2) laissait subsister le
+// CACHE CLIENT de Next — « An in-memory cache in the browser that stores RSC Payload for
+// visited and prefetched routes […] reused during browser back/forward navigation »
+// (`node_modules/next/dist/docs/01-app/04-glossary.md:45-49`), que `revalidatePath`
+// invalidait. Ce test EXERCE le chemin banal décrit par la revue — pointer, revenir à la
+// liste, appuyer sur Précédent — plutôt que de le tenir pour acquis dans un commentaire :
+// la phase compte trois hypothèses tenues pour acquises et démenties par l'exécution.
+test('le total est rendu AU GESTIONNAIRE, et il survit à un retour arrière du navigateur (cache client)', async ({
+  page,
+}) => {
+  const totalAffiche = page.getByText(/^\d+ présents?\.$/)
+
+  await seConnecter(page, IDENT_MODERATEUR, MDP_MODERATEUR)
+  await page.goto(`/ael/seances/${idSeance}`)
+
+  // Le total est VISIBLE pour un gestionnaire — et il vaut vraiment zéro ici, ce que la
+  // base confirme : sans ce contrôle, « 0 présent » ne distinguerait pas un compteur
+  // juste d'un compteur mort.
+  expect(await presencesEnBase()).toEqual([])
+  await expect(totalAffiche).toHaveText('0 présent.')
+
+  // Armé AVANT le clic : le rafraîchissement différé de `pointage.tsx` est une requête
+  // RSC vers CETTE route, et `waitForRequest` REJETTE à l'expiration — si le correctif
+  // disparaissait, ce test échouerait ici, bruyamment, avant même le retour arrière.
+  // Les préchargements sont exclus (`next-router-prefetch`) : eux ne purgent rien.
+  const attenteRafraichissement = page.waitForRequest(
+    (requete) =>
+      requete.url().includes(`/ael/seances/${idSeance}`) &&
+      requete.headers()['rsc'] === '1' &&
+      requete.headers()['next-router-prefetch'] === undefined,
+    { timeout: 20_000 },
+  )
+
+  await page.getByLabel(`Test ${PREFIXE}-membre1`, { exact: false }).check()
+  // Le total suit la case cochée immédiatement, sans attendre le serveur (I2).
+  await expect(totalAffiche).toHaveText('1 présent.')
+  // …et l'écriture a réellement eu lieu : le total pourrait sinon n'être qu'optimiste.
+  await expect(async () => {
+    const presences = await presencesEnBase()
+    expect(presences).toHaveLength(1)
+    expect(presences[0].present).toBe(true)
+  }).toPass()
+
+  await attenteRafraichissement
+
+  // LE CHEMIN DE LA REVUE : quitter l'écran par le lien, puis revenir par le bouton
+  // Précédent du navigateur. Next sert alors la charge RSC mise en cache — celle d'AVANT
+  // le pointage si rien ne l'a invalidée.
+  await page.getByRole('link', { name: 'Retour aux séances' }).click()
+  await expect(page).toHaveURL(/\/ael\/seances$/)
+  await page.goBack()
+  await expect(page).toHaveURL(new RegExp(`/ael/seances/${idSeance}$`))
+
+  await expect(page.getByLabel(`Test ${PREFIXE}-membre1`, { exact: false })).toBeChecked()
+  await expect(totalAffiche).toHaveText('1 présent.')
 })
 
 test('un modérateur tient la séance et pointe deux présences, écritures vérifiées en base', async ({ page }) => {

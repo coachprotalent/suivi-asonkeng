@@ -71,7 +71,21 @@ export default async function PageSeanceAel({ params }: { params: Promise<{ id: 
     const parId = new Map(membresHorsListe.map((m) => [m.id, m]))
     presencesHorsListe = idsHorsListe.map((id) => {
       const trouve = parId.get(id)
-      return { id, libelle: trouve ? `${trouve.prenom} ${trouve.nom}` : 'Fiche non consultable' }
+      return {
+        id,
+        // IMPORTANT 7 de la revue de la Task 19 : sans référence, DEUX fiches masquées
+        // rendaient deux lignes strictement identiques — même texte, même nom
+        // accessible — chacune portant une case dont le décochage ÉCRIT RÉELLEMENT en
+        // base (`pointerPresence` passe par `clientAdmin()`, la RLS ne s'y oppose pas).
+        // La clé React évitait la collision technique, jamais la confusion humaine : un
+        // contrôle destructif sans étiquette discriminante. Les huit premiers caractères
+        // de l'identifiant suffisent à distinguer les lignes sans rien révéler d'une
+        // fiche que la RLS cache — c'est un identifiant technique déjà présent dans
+        // l'URL de la page membre, pas une donnée personnelle.
+        libelle: trouve
+          ? `${trouve.prenom} ${trouve.nom}`
+          : `Fiche non consultable (réf. ${id.slice(0, 8)})`,
+      }
     })
   }
 
