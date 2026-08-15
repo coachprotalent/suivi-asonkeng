@@ -270,14 +270,19 @@ export default async function PageFicheMembre({
       <section className="mt-8">
         <div className="mb-3 flex items-baseline justify-between gap-4">
           <h2 className="text-lg font-medium">Disciples actifs</h2>
-          {estAdmin ? (
-            <Link
-              href={`/membres/${membre.id}/arbre`}
-              className="text-sm underline underline-offset-4"
-            >
-              Rattacher
+          <div className="flex items-center gap-4">
+            <Link href="/arborescence" className="text-sm underline underline-offset-4">
+              Arborescence
             </Link>
-          ) : null}
+            {estAdmin ? (
+              <Link
+                href={`/membres/${membre.id}/arbre`}
+                className="text-sm underline underline-offset-4"
+              >
+                Rattacher
+              </Link>
+            ) : null}
+          </div>
         </div>
         {/*
           `disciplesDe` ne rend que les disciples encore ACTIFS (voir arbre.ts) : un

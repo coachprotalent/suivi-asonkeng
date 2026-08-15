@@ -29,6 +29,9 @@ export default async function PageTableauDeBord() {
         <Link href="/membres" className="underline underline-offset-4">
           Consulter l&apos;annuaire
         </Link>
+        <Link href="/arborescence" className="underline underline-offset-4">
+          Parcourir l&apos;arborescence
+        </Link>
         <Link href="/demandes/nouvelle" className="underline underline-offset-4">
           Proposer une personne à suivre
         </Link>
