@@ -33,15 +33,73 @@ async function creerMembre(suffixe: string, faiseurDeDiscipleId: string | null):
   return data.id as string
 }
 
+function emailDe(identifiant: string): string {
+  return `${identifiant}@asonkeng.local`
+}
+
+/**
+ * TOUS les comptes `auth`, page par page.
+ *
+ * `listUsers()` SANS ARGUMENT NE REND QUE LA PREMIÈRE PAGE (50 comptes par défaut). Le
+ * repli orphelin de `supprimerCompte` s'appuyait dessus : passé cinquante comptes dans le
+ * projet, il aurait cessé de trouver l'orphelin qu'il cherchait — en silence, en rendant
+ * simplement « pas trouvé ». On pagine donc, avec une borne dure : une pagination qui ne
+ * progresse pas doit LEVER, jamais tourner sans fin.
+ */
+async function listerTousLesComptes(): Promise<{ id: string; email?: string }[]> {
+  const PAR_PAGE = 200
+  const PAGES_MAX = 200
+  const tous: { id: string; email?: string }[] = []
+  for (let page = 1; page <= PAGES_MAX; page += 1) {
+    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: PAR_PAGE })
+    if (error) throw new Error(`listUsers (page ${page}) impossible : ${error.message}`)
+    const utilisateurs = data?.users ?? []
+    tous.push(...utilisateurs.map((u) => ({ id: u.id, email: u.email })))
+    if (utilisateurs.length < PAR_PAGE) return tous
+  }
+  throw new Error(
+    `listUsers : ${PAGES_MAX} pages parcourues sans atteindre la fin — la pagination ne progresse pas.`,
+  )
+}
+
+/**
+ * Supprime le compte `auth` d'un identifiant — profil compris, par la cascade de
+ * `profils_id_fkey`.
+ *
+ * ═══ L'ERREUR DE `deleteUser` EST VÉRIFIÉE, ET ELLE LÈVE ═══
+ * Elle était IGNORÉE. Un nettoyage dont l'échec est invisible par construction GARANTIT le
+ * retour du résidu : c'est exactement ce qui s'est produit avec `test.e2e.autorite.lie`,
+ * revenu en base après chaque exécution, profil ET compte `auth` présents, `membre_id` à
+ * NULL alors que la clé étrangère est `on delete set null` — donc des fiches supprimées
+ * pendant que le compte, lui, ne l'était pas. On ne sait pas trancher entre les causes
+ * possibles APRÈS COUP, et c'est précisément le défaut : il faut que l'échec se voie AU
+ * MOMENT où il a lieu.
+ */
 async function supprimerCompte(identifiant: string) {
-  const { data } = await admin.from('profils').select('id').eq('identifiant', identifiant).maybeSingle()
+  const { data, error: erreurProfil } = await admin
+    .from('profils')
+    .select('id')
+    .eq('identifiant', identifiant)
+    .maybeSingle()
+  if (erreurProfil) {
+    throw new Error(`lecture du profil ${identifiant} impossible : ${erreurProfil.message}`)
+  }
   if (data) {
-    await admin.auth.admin.deleteUser(data.id)
+    const { error } = await admin.auth.admin.deleteUser(data.id)
+    if (error) {
+      throw new Error(`suppression du compte ${identifiant} (${data.id}) impossible : ${error.message}`)
+    }
     return
   }
-  const { data: comptes } = await admin.auth.admin.listUsers()
-  const orphelin = comptes?.users.find((u) => u.email === `${identifiant}@asonkeng.local`)
-  if (orphelin) await admin.auth.admin.deleteUser(orphelin.id)
+  const orphelin = (await listerTousLesComptes()).find((u) => u.email === emailDe(identifiant))
+  if (orphelin) {
+    const { error } = await admin.auth.admin.deleteUser(orphelin.id)
+    if (error) {
+      throw new Error(
+        `suppression du compte orphelin ${identifiant} (${orphelin.id}) impossible : ${error.message}`,
+      )
+    }
+  }
 }
 
 /**
@@ -51,8 +109,10 @@ async function supprimerCompte(identifiant: string) {
  * Task 14, et un test n'a pas à passer par l'interface pour préparer son état.
  */
 async function creerCompte(identifiant: string, mdp: string, membreId: string | null) {
+  // `emailDe`, jamais le littéral recopié : c'est la MÊME adresse que le repli orphelin de
+  // `supprimerCompte` cherche, et deux écritures pourraient diverger.
   const { data, error } = await admin.auth.admin.createUser({
-    email: `${identifiant}@asonkeng.local`,
+    email: emailDe(identifiant),
     password: mdp,
     email_confirm: true,
   })
@@ -69,6 +129,21 @@ async function creerCompte(identifiant: string, mdp: string, membreId: string | 
   }
 }
 
+/**
+ * ═══ CE NETTOYAGE SE VÉRIFIE — IL NE SE CONTENTE PLUS DE SUPPRIMER ═══
+ *
+ * Il n'avait AUCUNE assertion de comptage : il supprimait et ne regardait jamais. Un
+ * `delete` PostgREST qui ne touche aucune ligne ne rend aucune erreur, et un `deleteUser`
+ * en échec ne disait rien non plus. Le résidu `test.e2e.autorite.lie` pouvait donc revenir
+ * indéfiniment sans que rien ne le signale — et il est revenu.
+ *
+ * Les trois comptages sont ABSOLUS SUR CETTE FAMILLE, jamais sur la base : le préfixe
+ * `ZZAutorite-` et les trois identifiants de cette suite n'appartiennent qu'à elle.
+ *
+ * LE CONTRÔLE DES COMPTES `auth` NE PASSE PAS PAR `profils` : un orphelin `auth` n'a par
+ * définition AUCUNE ligne dans `profils`, et un contrôle qui l'y chercherait serait vrai à
+ * vide pour le cas même qu'il prétend fermer.
+ */
 async function nettoyer() {
   for (const identifiant of [IDENT_LIE, IDENT_AUTRE, IDENT_SANS_FICHE]) {
     await supprimerCompte(identifiant)
@@ -76,7 +151,38 @@ async function nettoyer() {
   // Les comptes d'abord : `profils.membre_id` est en `on delete set null`, mais
   // supprimer les fiches avant les comptes laisserait des profils à moitié nettoyés
   // si la suppression des comptes échouait ensuite.
-  await admin.from('membres').delete().like('nom', 'ZZAutorite-%')
+  const { error: erreurMembres } = await admin
+    .from('membres')
+    .delete()
+    .like('nom', 'ZZAutorite-%')
+  if (erreurMembres) throw new Error(`suppression des fiches impossible : ${erreurMembres.message}`)
+
+  const identifiants = [IDENT_LIE, IDENT_AUTRE, IDENT_SANS_FICHE]
+  const { data: profilsResiduels, error: erreurProfils } = await admin
+    .from('profils')
+    .select('identifiant')
+    .in('identifiant', identifiants)
+  if (erreurProfils) throw new Error(`lecture des profils résiduels : ${erreurProfils.message}`)
+  expect(
+    (profilsResiduels ?? []).map((p) => p.identifiant),
+    'profil résiduel de cette suite : le nettoyage a échoué en silence',
+  ).toEqual([])
+
+  const emails = identifiants.map(emailDe)
+  const comptesResiduels = (await listerTousLesComptes())
+    .map((u) => u.email)
+    .filter((email): email is string => email !== undefined && emails.includes(email))
+  expect(
+    comptesResiduels,
+    "compte `auth` résiduel de cette suite : `deleteUser` a échoué, ou la fiche a été supprimée sans le compte",
+  ).toEqual([])
+
+  const { count, error: erreurComptage } = await admin
+    .from('membres')
+    .select('id', { count: 'exact', head: true })
+    .like('nom', 'ZZAutorite-%')
+  if (erreurComptage) throw new Error(`comptage des fiches résiduelles : ${erreurComptage.message}`)
+  expect(count, 'fiche ZZAutorite- résiduelle : le nettoyage a échoué en silence').toBe(0)
 }
 
 test.beforeAll(async () => {
