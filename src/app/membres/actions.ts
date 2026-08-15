@@ -62,6 +62,25 @@ const DETAIL_FAISEUR_NON_ACTIF = 'faiseur_de_disciple_inactif'
 const DETAIL_DIRIGEANT_INCONNU = 'dirigeant_inconnu'
 const DETAIL_CYCLE = 'cycle_faiseur_de_disciple'
 
+// LISTE FERMÉE DES MARQUEURS APPLICATIFS QUE CE MODULE SAIT INTERPRÉTER — employée
+// UNIQUEMENT pour décider ce qui a le droit d'atteindre le journal serveur (voir plus bas).
+// `error.details` n'est PAS toujours un marqueur : sur une violation de contrainte `check`
+// (23514, code Postgres `invalid_text_representation` mis à part), Postgres y écrit
+// « Failing row contains (…) » — LA LIGNE ENTIÈRE. `public.membres` porte SIX contraintes
+// `check` (voir plus bas) qu'aucune vérification amont ne couvre toutes, et la ligne
+// entière, c'est aussi le téléphone, l'adresse de contact, la ville, le pays et le domaine
+// d'étude de la personne saisie — MESURÉ, pas supposé, contre la base de ce projet.
+const MARQUEURS_CONNUS: ReadonlySet<string> = new Set([
+  DETAIL_STATUTS_EXCLUSIFS_INCOMPATIBLES,
+  DETAIL_MEMBRE_INCONNU,
+  DETAIL_STATUT_INCONNU,
+  DETAIL_FAISEUR_INCONNU,
+  DETAIL_FAISEUR_DE_DISCIPLE_ARCHIVE,
+  DETAIL_FAISEUR_NON_ACTIF,
+  DETAIL_DIRIGEANT_INCONNU,
+  DETAIL_CYCLE,
+])
+
 function champOuNull(donnees: FormData, champ: string): string | null {
   const valeur = donnees.get(champ)
   return typeof valeur === 'string' && valeur.length > 0 ? valeur : null
@@ -194,13 +213,28 @@ export async function creerMembreEnrichi(
   if (error) {
     // Trace serveur SYSTÉMATIQUE, y compris pour les cas classifiés ci-dessous : c'est la
     // SEULE trace qui subsistera, la transaction ayant tout annulé côté base.
+    //
+    // ═══ `details` N'EST JAMAIS JOURNALISÉ TEL QUEL — CE QUI SERT AU DIAGNOSTIC, JAMAIS LE
+    // CONTENU DE LA LIGNE. ═══ Ce motif est copié de l'écran des statuts
+    // (`/membres/[id]/statuts`), qui journalise `error.details` sans filtrage — sûr LÀ-BAS
+    // parce que cet écran n'écrit jamais dans `public.membres`. Ce chemin-ci le fait, et
+    // `public.membres` porte SIX contraintes `check`
+    // (`membres_nom_non_vide`, `membres_prenom_non_vide`, `membres_report_positif`,
+    // `membres_domaine_reserve_etudiant`, `membres_pas_son_propre_fdd`,
+    // `membres_pas_son_propre_dirigeant`) dont la violation (23514) fait porter à
+    // `error.details` la valeur `Failing row contains (…)` — LA FICHE ENTIÈRE : téléphone,
+    // adresse de contact, ville, pays, domaine d'étude. Différence non vue au moment où le
+    // motif a été copié ; corrigée ici. On ne journalise `details` QUE lorsqu'il correspond
+    // à l'un des marqueurs applicatifs CONNUS ci-dessus — jamais la valeur brute renvoyée
+    // par Postgres.
     console.error('creerMembreEnrichi : échec RPC creer_membre_enrichi', {
+      profilId: profil.id,
       faiseurId,
       dirigeantId,
       dirigeantForce,
       nombreStatuts: lignesStatuts.length,
       code: error.code,
-      details: error.details,
+      details: error.details && MARQUEURS_CONNUS.has(error.details) ? error.details : undefined,
       message: error.message,
     })
 
