@@ -261,6 +261,41 @@ test("archiver un faiseur de disciple est refusé, et la liste des disciples est
 
   const { data } = await admin.from('membres').select('etat').eq('id', idEnfant).single()
   expect(data?.etat).toBe('actif')
+
+  // CONTRÔLE POSITIF, DANS LE MÊME TEST : archiver un membre SANS disciple actif RÉUSSIT.
+  // C'est la preuve que l'on demande à chaque fois qu'une fonction est DUPLIQUÉE plutôt
+  // que modifiée — la phase 5 a ajouté `disciplesPage` À CÔTÉ de `disciplesDe`, sans y
+  // toucher (D94), et le contrôle amont d'`archiverMembre` doit continuer de mordre.
+  // Sans ce contrôle, le refus ci-dessus resterait vert même si l'archivage était
+  // entièrement cassé.
+  const { data: sansDisciple, error: erreurSansDisciple } = await admin
+    .from('membres')
+    .insert({ nom: `${PREFIXE}-sans-disciple`, prenom: 'Test' })
+    .select('id')
+    .single()
+  if (erreurSansDisciple || !sansDisciple) {
+    throw new Error(`préparation impossible : ${erreurSansDisciple?.message}`)
+  }
+
+  await page.goto(`/membres/${sansDisciple.id}`)
+  page.once('dialog', (dialogue) => dialogue.accept())
+  await page.getByRole('button', { name: 'Archiver' }).click()
+
+  // ═══ ATTENDRE LA FIN DE L'ACTION AVANT DE LIRE LA BASE ═══
+  // `click()` rend la main dès la DÉPÊCHE de l'événement, pas à la fin de l'action.
+  // `archiverMembre` marque sa réussite par un `redirect('/membres')` : c'est le seul
+  // signal observable, et sans lui la lecture ci-dessous partirait AVANT l'écriture. Le
+  // test serait alors instable, et son échec serait attribué à l'archivage plutôt qu'à la
+  // course. Le test frère, juste au-dessus, attend une alerte pour la même raison.
+  await expect(page).toHaveURL(/\/membres(\?|$)/)
+
+  const { data: apres, error: erreurApres } = await admin
+    .from('membres')
+    .select('etat')
+    .eq('id', sansDisciple.id)
+    .single()
+  if (erreurApres) throw new Error(`relecture impossible : ${erreurApres.message}`)
+  expect(apres?.etat).toBe('archive')
 })
 
 test("le nom d'un disciple contenant des caractères à échapper traverse intact l'aller-retour de l'adresse", async ({
