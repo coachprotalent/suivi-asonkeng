@@ -8,6 +8,19 @@ const admin = createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
 
 const IDENT_SIMPLE = 'test.rls.creation.simple'
 const MDP_SIMPLE = `Test-${crypto.randomUUID()}`
+// L'AUTEUR DES ÉCRITURES DE CETTE SUITE, PAR IDENTIFIANT DÉDIÉ — jamais un profil pris au
+// hasard en base. `profilAdminId` alimente `p_par`, donc `membres.cree_par` ET
+// `journal_statuts.par_profil_id` de chaque fiche créée par ce fichier (une dizaine par
+// exécution). `admin.from('profils').select('id').limit(1)`, sans `order` ni filtre,
+// rendait `racine` (mesuré contre la base liée par la revue de la Task 7 : trois profils
+// en base, aucun tri, et c'est celui-là qui sortait) — polluant son `cree_par` et son
+// `journal_statuts` en production à chaque lancement. Défaut de la même famille que celle
+// que ce projet traque depuis la phase 2b (« polluer racine sans le toucher »).
+// TOUS LES AUTRES FICHIERS `tests/rls/*.ts` résolvent leur auteur par un identifiant
+// dédié (`ael.test.ts`, `arbre.test.ts`, `archivage-comptes.test.ts`, `comptes.test.ts`) ;
+// ce fichier reprend exactement ce motif.
+const IDENT_AUTEUR = 'test.rls.creation.auteur'
+const MDP_AUTEUR = `Test-${crypto.randomUUID()}`
 
 // PRÉFIXE DE FAMILLE STABLE : ce qu'une exécution interrompue laisse derrière elle doit
 // rester retrouvable par la suivante. Le suffixe aléatoire ne sert qu'à ne jamais
@@ -131,17 +144,26 @@ async function reperersStatuts() {
 beforeAll(async () => {
   await admin.from('membres').delete().like('nom', `${PREFIXE_FAMILLE}%`)
   await supprimerCompte(IDENT_SIMPLE)
+  await supprimerCompte(IDENT_AUTEUR)
 
   // Le profil auteur : `p_par` alimente `cree_par` et `journal_statuts.par_profil_id`.
-  // On prend un profil RÉEL — un uuid inventé violerait la clé étrangère et ferait
-  // échouer la création pour une raison qui n'a rien à voir avec ce qu'on éprouve.
-  const { data: profils, error: erreurProfil } = await admin
+  // Un compte DÉDIÉ, créé pour cette suite et par elle — jamais un profil pris au hasard
+  // en base (voir le commentaire de `IDENT_AUTEUR` en tête de fichier : cette lecture
+  // rendait `racine` avant ce correctif). `p_par` exige seulement une clé étrangère
+  // valide vers `profils`, pas un rôle particulier : un compte simple suffit.
+  const { data: compteAuteur, error: erreurCompteAuteur } = await admin.auth.admin.createUser({
+    email: `${IDENT_AUTEUR}@asonkeng.local`,
+    password: MDP_AUTEUR,
+    email_confirm: true,
+  })
+  if (erreurCompteAuteur || !compteAuteur.user) {
+    throw new Error(`création du compte auteur impossible : ${erreurCompteAuteur?.message}`)
+  }
+  const { error: erreurProfilAuteur } = await admin
     .from('profils')
-    .select('id')
-    .limit(1)
-  if (erreurProfil) throw new Error(`lecture des profils impossible : ${erreurProfil.message}`)
-  if (!profils || profils.length === 0) throw new Error('aucun profil en base : préparation impossible')
-  profilAdminId = profils[0].id as string
+    .insert({ id: compteAuteur.user.id, identifiant: IDENT_AUTEUR, nom_affichage: 'Test création (auteur)' })
+  if (erreurProfilAuteur) throw new Error(`insertion du profil auteur impossible : ${erreurProfilAuteur.message}`)
+  profilAdminId = compteAuteur.user.id
 
   const { data: archive, error: erreurArchive } = await admin
     .from('membres')
@@ -198,6 +220,7 @@ afterAll(async () => {
   // `membre_statuts` et `journal_statuts` partent en cascade avec la fiche.
   await admin.from('membres').delete().like('nom', `${PREFIXE_FAMILLE}%`)
   await supprimerCompte(IDENT_SIMPLE)
+  await supprimerCompte(IDENT_AUTEUR)
 
   // COMPTAGE DE CONTRÔLE INDÉPENDANT du balayage : l'absence d'erreur au `delete` ne
   // prouve rien — un `delete` qui ne touche aucune ligne ne rend aucune erreur.
@@ -205,7 +228,7 @@ afterAll(async () => {
   const { data: residus, error: erreurResidus } = await admin
     .from('profils')
     .select('id')
-    .eq('identifiant', IDENT_SIMPLE)
+    .in('identifiant', [IDENT_SIMPLE, IDENT_AUTEUR])
   // `error` VÉRIFIÉ, et assertion SANS `?? []` : sur échec de lecture, `data` vaut `null`,
   // et `residus ?? []` convertirait la panne en « aucun résidu ». Toute la valeur de ce
   // contrôle est d'être INDÉPENDANT du balayage ; un contrôle qui ne peut plus échouer ne
@@ -342,6 +365,24 @@ describe('création nue, sans aucun enrichissement', () => {
 // ───────────────────────────────────────────────────────────────────────────────
 
 describe('les gardes des passerelles appelées mordent à travers la nouvelle porte', () => {
+  // ⚠️ NON DISCRIMINANT (I1 de la revue de la Task 5-7), SIGNALÉ ICI POUR QU'IL NE SOIT
+  // PLUS JAMAIS RECOMPTÉ COMME UNE PREUVE DE COMPOSITION. Le marqueur
+  // `faiseur_de_disciple_archive` est posé par DEUX mécanismes au texte identique : la
+  // passerelle `definir_arbre` (`p_faiseur_de_disciple is not null` puis lecture de
+  // l'état) ET le déclencheur `membres_faiseur_de_disciple_archive`
+  // (20260814150000), qui mord sur TOUT `insert`/`update` de `faiseur_de_disciple_id`,
+  // qu'il passe par la passerelle ou par un `update` DIRECT — le test
+  // « refuse le même rattachement par un INSERT DIRECT » plus bas le démontre lui-même en
+  // obtenant CE MÊME marqueur sans passer par `definir_arbre`. Un `creer_membre_enrichi`
+  // qui aurait été récrit pour écrire `faiseur_de_disciple_id` par un `insert` direct au
+  // lieu d'appeler `definir_arbre` laisserait ce test VERT quand même — le déclencheur
+  // suffit à produire le marqueur. Ce test éprouve donc que LA BARRIÈRE tient (utile en
+  // soi), pas que la COMPOSITION tient. Les deux marqueurs qui discriminent réellement
+  // `definir_arbre` sont `faiseur_inconnu` et `dirigeant_inconnu`, juste en dessous : ils
+  // n'existent QUE dans cette fonction, et un `insert`/`update` direct sur une clé
+  // étrangère absente rendrait `23503`, pas ce marqueur. Voir aussi le fil-piège
+  // `pg_get_functiondef` (rapport de la Task 8-10), seule vérification qui sépare
+  // vraiment l'appel de la recopie.
   it('refuse un faiseur de disciple ARCHIVÉ, et ne laisse AUCUNE fiche', async () => {
     const avant = await compterMembresDuPrefixe()
     const { error } = await admin.rpc(
@@ -543,6 +584,16 @@ describe('refus du couple exclusif par la passerelle elle-même (D84)', () => {
 // ───────────────────────────────────────────────────────────────────────────────
 
 describe("les gardes d'état de l'arbre couvrent en_attente comme archive", () => {
+  // ⚠️ NON DISCRIMINANT (I1 de la revue de la Task 5-7), MÊME RAISON QUE LE TEST
+  // « faiseur de disciple ARCHIVÉ » PLUS HAUT — signalé ici pour la même garde contre une
+  // recompte future. `faiseur_de_disciple_inactif` est posé par le MÊME déclencheur
+  // (`prive.refuser_faiseur_de_disciple_archive`, amendé en 20260819110000) que
+  // `faiseur_de_disciple_archive`, et mord donc tout aussi bien sur un `insert`/`update`
+  // DIRECT que sur un appel via `definir_arbre` — le test juste en dessous
+  // (« refuse le même rattachement par un INSERT DIRECT ») l'établit lui-même, dans ce
+  // même fichier, en obtenant CE MÊME marqueur sans passer par la passerelle. Ce test
+  // éprouve que LE DÉCLENCHEUR protège, pas que `creer_membre_enrichi` COMPOSE plutôt que
+  // de recopier.
   it('refuse un faiseur de disciple EN ATTENTE, avec son marqueur propre, et ne laisse AUCUNE fiche', async () => {
     const avant = await compterMembresDuPrefixe()
     const { error } = await admin.rpc(
