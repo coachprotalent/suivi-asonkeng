@@ -446,9 +446,17 @@ test('les actions de la recherche refusent un appel forgé SANS session, et le c
   const sansSession = await requestPlaywright.newContext({ baseURL })
   try {
     for (const capturee of capturees) {
+      // `maxRedirects: 0`, EXACTEMENT comme le test frère (`:343-351`) et pour la MÊME
+      // raison, qui y est mesurée : sans ce réglage, Playwright suit la redirection et la
+      // ré-émet vers la page de connexion, qui répond `200 {}`. Les trois `not.toContain`
+      // ci-dessous porteraient alors sur `{}` et SERAIENT VRAIS QUOI QU'IL ARRIVE — ce
+      // test, seule preuve que `chargerChemin` et `pageContenant` refusent un visiteur, ne
+      // pourrait plus échouer. Le canari, lui, ne le verrait pas : il rejoue AVEC session,
+      // donc sans redirection.
       const reponse = await sansSession.post(capturee.url, {
         headers: { ...capturee.entetes, cookie: '' },
         data: capturee.corps,
+        maxRedirects: 0,
       })
       const texte = await reponse.text()
       // ASSERTION PRINCIPALE, par le COMPORTEMENT : aucune réponse ne porte le moindre nom
@@ -459,6 +467,16 @@ test('les actions de la recherche refusent un appel forgé SANS session, et le c
       )
       expect(texte).not.toContain(NOM_DISCIPLE)
       expect(texte).not.toContain(NOM_RACINE)
+      // Assertion secondaire, sur le PREMIER saut, reprise du test frère : une redirection
+      // 3xx vers `/connexion`, posée par `src/middleware.ts` AVANT que la Server Action ne
+      // soit atteinte. Sans elle, un `200` porteur d'un corps vide — pour une raison
+      // étrangère au refus — passerait pour un refus.
+      expect(
+        reponse.status(),
+        'pas une redirection : le premier saut a changé de forme',
+      ).toBeGreaterThanOrEqual(300)
+      expect(reponse.status()).toBeLessThan(400)
+      expect(reponse.headers()['location']).toBe('/connexion')
     }
   } finally {
     await sansSession.dispose()
