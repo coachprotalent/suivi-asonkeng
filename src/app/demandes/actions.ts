@@ -19,6 +19,29 @@ const DETAIL_MEMBRE_INCONNU = 'membre_inconnu'
 const DETAIL_DEMANDE_NON_VALIDABLE = 'demande_non_validable'
 const DETAIL_RATTACHEMENT_VERS_FICHE_JETABLE = 'rattachement_vers_fiche_jetable'
 const DETAIL_MEMBRE_DEJA_RATTACHE = 'membre_deja_rattache'
+// Marqueurs posés par `public.definir_arbre` (`src/app/membres/[id]/arbre/actions.ts`
+// les nomme aussi), appelée plus bas depuis `validerDemandeNouvellePersonne`.
+const DETAIL_FAISEUR_INCONNU = 'faiseur_inconnu'
+const DETAIL_DIRIGEANT_INCONNU = 'dirigeant_inconnu'
+const DETAIL_FAISEUR_ARCHIVE = 'faiseur_de_disciple_archive'
+const DETAIL_FAISEUR_INACTIF = 'faiseur_de_disciple_inactif'
+const DETAIL_CYCLE = 'cycle_faiseur_de_disciple'
+
+// LISTE FERMÉE DES MARQUEURS QUE `definir_arbre` PEUT POSER — employée UNIQUEMENT pour
+// décider ce qui a le droit d'atteindre le journal serveur, dans le bloc `erreurArbre`
+// plus bas. Même défaut, même remède qu'ailleurs (commit d48db7d) :
+// `definir_arbre` écrit dans `public.membres`, dont deux contraintes `check`
+// (`membres_pas_son_propre_fdd`, `membres_pas_son_propre_dirigeant`) peuvent faire porter
+// à `error.details` la ligne ENTIÈRE — téléphone, adresse de contact, ville, pays — au
+// lieu d'un marqueur applicatif. On ne journalise `details` que lorsqu'il figure ici.
+const MARQUEURS_CONNUS_ARBRE: ReadonlySet<string> = new Set([
+  DETAIL_MEMBRE_INCONNU,
+  DETAIL_FAISEUR_INCONNU,
+  DETAIL_DIRIGEANT_INCONNU,
+  DETAIL_FAISEUR_ARCHIVE,
+  DETAIL_FAISEUR_INACTIF,
+  DETAIL_CYCLE,
+])
 
 /**
  * Un refus MÉTIER est RETOURNÉ, jamais LEVÉ (correction post-Task-17, constat
@@ -257,11 +280,17 @@ export async function validerDemandeNouvellePersonne(donnees: FormData): Promise
       p_dirigeant_force: donnees.get('dirigeantForce') === '1',
     })
     if (erreurArbre) {
+      // `details` N'EST JAMAIS JOURNALISÉ TEL QUEL — voir `MARQUEURS_CONNUS_ARBRE` plus
+      // haut : `definir_arbre` écrit dans `public.membres`, et deux de ses contraintes
+      // `check` peuvent faire porter à `details` la ligne entière.
       console.error('validerDemandeNouvellePersonne : échec RPC definir_arbre', {
         demandeId,
         membreId,
         code: erreurArbre.code,
-        details: erreurArbre.details,
+        details:
+          erreurArbre.details && MARQUEURS_CONNUS_ARBRE.has(erreurArbre.details)
+            ? erreurArbre.details
+            : undefined,
         message: erreurArbre.message,
       })
       // Refus RETOURNÉ, jamais levé : voir le commentaire de tête de ce fichier. Aucun

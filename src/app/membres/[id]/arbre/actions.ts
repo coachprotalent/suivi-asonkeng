@@ -26,6 +26,28 @@ const DETAIL_MEMBRE_INCONNU = 'membre_inconnu'
 const DETAIL_FAISEUR_INCONNU = 'faiseur_inconnu'
 const DETAIL_DIRIGEANT_INCONNU = 'dirigeant_inconnu'
 const DETAIL_FAISEUR_ARCHIVE = 'faiseur_de_disciple_archive'
+// `definir_arbre` (migration 20260819100000) pose aussi ce marqueur pour un faiseur
+// ni actif ni archivé ; cet écran ne le discrimine pas (voir le commentaire de tête de
+// cette migration), mais il reste un marqueur APPLICATIF connu, sans danger à journaliser.
+const DETAIL_FAISEUR_INACTIF = 'faiseur_de_disciple_inactif'
+
+// LISTE FERMÉE DES MARQUEURS APPLICATIFS QUE `definir_arbre` PEUT POSER — employée
+// UNIQUEMENT pour décider ce qui a le droit d'atteindre le journal serveur (voir plus
+// bas). `error.details` n'est PAS toujours un marqueur : sur une violation de contrainte
+// `check` (23514) — `membres_pas_son_propre_fdd` ou `membres_pas_son_propre_dirigeant`,
+// que l'`update` de `definir_arbre` peut déclencher —, Postgres y écrit
+// « Failing row contains (…) » — LA LIGNE ENTIÈRE : téléphone, adresse de contact, ville,
+// pays. Même défaut que celui refermé sur `creerMembreEnrichi` (commit d48db7d), même
+// remède : on ne journalise `details` que lorsqu'il correspond à l'un de ces marqueurs
+// CONNUS, jamais la valeur brute renvoyée par Postgres.
+const MARQUEURS_CONNUS: ReadonlySet<string> = new Set([
+  DETAIL_CYCLE,
+  DETAIL_MEMBRE_INCONNU,
+  DETAIL_FAISEUR_INCONNU,
+  DETAIL_DIRIGEANT_INCONNU,
+  DETAIL_FAISEUR_ARCHIVE,
+  DETAIL_FAISEUR_INACTIF,
+])
 
 function champOuNull(donnees: FormData, champ: string): string | null {
   const valeur = donnees.get(champ)
@@ -76,13 +98,16 @@ export async function definirArbre(
   })
 
   if (error) {
+    // `details` N'EST JAMAIS JOURNALISÉ TEL QUEL — voir `MARQUEURS_CONNUS` plus haut :
+    // `definir_arbre` écrit dans `public.membres`, dont deux contraintes `check` peuvent
+    // faire porter à `error.details` la ligne entière.
     console.error('definirArbre : échec RPC definir_arbre', {
       membreId,
       faiseurId,
       dirigeantId,
       dirigeantForce,
       code: error.code,
-      details: error.details,
+      details: error.details && MARQUEURS_CONNUS.has(error.details) ? error.details : undefined,
       message: error.message,
     })
 
