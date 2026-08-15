@@ -143,7 +143,7 @@ describe('normaliserFicheMembre - valeurs telles que les rend un formulaire', ()
 })
 
 describe('libelleFiche', () => {
-  it('rend null quand l’identifiant est nul — il n’y a personne à désigner', () => {
+  it("rend null quand l'identifiant est nul — il n'y a personne à désigner", () => {
     expect(libelleFiche(null, null)).toBeNull()
     // Même sans identifiant, un `bref` fourni par erreur ne doit rien faire apparaître.
     expect(libelleFiche(null, { prenom: 'Jean', nom: 'Dupont' })).toBeNull()

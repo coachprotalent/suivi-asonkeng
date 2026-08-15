@@ -99,8 +99,14 @@ export async function definirArbre(
 
   if (error) {
     // `details` N'EST JAMAIS JOURNALISÉ TEL QUEL — voir `MARQUEURS_CONNUS` plus haut :
-    // `definir_arbre` écrit dans `public.membres`, dont deux contraintes `check` peuvent
-    // faire porter à `error.details` la ligne entière.
+    // `definir_arbre` écrit dans `public.membres`, qui porte deux contraintes `check` sur
+    // l'auto-référence (`membres_pas_son_propre_fdd`, `membres_pas_son_propre_dirigeant`),
+    // mais UNE SEULE est atteignable en pratique, MESURÉ : `membres_pas_son_propre_fdd`
+    // ne se déclenche jamais, le déclencheur anti-cycle `membres_anti_cycle`
+    // (`prive.refuser_cycle_faiseur_de_disciple`) levant toujours avant elle, avec le même
+    // diagnostic (`23514` / `cycle_faiseur_de_disciple`). Seule
+    // `membres_pas_son_propre_dirigeant` peut donc faire porter à `error.details` la ligne
+    // entière.
     console.error('definirArbre : échec RPC definir_arbre', {
       membreId,
       faiseurId,

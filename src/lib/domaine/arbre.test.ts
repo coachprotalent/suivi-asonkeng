@@ -117,7 +117,7 @@ describe('cheminAvecLibelles', () => {
     { id: 'petit', prenom: 'Zoé', nom: 'Feuille' },
   ]
 
-  it('nomme chaque maillon lisible, dans l’ordre reçu', () => {
+  it("nomme chaque maillon lisible, dans l'ordre reçu", () => {
     expect(cheminAvecLibelles(['racine', 'petit'], brefs)).toEqual([
       { id: 'racine', libelle: 'Anne Racine' },
       { id: 'petit', libelle: 'Zoé Feuille' },
@@ -126,7 +126,7 @@ describe('cheminAvecLibelles', () => {
 
   // PREUVE N°14, seconde moitié : un maillon ILLISIBLE conserve SA PLACE, et ne fait
   // disparaître aucun descendant.
-  it('conserve la profondeur d’un maillon illisible, et garde ses descendants', () => {
+  it("conserve la profondeur d'un maillon illisible, et garde ses descendants", () => {
     const chemin = cheminAvecLibelles(['racine', 'intermediaire', 'petit'], brefs)
     expect(chemin).toHaveLength(3)
     expect(chemin[1]).toEqual({ id: 'intermediaire', libelle: LIBELLE_FICHE_NON_CONSULTABLE })
