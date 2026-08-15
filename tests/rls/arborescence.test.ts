@@ -45,6 +45,8 @@ let clientSimple: SupabaseClient
 let idFaiseur: string
 let idsDisciplesAttendus: string[] = []
 let idsRacinesAttendues: string[] = []
+/** Les mêmes, dans l'ORDRE (nom, prenom, id) attendu en sortie de `racinesParPage`. */
+let idsRacinesTriees: string[] = []
 let idArchive: string
 let idEnAttente: string
 
@@ -58,6 +60,31 @@ let idFaiseurCitation: string
 // et rien, avant cette suite, ne l'exerçait.
 const NOM_CITATION_CIBLE = `${PREFIXE}-cit-d, (parenthèses) "guillemets" \\antislash`
 let idCitationCible: string
+
+/*
+  ═══ POUR LE FILTRE `etat = 'actif'` DES DISCIPLES : UN FAISEUR À TROIS ÉTATS ═══
+
+  UN FAISEUR DISTINCT, comme celui de la citation, et pour la même raison : les cinq
+  disciples d'`idFaiseur` servent les preuves n°9 et n°13, dont les décomptes ne doivent
+  dépendre de rien d'autre.
+
+  CE QUE CETTE FRATRIE-CI EXISTE POUR ÉPROUVER, et que RIEN n'éprouvait avant elle : les
+  cinq disciples d'`idFaiseur` sont TOUS ACTIFS, et les seules fiches non actives de cette
+  suite (`idArchive`, `idEnAttente`) sont SANS FAISEUR DE DISCIPLE — elles ne peuvent donc
+  JAMAIS apparaître dans `disciplesParPage`. L'égalité admin/ordinaire de la preuve n°13
+  comparait ainsi deux fois le même ensemble de cinq actifs : elle serait restée
+  IDENTIQUEMENT VERTE si l'on retirait `.eq('etat', 'actif')` d'`arbre-lots.ts`.
+
+  Il faut donc des fiches NON ACTIVES RATTACHÉES À UN FAISEUR ACTIF. Rien ne l'interdit :
+  les déclencheurs vérifient l'état du FAISEUR, pas celui de l'enfant.
+
+  Le TÉMOIN ACTIF n'est pas décoratif : sans lui, tout ce qui suit serait satisfait par deux
+  listes vides. Même protocole que le bloc `nomsMaillonsActifs` plus bas.
+*/
+let idFaiseurEtats: string
+let idDiscipleActif: string
+let idDiscipleArchive: string
+let idDiscipleEnAttente: string
 
 async function supprimerCompte(identifiant: string) {
   const { data } = await admin.from('profils').select('id').eq('identifiant', identifiant).maybeSingle()
@@ -153,16 +180,27 @@ beforeAll(async () => {
   if (erreurDisciples || !disciples) throw new Error(`création des disciples : ${erreurDisciples?.message}`)
   idsDisciplesAttendus = disciples.map((ligne) => ligne.id as string)
 
+  // ═══ INSÉRÉES DANS LE DÉSORDRE, DÉLIBÉRÉMENT ═══
+  // 3, puis 1, puis 2 — jamais 1, 2, 3. La preuve d'ORDRE de `racinesParPage` les cherche
+  // triées ; insérées dans l'ordre, elles ressortiraient très probablement dans cet ordre
+  // d'un parcours de table SANS AUCUN TRI, et cette preuve passerait sans rien mesurer. Ne
+  // pas « remettre en ordre » cette liste.
   const { data: racines, error: erreurRacines } = await admin
     .from('membres')
     .insert([
+      { nom: `${PREFIXE}-racine-3`, prenom: 'Test' },
       { nom: `${PREFIXE}-racine-1`, prenom: 'Test' },
       { nom: `${PREFIXE}-racine-2`, prenom: 'Test' },
-      { nom: `${PREFIXE}-racine-3`, prenom: 'Test' },
     ])
-    .select('id')
+    .select('id, nom')
   if (erreurRacines || !racines) throw new Error(`création des racines : ${erreurRacines?.message}`)
   idsRacinesAttendues = racines.map((ligne) => ligne.id as string)
+  // L'ORDRE ATTENDU EN SORTIE, calculé sur le `nom` et non sur l'ordre d'insertion. Les
+  // trois noms ne diffèrent que par un chiffre ASCII sur un préfixe identique : le tri de
+  // JavaScript et celui de PostgreSQL y coïncident nécessairement.
+  idsRacinesTriees = [...racines]
+    .sort((a, b) => (a.nom as string).localeCompare(b.nom as string))
+    .map((ligne) => ligne.id as string)
 
   // Une fiche ARCHIVÉE et une fiche EN ATTENTE, toutes deux SANS faiseur de disciple : ni
   // l'une ni l'autre ne doit apparaître dans les racines, pour PERSONNE — y compris pour
@@ -204,6 +242,34 @@ beforeAll(async () => {
     .select('id, nom')
   if (erreurCitation || !citation) throw new Error(`création des frères de citation : ${erreurCitation?.message}`)
   idCitationCible = citation.find((l) => l.nom === NOM_CITATION_CIBLE)!.id as string
+
+  // ═══ LE FAISEUR À TROIS ÉTATS (voir le commentaire de sa déclaration) ═══
+  const { data: faiseurEtats, error: erreurFaiseurEtats } = await admin
+    .from('membres')
+    .insert({ nom: `${PREFIXE}-etats-faiseur`, prenom: 'Test' })
+    .select('id')
+    .single()
+  if (erreurFaiseurEtats || !faiseurEtats) {
+    throw new Error(`création du faiseur à trois états : ${erreurFaiseurEtats?.message}`)
+  }
+  idFaiseurEtats = faiseurEtats.id as string
+
+  const { data: etats, error: erreurEtats } = await admin
+    .from('membres')
+    .insert([
+      { nom: `${PREFIXE}-etats-a-actif`, prenom: 'Test', etat: 'actif' },
+      { nom: `${PREFIXE}-etats-b-archive`, prenom: 'Test', etat: 'archive' },
+      { nom: `${PREFIXE}-etats-c-en-attente`, prenom: 'Test', etat: 'en_attente' },
+    ].map((ligne) => ({ ...ligne, faiseur_de_disciple_id: idFaiseurEtats })))
+    .select('id, etat')
+  // Toute préparation vérifie son erreur et LÈVE : sans les deux fiches non actives, la
+  // preuve ci-dessous redeviendrait exactement celle qu'elle remplace — verte sans filtre.
+  if (erreurEtats || !etats) {
+    throw new Error(`création des disciples à trois états : ${erreurEtats?.message}`)
+  }
+  idDiscipleActif = etats.find((l) => l.etat === 'actif')!.id as string
+  idDiscipleArchive = etats.find((l) => l.etat === 'archive')!.id as string
+  idDiscipleEnAttente = etats.find((l) => l.etat === 'en_attente')!.id as string
 })
 
 afterAll(async () => {
@@ -411,8 +477,26 @@ describe('racinesParPage', () => {
        déclencherait qu'au-delà de 1 500 racines, alors que le parcours coûte déjà
        beaucoup trop cher bien avant. La borne est donc posée sur le NOMBRE DE LIGNES,
        assertée AVANT la boucle, et le nombre de pages en découle.
+
+    ═══ ET CE QUE CE PARCOURS NE PROUVE PAS, ÉCRIT FRANCHEMENT ═══
+
+    IL NE PORTE PAS SUR L'AXE PAGINATION. Avec une taille de page de 200 et une base qui
+    compte une dizaine de racines, LA BOUCLE NE FAIT QU'UN TOUR : aucune frontière n'est
+    franchie, et `new Set(collectes).size === collectes.length` est vrai PAR CONSTRUCTION —
+    une seule requête ne peut pas rendre deux fois la même ligne. Ces deux assertions
+    resteraient vertes sur une pagination entièrement cassée. La frontière de page, elle,
+    est réellement franchie par `disciplesParPage` plus haut (taille 2, cinq disciples,
+    homonymes à cheval) : c'est LÀ qu'elle est prouvée, pas ici.
+
+    CE PARCOURS PROUVE DONC DEUX CHOSES, ET ELLES SONT RÉELLES : que les racines créées par
+    cette suite sont bien rendues, chacune une fois ; et — depuis la revue finale de la
+    phase 5, qui a constaté qu'AUCUNE assertion d'ordre n'existait sur les racines, nulle
+    part — que la liste rendue est bien TRIÉE sur `(nom, prenom, id)`. Cette dernière
+    tomberait si l'un des trois `.order(...)` d'`arbre-lots.ts` disparaissait : sans tri
+    explicite, PostgreSQL rend les lignes dans l'ordre qui l'arrange, et il n'y a aucune
+    raison qu'il coïncide avec celui-là sur une dizaine de fiches.
   */
-  it('parcourt toutes les pages sans doublon, et retrouve les trois racines créées', async () => {
+  it("parcourt toutes les pages sans doublon, dans l'ordre (nom, prenom, id), et retrouve les trois racines créées", async () => {
     const TAILLE = 200
     const totalInitial = await compterRacinesIndependamment(admin)
     expect(
@@ -421,6 +505,8 @@ describe('racinesParPage', () => {
     ).toBeLessThan(20_000)
     const PAGES_MAX = Math.ceil(totalInitial / TAILLE) + 2
 
+    // L'ORDRE DE COLLECTE EST CONSERVÉ : c'est lui qu'on assert plus bas, et non seulement
+    // l'appartenance.
     const collectes: string[] = []
     let page = 1
     for (; page <= PAGES_MAX; page += 1) {
@@ -436,6 +522,32 @@ describe('racinesParPage', () => {
     // AUCUN DOUBLON. Le `+2` de la borne absorbe une insertion concurrente sans faire
     // tomber la boucle ; ce doublon-ci, en revanche, dirait quelque chose du tri.
     expect(new Set(collectes).size).toBe(collectes.length)
+
+    /*
+      ═══ L'ORDRE, ASSERTÉ POUR DE VRAI ═══
+
+      Les trois racines de cette suite sont INSÉRÉES DANS LE DÉSORDRE (voir le `beforeAll` :
+      `-racine-3`, puis `-racine-1`, puis `-racine-2`) et doivent RESSORTIR DANS L'ORDRE.
+      C'est ce désordre délibéré qui rend l'assertion discriminante : insérées 1, 2, 3, elles
+      seraient très probablement rendues 1, 2, 3 par un simple parcours de table SANS AUCUN
+      TRI, et l'assertion passerait sans rien mesurer.
+
+      ON N'ASSERT PAS LA MONOTONIE DE TOUTE LA LISTE, et c'est délibéré : la comparaison de
+      JavaScript porte sur les unités de code UTF-16, celle de PostgreSQL sur sa COLLATION —
+      les deux divergent sur les accents et la casse, que les vrais noms de cette base
+      portent. Une telle assertion produirait un ROUGE ÉTRANGER au code éprouvé. Nos trois
+      noms, eux, ne diffèrent que par un chiffre ASCII sur un préfixe identique : les deux
+      ordres y coïncident nécessairement.
+    */
+    const rangs = idsRacinesTriees.map((identifiant) => collectes.indexOf(identifiant))
+    expect(
+      rangs,
+      "une racine de cette suite est absente du parcours : l'ordre ne peut pas être mesuré",
+    ).not.toContain(-1)
+    expect(
+      rangs,
+      "les racines de cette suite ne sortent pas dans l'ordre (nom, prenom, id) : le tri de racinesParPage ne tient pas",
+    ).toEqual([...rangs].sort((a, b) => a - b))
 
     // ET LE DELTA : les trois racines de cette suite ont été rendues, chacune UNE FOIS.
     // C'est la seule assertion de complétude qui soit vraie sur une base partagée.
@@ -535,6 +647,11 @@ describe('filtre etat = actif, explicite et non délégué à la RLS', () => {
 // ───────────────────────────────────────────────────────────────────────────────
 
 describe('un compte ordinaire et un administrateur voient le même arbre', () => {
+  // CE TEST-CI NE MESURE PAS LE FILTRE `etat = 'actif'` : les cinq disciples d'`idFaiseur`
+  // sont TOUS ACTIFS, donc les deux lectures comparent deux fois le même ensemble et
+  // resteraient égales si le filtre disparaissait. Il mesure ce qu'il dit — que les deux
+  // rôles voient le MÊME nœud —, et rien de plus. Le filtre, lui, est éprouvé par le bloc
+  // suivant, sur un faiseur qui porte des disciples des TROIS états.
   it('rendent la même liste de disciples ET le même total sur le même nœud', async () => {
     const vuAdmin = await disciplesParPage(clientAdminSession, idFaiseur, { taillePage: 10 })
     const vuSimple = await disciplesParPage(clientSimple, idFaiseur, { taillePage: 10 })
@@ -557,6 +674,83 @@ describe('un compte ordinaire et un administrateur voient le même arbre', () =>
       .maybeSingle()
     expect(error).toBeNull()
     expect(data).toBeNull()
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────────
+// LES DISCIPLES D'UN NŒUD SONT FILTRÉS `etat = 'actif'` POUR TOUS LES RÔLES (D93)
+//
+// C'est la MOITIÉ DE D93 QUI PORTE SUR LES NŒUDS DE L'ARBRE — l'autre, celle des noms du
+// chemin, est éprouvée quarante lignes plus bas, et c'est SON protocole qu'on reprend ici :
+// un lot qui mélange les trois états, DEUX sessions réelles, un témoin actif qui rend la
+// lecture non vide, et un contrôle positif de lisibilité directe.
+//
+// LE FILTRE VIT DANS `arbre-lots.ts` (`disciplesParPage`, `.eq('etat', 'actif')`). Il n'est
+// PAS délégué à la RLS, et c'est tout l'enjeu : `membres_lecture` délègue à
+// `prive.peut_lire_membre`, qui ouvre TOUTE fiche à l'administrateur. Sans le filtre
+// explicite, un administrateur verrait sous ce nœud trois disciples là où un compte
+// ordinaire en verrait un — deux arbres différents pour la même donnée, alors que l'écran
+// annonce que seuls les membres actifs y figurent.
+//
+// DISCRIMINATION VÉRIFIÉE PAR MUTATION, PAS PAR RAISONNEMENT : `.eq('etat', 'actif')`
+// retiré d'`arbre-lots.ts:101`, ce bloc ROUGIT (l'administrateur lit alors les trois
+// disciples, et l'égalité avec le compte ordinaire tombe) ; remis, il REVERDIT.
+// ───────────────────────────────────────────────────────────────────────────────
+
+describe('disciples du nœud, filtrés etat = actif explicitement', () => {
+  it("n'expose NI le disciple archivé NI le disciple en attente, PAS MÊME À L'ADMINISTRATEUR", async () => {
+    const vuAdmin = await disciplesParPage(clientAdminSession, idFaiseurEtats, { taillePage: 10 })
+    const vuSimple = await disciplesParPage(clientSimple, idFaiseurEtats, { taillePage: 10 })
+
+    // LE TÉMOIN ACTIF EST BIEN LÀ, POUR LES DEUX. Sans cette assertion, tout ce qui suit
+    // serait satisfait par deux listes vides — une session expirée, une base en panne.
+    expect(vuAdmin.lignes.map((m) => m.id)).toEqual([idDiscipleActif])
+    expect(vuSimple.lignes.map((m) => m.id)).toEqual([idDiscipleActif])
+
+    // ET LE TOTAL ANNONCÉ SUIT LE FILTRE, pas seulement la page rendue : le nœud affiche
+    // « 1 disciple », jamais « 3 disciples » dont deux invisibles.
+    expect(vuAdmin.total).toBe(1)
+    expect(vuSimple.total).toBe(1)
+
+    // ET L'ÉGALITÉ, qui est le fait de D93 : l'exclusion vient de la RÈGLE ÉNONCÉE, et non
+    // du lecteur.
+    expect(vuSimple.lignes.map((m) => m.id)).toEqual(vuAdmin.lignes.map((m) => m.id))
+    expect(vuSimple.total).toBe(vuAdmin.total)
+  })
+
+  // CONTRÔLE POSITIF, ET IL N'EST PAS INERTE : une absence dont on n'a pas prouvé que la
+  // fiche EXISTE et est LISIBLE par ailleurs ne prouve rien. Cet administrateur ouvre bien
+  // les deux fiches par lien direct — c'est donc bien le FILTRE, et non la RLS, qui les a
+  // écartées du nœud.
+  it('mais ce même administrateur lit les deux disciples non actifs par lien direct', async () => {
+    for (const identifiant of [idDiscipleArchive, idDiscipleEnAttente]) {
+      const { data, error } = await clientAdminSession
+        .from('membres')
+        .select('id, faiseur_de_disciple_id')
+        .eq('id', identifiant)
+        .maybeSingle()
+      expect(error).toBeNull()
+      expect(data?.id).toBe(identifiant)
+      // ET ILS SONT BIEN RATTACHÉS À CE FAISEUR : sans cette assertion, une préparation qui
+      // aurait perdu le rattachement rendrait le test vert en n'éprouvant plus rien — les
+      // deux fiches seraient absentes du nœud pour la raison la plus banale du monde.
+      expect(data?.faiseur_de_disciple_id).toBe(idFaiseurEtats)
+    }
+  })
+
+  // CONTRÔLE DE LA DIFFÉRENCE DE DROITS : le compte ordinaire, lui, ne les lit PAS par lien
+  // direct. Sans lui, l'égalité ci-dessus pourrait venir d'une RLS ouverte à tout le monde,
+  // ce qui ne serait pas le même fait.
+  it("mais le compte ordinaire ne lit PAS ces deux fiches par lien direct", async () => {
+    for (const identifiant of [idDiscipleArchive, idDiscipleEnAttente]) {
+      const { data, error } = await clientSimple
+        .from('membres')
+        .select('id')
+        .eq('id', identifiant)
+        .maybeSingle()
+      expect(error).toBeNull()
+      expect(data).toBeNull()
+    }
   })
 })
 
