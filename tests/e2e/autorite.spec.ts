@@ -149,18 +149,25 @@ async function creerCompte(identifiant: string, mdp: string, membreId: string | 
  * C'EST LA CAUSE RÉELLE DU RÉSIDU, mesurée, et ce n'était pas « une exécution concurrente
  * d'une autre session ». L'ordre précédent — comptes d'abord — était justifié ainsi :
  * « supprimer les fiches avant les comptes laisserait des profils à moitié nettoyés si la
- * suppression des comptes échouait ensuite ». Le raisonnement ne tenait pas compte de la
- * seule contrainte qui compte ici :
+ * suppression des comptes échouait ensuite ». Le raisonnement ne tenait pas compte de ce
+ * qui se passe réellement à la suppression d'un profil :
  *
  *   1. le premier test de cette suite attribue « Repenti » à `-petit-enfant` DEPUIS le
  *      compte `IDENT_LIE`, et ne le retire jamais — la ligne `membre_statuts` porte donc
  *      `attribue_par` = le profil de ce compte ;
- *   2. cette clé étrangère N'EST NI `cascade` NI `set null` : tant que la ligne existe,
- *      supprimer le profil est REFUSÉ ;
+ *   2. supprimer le profil doit donc TOUCHER cette ligne. La clé étrangère est
+ *      `on delete set null` — vérifié dans `20260813110000_membre_statuts.sql:10` ET
+ *      dans le catalogue déployé (`confdeltype = 'n'`). Ce n'est donc PAS un refus de
+ *      clé étrangère : c'est l'écriture induite qui échoue. `deleteUser` s'exécute sous
+ *      `supabase_auth_admin`, qui n'a `rolbypassrls` ni AUCUN privilège sur
+ *      `public.membre_statuts` ni `public.journal_statuts` — mesuré dans
+ *      `information_schema.role_table_grants`. Ce fait négatif est établi ; le chemin
+ *      exact de l'échec ne l'est PAS, `set role supabase_auth_admin` étant refusé ici.
+ *      Ne durcis pas cette phrase sans l'avoir reproduite ;
  *   3. `deleteUser` échouait donc — MESURÉ : « Database error deleting user » —, l'erreur
  *      était ignorée, et les fiches partaient juste après. La cascade emportait alors
  *      `membre_statuts` et `journal_statuts`, et `profils.membre_id` passait à NULL
- *      (`on delete set null`).
+ *      (`profils_membre_id_fkey`, `on delete set null`).
  *
  * D'où l'état constaté après chaque exécution : le profil ET son `auth.users` présents,
  * `membre_id` à NULL, zéro rôle. Exactement ce qu'on observait, sans aucune concurrence.
