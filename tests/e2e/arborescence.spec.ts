@@ -159,7 +159,7 @@ test("l'arborescence est protégée par la connexion", async ({ page }) => {
   await expect(page).toHaveURL(/\/connexion/)
 })
 
-test('un compte ORDINAIRE parcourt l’arbre : il déplie, voit le total, et atteint une feuille', async ({
+test("un compte ORDINAIRE parcourt l'arbre : il déplie, voit le total, et atteint une feuille", async ({
   page,
 }) => {
   await seConnecter(page, IDENT_SIMPLE)
@@ -195,7 +195,7 @@ test('un compte ORDINAIRE parcourt l’arbre : il déplie, voit le total, et att
   await expect(page.getByRole('button', { name: new RegExp(NOM_PETIT) })).toBeVisible()
 })
 
-test('la recherche mène au chemin déplié d’une personne, avec son fil d’Ariane', async ({ page }) => {
+test("la recherche mène au chemin déplié d'une personne, avec son fil d'Ariane", async ({ page }) => {
   await seConnecter(page, IDENT_SIMPLE)
   await page.goto('/arborescence')
 
@@ -254,7 +254,7 @@ test('la recherche atteint une personne située AU-DELÀ de la première page de
   // page 1 : la cible est SEULE sur la page 2 de son faiseur.
   await expect(
     page.getByRole('button', { name: new RegExp(NOM_CIBLE_PAGE_2) }),
-    'la cible est absente de l’arbre : la branche s’est arrêtée à la première page de son faiseur',
+    "la cible est absente de l'arbre : la branche s'est arrêtée à la première page de son faiseur",
   ).toBeVisible()
 
   // Le nœud de la fratrie est bien sur sa DEUXIÈME page. `TAILLE_PAGE_DISCIPLES + 1`
@@ -267,7 +267,7 @@ test('la recherche atteint une personne située AU-DELÀ de la première page de
   await expect(page.getByText("l'arbre n'a pas pu être déplié jusqu'à elle")).toHaveCount(0)
 })
 
-test('le lien « Rattacher » n’est offert qu’à l’administrateur — un lien, pas un pouvoir', async ({
+test("le lien « Rattacher » n'est offert qu'à l'administrateur — un lien, pas un pouvoir", async ({
   page,
   browser,
   baseURL,
@@ -340,19 +340,40 @@ test('le dépliage refuse un appel forgé SANS session, et le canari réussit pa
   // ═══ LA FORGE : la MÊME requête, depuis un contexte SANS AUCUNE SESSION ═══
   const sansSession = await requestPlaywright.newContext({ baseURL })
   try {
+    // `maxRedirects: 0` : on veut le PREMIER saut, pas la page où il mène. Sans ce
+    // réglage, Playwright suit la redirection et la ré-émet avec les MÊMES en-têtes
+    // forgés (dont `next-action`) vers une route qui n'en attend pas — mesuré : la page de
+    // connexion y répond alors `200 {}`, un artefact du protocole qui ne prouve rien.
     const reponse = await sansSession.post(requete.url(), {
       headers: { ...entetes, cookie: '' },
       data: corps!,
+      maxRedirects: 0,
     })
     const texte = await reponse.text()
     // ASSERTION PRINCIPALE, par le COMPORTEMENT et non par un code interne : la réponse ne
     // porte AUCUN nom de disciple. Un visiteur ne doit rien apprendre de l'arbre.
     expect(texte).not.toContain(NOM_DISCIPLE)
     expect(texte).not.toContain(NOM_FEUILLE)
-    // Assertion secondaire, informative : `exigerProfilActif` redirige vers `/deconnexion`.
-    // Elle est SECONDE parce qu'elle porte sur un détail du protocole ; si elle tombait
-    // seule, consigner le contenu réel avant de conclure.
-    expect(texte).toContain('/deconnexion')
+    /*
+      Assertion secondaire, informative, sur le PREMIER saut : une redirection 3xx vers
+      `/connexion`.
+
+      MESURÉ, PAS SUPPOSÉ : la première rédaction de ce test attendait `/deconnexion`,
+      sur la foi du commentaire d'`exigerProfilActif` («&nbsp;Vers `/deconnexion` et non
+      `/connexion`&nbsp;») — et échouait, `texte` valant `{}`, `content-type:
+      application/json`. Rejouée avec `maxRedirects: 0`, la réponse RÉELLE est un `307`
+      dont l'en-tête `location` vaut `/connexion`. La raison : `src/middleware.ts:66-79`
+      intercepte AVANT `exigerProfilActif` — une requête SANS AUCUN cookie n'a pas de
+      `user` Supabase, et le middleware redirige vers `/connexion` sans jamais atteindre
+      la Server Action. `/deconnexion` est le repli d'`exigerProfilActif` pour un cas
+      différent, que cette forge n'exerce pas : un cookie de session PRÉSENT mais dont le
+      profil est introuvable ou inactif (compte désactivé, jeton orphelin) — le middleware
+      laisse alors passer (un `user` Supabase existe), et c'est la Server Action qui
+      referme la porte plus loin.
+    */
+    expect(reponse.status(), 'pas une redirection : le premier saut a changé de forme').toBeGreaterThanOrEqual(300)
+    expect(reponse.status()).toBeLessThan(400)
+    expect(reponse.headers()['location']).toBe('/connexion')
   } finally {
     await sansSession.dispose()
   }
