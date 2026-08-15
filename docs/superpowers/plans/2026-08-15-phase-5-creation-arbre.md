@@ -16,13 +16,16 @@ avec recherche menant au chemin d'une personne ; plus (3) la correction du **for
 public d'inscription**, pire cas déployé du piège des champs effacés, et (4) les
 **amendements documentaires** que cette phase rend inévitables.
 
-**Architecture :** ce plan ajoute (1) **une** migration strictement additive, portant la
-seule passerelle de la phase, `public.creer_membre_enrichi`, qui **compose** deux
-passerelles existantes au lieu de recopier leurs gardes ; (2) trois fonctions de domaine
-pures ; (3) une couche de lecture paginée à tri **total** dans un module importable hors
-Next, pour que les preuves fassent tourner le code de production ; (4) un écran neuf
-(`/arborescence`), un écran refondu (`/membres/nouveau`) et trois écrans amendés ;
-(5) six suites de preuves, dont une contre un build de **production**.
+**Architecture :** ce plan ajoute (1) **trois** migrations strictement additives — celle
+qui porte la seule passerelle nouvelle de la phase, `public.creer_membre_enrichi`, qui
+**compose** deux passerelles existantes au lieu de recopier leurs gardes, et **deux
+migrations correctives** qui referment l'invariant d'arbre sur lequel le volet 2 s'appuie
+(garde d'état élargie à `en_attente`, et verrou de ligne sur la lecture de l'état du
+faiseur) ; (2) trois fonctions de domaine pures ; (3) une couche de lecture paginée à tri
+**total** dans un module importable hors Next, pour que les preuves fassent tourner le code
+de production ; (4) un écran neuf (`/arborescence`), un écran refondu
+(`/membres/nouveau`) et trois écrans amendés ; (5) six suites de preuves, dont une contre
+un build de **production**.
 
 **Pile technique :** Next.js 16 (App Router, Server Actions), TypeScript, Supabase
 (Postgres + Auth), Tailwind, Vitest, Playwright.
@@ -100,11 +103,14 @@ du projet et des contraintes des plans précédents.
    déjà inscrit dans `supabase_migrations.schema_migrations` fait tenir un fichier neuf
    pour « déjà appliqué » : rien n'est joué, `--dry-run` ne l'annonce pas,
    `migration list` dit « appliqué des deux côtés », et **l'objet n'existe pas en base**.
-   Ce piège s'est refermé **deux fois** dans ce projet. La **Task 1** porte une **étape
-   zéro obligatoire** de relevé du plus haut numéro **réellement présent**, avec `ls`
-   **et** `migration list --linked`, en retenant le **maximum des deux** — la base peut
-   être en avance sur le dépôt. Au moment de la rédaction, le plus haut du dépôt est
-   `20260818280000` ; **ce plan ne le suppose pas, il le fait vérifier.**
+   Ce piège s'est refermé **deux fois** dans ce projet. La **Task 1** et la **Task 1 bis**
+   portent chacune une **étape zéro obligatoire** de relevé du plus haut numéro
+   **réellement présent**, avec `ls` **et** `migration list --linked`, en retenant le
+   **maximum des deux** — la base peut être en avance sur le dépôt. Au moment de la
+   rédaction, le plus haut du dépôt est `20260818280000` ; **ce plan ne le suppose pas, il
+   le fait vérifier, et il le fait vérifier DEUX FOIS** : la Task 1 pose une migration, la
+   Task 1 bis en pose deux de plus, et son plancher n'est donc plus celui relevé par la
+   Task 1.
 3. **Aucune politique RLS d'écriture, sur aucune table.** Toute mutation passe par une
    Server Action **gardée en première instruction**, qui écrit via `clientAdmin()` ou par
    une passerelle `security definer` réservée à `service_role`. Cette phase ne crée,
@@ -129,8 +135,14 @@ du projet et des contraintes des plans précédents.
    Uniquement `error.code` ou le marqueur posé via `using detail = '...'`, lu dans
    `error.details`. **N'affirmer AUCUN code d'erreur sans l'avoir vérifié contre la
    base : HUIT hypothèses tenues pour acquises se sont révélées fausses dans ce projet.**
-   Cette phase ajoute **un seul** marqueur nouveau, `statuts_exclusifs_incompatibles`, et
-   **réutilise** tous les autres avec leur sens existant (D82).
+   Cette phase ajoute **deux** marqueurs nouveaux, et deux seulement :
+   `statuts_exclusifs_incompatibles` (couple exclusif refusé à la création, D84) et
+   `faiseur_de_disciple_inactif` (le faiseur visé existe mais n'est **ni actif ni
+   archivé**). Tous les autres sont **réutilisés** avec leur sens existant (D82). Le
+   second est nouveau **parce qu'il ne pouvait pas être `faiseur_de_disciple_archive`** :
+   ce marqueur-là commande un message affiché qui dit « est archivé », et le rendre pour
+   un faiseur `en_attente` afficherait à l'utilisateur une phrase que le code ne tient
+   pas — le mode de défaillance dominant de ce projet.
 8. **PostgREST tronque EN SILENCE au-delà de `max_rows = 1000`**
    (`supabase/config.toml:18`, vérifié). **Corrigé cinq fois dans ce projet.** Toute
    lecture de disciples ou de racines est **paginée avec un tri TOTAL** — `.order('id')`
@@ -208,6 +220,13 @@ du projet et des contraintes des plans précédents.
 **Les Tasks 1 à 8 (création enrichie) précèdent obligatoirement les Tasks 9 à 14
 (arborescence).** Ce n'est pas de l'ordonnancement de confort.
 
+**La Task 1 bis est placée dans le volet 1 et doit être livrée avec lui.** Elle ne crée
+pourtant aucun écran de création : elle referme l'invariant d'arbre sur lequel **tout le
+volet 2** s'appuie. Elle vient là parce qu'elle touche du **SQL déployé** et que ses
+migrations doivent être appliquées, éprouvées et stabilisées **loin** de la livraison de
+l'écran qu'elles protègent — et parce que la passerelle de la Task 1 appelle
+`public.definir_arbre`, qu'elle corrige.
+
 `creerMembre` **n'a jamais écrit de `faiseur_de_disciple_id`.** Toute fiche créée depuis
 la phase 1a est donc une **racine de l'arbre** tant que personne n'ouvre l'écran de
 rattachement. Un écran qui « commence par les racines » livré en premier commencerait par
@@ -226,15 +245,19 @@ volets ; elles sont placées là où elles gênent le moins.
 | Fichier | Tâche | Nature |
 |---|---|---|
 | `supabase/migrations/<N>_creer_membre_enrichi.sql` | 1 | créé |
+| `supabase/migrations/<N+1>_definir_arbre_faiseur_actif_verrouille.sql` | 1 bis | créé |
+| `supabase/migrations/<N+2>_gardes_etat_arbre_elargies.sql` | 1 bis | créé |
 | `src/lib/domaine/statut.ts` | 2 | modifié (ajouts) |
 | `src/lib/domaine/statut.test.ts` | 2 | modifié (ajouts) |
 | `src/app/membres/messages.ts` | 3 | modifié (ajouts) |
 | `src/app/membres/actions.ts` | 3 | modifié (`creerMembre` → `creerMembreEnrichi`) |
+| `src/lib/securite/garde.ts` | 3 | modifié (**un mot dans un commentaire**) |
 | `src/app/membres/formulaire-membre.tsx` | 4 | modifié (entièrement contrôlé, `children`) |
 | `src/app/membres/nouveau/bloc-enrichissement.tsx` | 4 | créé |
 | `src/app/membres/nouveau/page.tsx` | 4 | modifié |
 | `tests/e2e/annuaire.spec.ts` | 4 | modifié (redirection changée) |
 | `src/app/inscription/formulaire-inscription.tsx` | 5 | modifié (contrôlé) |
+| `tests/e2e/inscription.spec.ts` | 5 | modifié (forge d'antenne : événement `change`) |
 | `tests/rls/creation-enrichie.test.ts` | 6 | créé |
 | `tests/e2e/creation-enrichie.spec.ts` | 7 | créé |
 | `tests/e2e-prod/creation-enrichie-production.spec.ts` | 8 | créé |
@@ -268,7 +291,7 @@ dans l'écran de modification.**
 |---|---|
 | D81 passerelle unique atomique | Task 1 ; preuve Task 6 (mutation) |
 | D82 elle COMPOSE, ne duplique pas | Task 1 ; preuve Task 6 (comportement + fil-piège) |
-| D83 aucun verrou consultatif propre | Task 1 (`comment on function`) |
+| D83 aucun verrou consultatif propre | Task 1 (`comment on function`) ; verrou de LIGNE sur l'état du faiseur, Task 1 bis ; preuve Task 1 bis (course reproduite) |
 | D84 couple exclusif refusé deux fois | Task 2 (amont) + Task 1 (passerelle) ; preuve Task 6 |
 | D85 tous les champs contrôlés | Tasks 4 et 5 ; preuve Task 8 |
 | D86 enrichissements facultatifs et indépendants | Task 3 ; preuve Task 6 (n°4) |
@@ -278,13 +301,13 @@ dans l'écran de modification.**
 | D90 garde `exigerAdministrateur` | Tasks 1 (commentaire) et 3 ; preuve Task 7 |
 | D91 `/arborescence`, route neuve | Task 12 |
 | D92 consultation seule, aucun chemin d'écriture | Tasks 11-12 ; preuve Task 13 (balayage) |
-| D93 filtre `etat = 'actif'` explicite | Task 10 ; preuves Task 13 |
+| D93 filtre `etat = 'actif'` explicite | Task 10 (disciples, racines **et noms du chemin**) ; preuves Task 13 |
 | D94 `disciplesPage`, `disciplesDe` intacte | Task 10 ; preuves Tasks 13 et 14 |
 | D95 `racinesPage`, total affiché, intitulé | Tasks 10 et 12 ; preuve Task 13 |
 | D96 volet 1 avant volet 2 | ordre des tâches (encadré ci-dessus) |
 | D97 recherche → chemin déplié + disciples | Tasks 11 et 12 |
 | D98 forme affranchie, noms sous RLS | Task 11 ; preuve Task 9 |
-| D99 invariant des trois déclencheurs | Task 11 (commentaire) et Task 15 (README) |
+| D99 invariant des trois déclencheurs, **élargi et verrouillé** | Task 1 bis (migrations et course reproduite) ; Task 11 (commentaire) ; Task 13 (mesure) ; Task 15 (README) |
 | D100 `libelleFiche` extraite et partagée | Task 9 ; preuve Task 9 |
 | D101 aucun indicateur pré-calculé | Task 12 |
 | D102 aucun index nouveau, candidat nommé | Task 10 (commentaire) |
@@ -385,10 +408,18 @@ Créer `supabase/migrations/<NUMERO>_creer_membre_enrichi.sql` :
 -- et public.attribuer_statut — les passerelles PUBLIQUES, celles-là mêmes qu'emploient
 -- les écrans /membres/[id]/arbre et /membres/[id]/statuts, et non leurs versions
 -- `prive` : les deux chemins ne peuvent pas diverger, et une correction future de l'un
--- corrige l'autre. Conséquence directe et VOULUE : aucun marqueur d'erreur nouveau pour
--- l'arbre ni pour les statuts — membre_inconnu, statut_inconnu, faiseur_inconnu,
--- dirigeant_inconnu, faiseur_de_disciple_archive, cycle_faiseur_de_disciple et le code
--- 23514 gardent leur sens, et l'application les discrimine avec le code qu'elle a déjà.
+-- corrige l'autre. Conséquence directe et VOULUE : cette fonction-ci n'introduit aucun
+-- marqueur d'erreur nouveau pour l'arbre ni pour les statuts — membre_inconnu,
+-- statut_inconnu, faiseur_inconnu, dirigeant_inconnu, faiseur_de_disciple_archive,
+-- cycle_faiseur_de_disciple et le code 23514 gardent leur sens, et l'application les
+-- discrimine avec le code qu'elle a déjà. Le SEUL marqueur nouveau posé par cette
+-- fonction est statuts_exclusifs_incompatibles, ci-dessous.
+--
+-- UN SECOND MARQUEUR EXISTE DANS CETTE PHASE, ET IL NE VIENT PAS D'ICI :
+-- faiseur_de_disciple_inactif, posé par public.definir_arbre et par le déclencheur
+-- membres_faiseur_de_disciple_archive lorsque le faiseur visé existe mais n'est NI
+-- actif NI archivé (donc en_attente). Il remonte à travers cette fonction comme tous
+-- les autres marqueurs des passerelles appelées, sans qu'elle ait à le connaître.
 --
 -- AUCUN VERROU CONSULTATIF PROPRE (D83). Celui de l'arbre — pg_advisory_xact_lock(
 -- 20260814, 1) — est pris par l'appel imbriqué à definir_arbre, en PREMIÈRE instruction
@@ -671,6 +702,835 @@ nettoyée.
 
 ---
 
+### Task 1 bis : l'invariant d'arbre, ÉLARGI à `en_attente` et VERROUILLÉ contre les courses (D99, D83)
+
+**Fichiers :**
+- Créer : `supabase/migrations/<NUMERO+1>_definir_arbre_faiseur_actif_verrouille.sql`
+- Créer : `supabase/migrations/<NUMERO+2>_gardes_etat_arbre_elargies.sql`
+
+**Interfaces :**
+- Consomme : rien de cette phase. Réécrit par `create or replace` quatre corps
+  **déjà déployés** : `public.definir_arbre`, `prive.refuser_archivage_faiseur_de_disciple`,
+  `prive.refuser_desarchivage_faiseur_archive`, `prive.refuser_faiseur_de_disciple_archive`.
+  **Aucun déclencheur n'est créé, supprimé ni redéfini** : les quatre `create trigger`
+  existants continuent de pointer sur les mêmes fonctions, dont seul le **corps** change.
+- Produit : le marqueur **`faiseur_de_disciple_inactif`** — second et dernier marqueur
+  nouveau de la phase. Consommé par la Task 3.
+- Produit aussi : **deux numéros de migration**, relevés à l'étape 0 et consignés dans le
+  rapport de tâche.
+
+## ⚠️ CETTE TÂCHE MODIFIE DU CODE DÉPLOYÉ QUI SERT LA PRODUCTION. LIRE ENTIÈREMENT AVANT D'ÉCRIRE.
+
+**Ce qu'elle referme, et pourquoi ça ne peut pas attendre.** Tout le volet 2 de cette phase
+s'appuie sur un invariant :
+
+> **Aucun membre `actif` n'a d'ancêtre qui ne soit pas `actif`.**
+
+C'est lui qui rend l'arbre **sans trou** : sans lui, un maillon intermédiaire disparaît de
+l'affichage et **toute sa descendance active devient inatteignable depuis la liste des
+racines** — ces fiches ont un `faiseur_de_disciple_id` non nul, donc ne sont pas racines,
+et leur parent n'est jamais rendu. Elles disparaissent, et **rien ne le signale**.
+
+**Deux trous, tous deux vérifiés dans les migrations, pas dans leur description.**
+
+**(1) Les trois gardes ne connaissent que `archive`, alors que `public.etat_membre` a TROIS
+valeurs** (`en_attente`, `actif`, `archive`, migration 20260812120000) :
+
+| Fonction de déclencheur | Migration | Ce qu'elle teste réellement aujourd'hui |
+|---|---|---|
+| `prive.refuser_archivage_faiseur_de_disciple` | 20260814120000 | `if new.etat <> 'archive' or old.etat = 'archive' then return new` — ne surveille QUE la transition vers `archive` |
+| `prive.refuser_desarchivage_faiseur_archive` | 20260814140000 | `if v_etat_faiseur = 'archive'` — compare à `'archive'` SEUL |
+| `prive.refuser_faiseur_de_disciple_archive` | 20260814150000 | `if v_etat_faiseur = 'archive'` — idem |
+
+Conséquences, aujourd'hui, sans rien forger d'exotique : **rien n'interdit de rattacher un
+membre `actif` à un faiseur `en_attente`**, ni **de faire passer à `en_attente` un membre
+qui a des disciples actifs**. Et l'arborescence exclut `en_attente` **exactement** comme
+`archive` (`.eq('etat','actif')`) : un maillon `en_attente` produit donc le même trou qu'un
+maillon `archive`. Le précédent de vocabulaire existe déjà en base :
+`convertir_participant_externe` (20260818220000) refuse une fiche cible avec
+`if v_etat_cible is distinct from 'actif'` et le marqueur `membre_cible_non_actif`. On
+reprend cette forme.
+
+**(2) La lecture de l'état du faiseur n'est protégée par AUCUN verrou de ligne.**
+`public.definir_arbre` lit `select m.etat into v_etat_faiseur from public.membres m where
+m.id = p_faiseur_de_disciple;` **sans `for share` ni `for update`**, et `archiverMembre`
+(`src/app/membres/actions.ts`) écrit `etat = 'archive'` par un `update` PostgREST qui ne
+prend **aucun** verrou consultatif. En `read committed`, deux transactions ne se voient
+donc pas :
+
+1. **T_A** : `definir_arbre(X, F, …)` prend le verrou consultatif, lit `F.etat = 'actif'`
+   (état **validé** ; l'archivage concurrent n'est pas encore commis), écrit
+   `X.faiseur_de_disciple_id = F`. Le déclencheur relit `F.etat` sans verrou : `'actif'`.
+   **Passe.**
+2. **T_B** : `archiverMembre(F)` — le déclencheur compte les disciples **actifs** de `F` ;
+   `X` n'est pas validé, donc invisible : 0. **Passe.**
+3. **Les deux valident.** Résultat : **F archivé, X actif sous un faiseur archivé.**
+
+C'est **la classe de défaut que la 1c a jugée inacceptable** — « deux transactions voient
+chacune un arbre sans cycle et valident toutes les deux », citée mot pour mot dans
+`src/app/demandes/actions.ts`. Le verrou consultatif a été posé pour ça ; il ne protège que
+les écritures qui passent par `definir_arbre`, et l'archivage n'en est pas.
+
+**Le remède retenu, et pourquoi ce n'est PAS « faire prendre le verrou consultatif à
+`archiverMembre` ».** `archiverMembre` écrit par un `update` PostgREST : **on ne peut pas y
+prendre un `pg_advisory_xact_lock`** sans créer une passerelle SQL de plus, donc un
+**quatrième chemin d'écriture** vers l'état d'une fiche — exactement ce que cette phase
+s'interdit. Le remède est un **verrou de ligne** posé du côté qui lit : `for share` sur la
+ligne du faiseur. Il suffit, et il suffit **dans les deux sens** :
+
+- **archivage d'abord, rattachement ensuite** : l'`update … set etat` détient un
+  `FOR NO KEY UPDATE` sur la ligne de `F` ; le `select … for share` du rattachement
+  **conflit et attend**, puis relit la **version la plus récente** de la ligne — `'archive'`
+  — et refuse. Cette moitié est garantie par la sémantique du verrou de ligne, qui suit
+  toujours la chaîne de mises à jour.
+- **rattachement d'abord, archivage ensuite** : le `for share` du rattachement fait
+  **attendre** l'`update` concurrent ; celui-ci, débloqué, rejoue son déclencheur `before
+  update` et **recompte** les disciples actifs, `X` étant désormais validé. **Cette moitié
+  repose sur le rejeu du déclencheur après attente : elle est MESURÉE par l'étape 1 puis
+  par l'étape 6, elle n'est pas supposée.**
+
+**LE VERROU EST POSÉ AUX DEUX ENDROITS, ET CE N'EST PAS UNE REDONDANCE.** Dans
+`public.definir_arbre`, parce que la passerelle doit rendre un **message juste avant
+d'écrire**, et qu'une décision prise sur une lecture non verrouillée peut être périmée au
+moment où elle s'écrit. Dans `prive.refuser_faiseur_de_disciple_archive`, parce que ce
+déclencheur est la barrière de **toute** écriture — y compris les `insert` directs qui ne
+passent pas par `definir_arbre`, comme celui de `convertir_participant_externe`
+(chemin 2, 20260818220000), qui pose un faiseur sans jamais lire son état.
+
+**CE QU'ON NE TOUCHE PAS.** Aucun `create trigger`, aucune politique RLS, aucun `grant`,
+aucune colonne, aucun index. Les messages et les marqueurs **existants** gardent tous leur
+texte et leur sens : `disciples_a_reaffecter` et `faiseur_de_disciple_archive` restent
+**exactement** ce qu'ils sont, et les branches applicatives qui les discriminent
+(`archiverMembre`, `desarchiverMembre`) continuent de fonctionner **sans une ligne
+modifiée**. Le seul cas nouveau — faiseur `en_attente` — reçoit un marqueur **distinct**,
+`faiseur_de_disciple_inactif`, précisément pour que personne ne se voie afficher
+« ce faiseur est archivé » à propos d'une fiche qui ne l'est pas.
+
+**CONSÉQUENCE CONNUE ET ASSUMÉE.** `desarchiverMembre` et `/membres/[id]/arbre` ne
+connaissent pas `faiseur_de_disciple_inactif` et **ne sont pas modifiés dans cette phase**
+(les écrans existants restent inchangés) : sur ce marqueur, ils retombent sur leur message
+générique, et le marqueur reste **journalisé**, là où il sert. Le cas n'est atteignable
+qu'en forgeant un appel, les sélecteurs ne proposant que des membres actifs. C'est écrit
+ici pour que personne ne le découvre en revue.
+
+- [ ] **Étape 0 — OBLIGATOIRE, À EXÉCUTER, PAS À SURVOLER : relever le plus haut numéro de migration RÉELLEMENT présent**
+
+`supabase db push` suit les migrations **par version, pas par contenu**. Un numéro déjà
+inscrit dans `supabase_migrations.schema_migrations` fait tenir un fichier neuf pour
+« déjà appliqué » : rien n'est joué, `--dry-run` ne l'annonce pas, `migration list` le
+montre appliqué **des deux côtés**, et l'objet **n'existe pas en base**. **Ce piège s'est
+refermé deux fois dans ce projet.**
+
+```bash
+ls supabase/migrations/ | sort | tail -5
+```
+
+```bash
+npx supabase migration list --linked
+```
+
+Relever le plus haut numéro rendu par **chacune** des deux commandes — le dépôt **et** la
+base peuvent diverger, et **la base peut être en avance sur le dépôt**. Retenir le
+**maximum des deux**. **Ne pas réutiliser le relevé d'une tâche précédente :** une
+migration vient d'être poussée, le plancher a bougé. La sortie réelle des deux commandes
+est **consignée verbatim dans le rapport de tâche**.
+
+Choisir alors les **deux** premiers numéros strictement supérieurs au maximum relevé, dans
+l'ordre : la migration de `definir_arbre` d'abord, celle des déclencheurs ensuite.
+
+- [ ] **Étape 1 : REPRODUIRE LA COURSE AVANT DE LA CORRIGER — c'est le contrôle positif du remède**
+
+⚠️ **Cette base sert la PRODUCTION.** Cette étape crée des fiches préfixées `ZZCourse-`,
+en produit délibérément deux qui violent l'invariant, et les supprime **dans la même
+exécution**, avec un comptage de contrôle qui **lève** s'il subsiste quoi que ce soit.
+Ne jamais interrompre la séquence entre la reproduction et le nettoyage.
+
+**Sans cette étape, l'étape 6 ne prouverait rien** : « les deux transactions ne se marchent
+plus dessus » est aussi ce qu'on observerait d'un script qui ne parvient tout simplement
+pas à les faire se croiser.
+
+**Comment deux transactions concurrentes sont obtenues sans pilote Postgres brut.** Le
+dépôt n'a **aucun** client Postgres direct (`package.json` : ni `pg`, ni `postgres`) et
+aucune chaîne de connexion en `.env.local` : on ne peut pas ouvrir deux transactions et les
+entrelacer à la main. On rend donc **une** des deux transactions **lente de l'intérieur** :
+une fonction temporaire fait son écriture puis `pg_sleep`, ce qui **maintient ouverte** la
+transaction implicite de PostgREST et tous ses verrous, pendant qu'un second appel HTTP
+part en parallèle. L'entrelacement est **déterministe**, pas probabiliste.
+
+Créer les deux fonctions temporaires **dans l'éditeur SQL Supabase** :
+
+```sql
+-- FONCTIONS TEMPORAIRES DE COURSE — NE JAMAIS LES LAISSER EN BASE.
+-- Elles ne sont dans AUCUNE migration : elles sont créées ici, employées par le script
+-- ci-dessous, et supprimées à l'étape 7, dont le contrôle vérifie leur disparition.
+create or replace function public.zz_course_arbre(
+  p_membre uuid, p_faiseur uuid, p_sommeil double precision
+)
+returns void language plpgsql security definer set search_path = '' as $$
+begin
+  perform public.definir_arbre(p_membre, p_faiseur, null, false);
+  -- Tient la transaction — et donc TOUS ses verrous — ouverte pendant p_sommeil secondes.
+  perform pg_sleep(p_sommeil);
+end;
+$$;
+
+create or replace function public.zz_course_etat(
+  p_membre uuid, p_etat public.etat_membre, p_sommeil double precision
+)
+returns void language plpgsql security definer set search_path = '' as $$
+begin
+  update public.membres set etat = p_etat where id = p_membre;
+  perform pg_sleep(p_sommeil);
+end;
+$$;
+
+revoke execute on function public.zz_course_arbre(uuid, uuid, double precision)
+  from public, anon, authenticated;
+revoke execute on function public.zz_course_etat(uuid, public.etat_membre, double precision)
+  from public, anon, authenticated;
+grant execute on function public.zz_course_arbre(uuid, uuid, double precision) to service_role;
+grant execute on function public.zz_course_etat(uuid, public.etat_membre, double precision) to service_role;
+
+notify pgrst, 'reload schema';
+```
+
+Créer `scripts/.tmp-course/course-arbre.mjs` :
+
+```javascript
+import { createClient } from '@supabase/supabase-js'
+
+const admin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  { auth: { autoRefreshToken: false, persistSession: false } },
+)
+
+const PREFIXE = 'ZZCourse-'
+// Sous le statement_timeout de Supabase. Si un appel lent est coupé par un délai
+// d'attente, RAMENER à 2 et le DÉCALAGE à 500, et le consigner — ne pas conclure.
+const SOMMEIL = 3
+const DECALAGE = 800
+
+const attendre = (ms) => new Promise((r) => setTimeout(r, ms))
+
+async function creer(suffixe, etat, faiseur) {
+  const { data, error } = await admin
+    .from('membres')
+    .insert({
+      nom: `${PREFIXE}${suffixe}`,
+      prenom: 'Course',
+      etat,
+      faiseur_de_disciple_id: faiseur ?? null,
+    })
+    .select('id')
+    .single()
+  // Toute préparation vérifie son erreur et LÈVE : une préparation muette ferait
+  // « réussir » une course qui n'a jamais eu lieu.
+  if (error || !data) throw new Error(`préparation « ${suffixe} » impossible : ${error?.message}`)
+  return data.id
+}
+
+async function relire(id) {
+  const { data, error } = await admin
+    .from('membres')
+    .select('etat, faiseur_de_disciple_id')
+    .eq('id', id)
+    .single()
+  if (error) throw new Error(`relecture impossible : ${error.message}`)
+  return data
+}
+
+function decrire(resultat) {
+  if (!resultat.error) return 'PASSE'
+  return `REFUS [${resultat.error.details ?? 'sans marqueur'}] ${resultat.error.message}`
+}
+
+/** Rattachement lent, archivage du faiseur concurrent. */
+async function scenario1() {
+  const f = await creer('s1-faiseur', 'actif', null)
+  const x = await creer('s1-disciple', 'actif', null)
+
+  const lente = admin.rpc('zz_course_arbre', { p_membre: x, p_faiseur: f, p_sommeil: SOMMEIL })
+  await attendre(DECALAGE)
+  const concurrente = admin.from('membres').update({ etat: 'archive' }).eq('id', f).select('id')
+  const [a, b] = await Promise.all([lente, concurrente])
+
+  const apresF = await relire(f)
+  const apresX = await relire(x)
+  const viole =
+    apresF.etat === 'archive' && apresX.etat === 'actif' && apresX.faiseur_de_disciple_id === f
+  console.log(
+    `S1 rattachement→archivage | rattachement: ${decrire(a)} | archivage: ${decrire(b)} | ` +
+      `F.etat=${apresF.etat} X.etat=${apresX.etat} X.faiseur=${apresX.faiseur_de_disciple_id === f ? 'F' : String(apresX.faiseur_de_disciple_id)} | ` +
+      `VERDICT: ${viole ? 'INVARIANT VIOLÉ' : 'invariant tenu'}`,
+  )
+}
+
+/** Archivage lent, rattachement concurrent. */
+async function scenario2() {
+  const f = await creer('s2-faiseur', 'actif', null)
+  const x = await creer('s2-disciple', 'actif', null)
+
+  const lente = admin.rpc('zz_course_etat', { p_membre: f, p_etat: 'archive', p_sommeil: SOMMEIL })
+  await attendre(DECALAGE)
+  const concurrente = admin.rpc('definir_arbre', {
+    p_membre: x,
+    p_faiseur_de_disciple: f,
+    p_dirigeant: null,
+    p_dirigeant_force: false,
+  })
+  const [a, b] = await Promise.all([lente, concurrente])
+
+  const apresF = await relire(f)
+  const apresX = await relire(x)
+  const viole =
+    apresF.etat === 'archive' && apresX.etat === 'actif' && apresX.faiseur_de_disciple_id === f
+  console.log(
+    `S2 archivage→rattachement | archivage: ${decrire(a)} | rattachement: ${decrire(b)} | ` +
+      `F.etat=${apresF.etat} X.etat=${apresX.etat} X.faiseur=${apresX.faiseur_de_disciple_id === f ? 'F' : String(apresX.faiseur_de_disciple_id)} | ` +
+      `VERDICT: ${viole ? 'INVARIANT VIOLÉ' : 'invariant tenu'}`,
+  )
+}
+
+/** Désarchivage lent d'un disciple, archivage de son faiseur concurrent. */
+async function scenario3() {
+  const f = await creer('s3-faiseur', 'actif', null)
+  const x = await creer('s3-disciple', 'archive', f)
+
+  const lente = admin.rpc('zz_course_etat', { p_membre: x, p_etat: 'actif', p_sommeil: SOMMEIL })
+  await attendre(DECALAGE)
+  const concurrente = admin.from('membres').update({ etat: 'archive' }).eq('id', f).select('id')
+  const [a, b] = await Promise.all([lente, concurrente])
+
+  const apresF = await relire(f)
+  const apresX = await relire(x)
+  const viole =
+    apresF.etat === 'archive' && apresX.etat === 'actif' && apresX.faiseur_de_disciple_id === f
+  console.log(
+    `S3 désarchivage→archivage | désarchivage: ${decrire(a)} | archivage: ${decrire(b)} | ` +
+      `F.etat=${apresF.etat} X.etat=${apresX.etat} X.faiseur=${apresX.faiseur_de_disciple_id === f ? 'F' : String(apresX.faiseur_de_disciple_id)} | ` +
+      `VERDICT: ${viole ? 'INVARIANT VIOLÉ' : 'invariant tenu'}`,
+  )
+}
+
+async function menage() {
+  const { error } = await admin.from('membres').delete().like('nom', `${PREFIXE}%`)
+  if (error) throw new Error(`nettoyage impossible : ${error.message}`)
+  const { count, error: erreurCompte } = await admin
+    .from('membres')
+    .select('id', { count: 'exact', head: true })
+    .like('nom', `${PREFIXE}%`)
+  if (erreurCompte) throw new Error(`comptage de contrôle impossible : ${erreurCompte.message}`)
+  if (count !== 0) throw new Error(`RÉSIDU : ${count} fiche(s) « ${PREFIXE} » subsistent EN BASE`)
+  console.log('nettoyage : ok, résidu 0')
+}
+
+// `finally` : même si un scénario lève, les fiches créées — dont celles qui VIOLENT
+// l'invariant — sont supprimées. C'est la seule chose qui ne doit jamais être sautée.
+try {
+  await menage()
+  await scenario1()
+  await scenario2()
+  await scenario3()
+} finally {
+  await menage()
+}
+```
+
+```bash
+npx dotenv -e .env.local -- node scripts/.tmp-course/course-arbre.mjs
+```
+
+**Attendu AVANT correction : les TROIS verdicts disent `INVARIANT VIOLÉ`.** Consigner la
+sortie **verbatim**. Si un scénario dit déjà « invariant tenu » **avant** la correction,
+**ne pas passer outre** : cela signifie que l'entrelacement n'a pas eu lieu (appel lent
+coupé, décalage trop court). Ajuster `SOMMEIL` / `DECALAGE`, rejouer, et **consigner le
+nombre d'essais**. Si après trois ajustements un scénario reste non reproductible,
+**l'écrire tel quel dans le rapport** — « non reproduit en N essais » — et ne présenter
+**aucune** de ses conclusions comme acquise.
+
+- [ ] **Étape 2 : écrire la migration de `public.definir_arbre`**
+
+Créer `supabase/migrations/<NUMERO+1>_definir_arbre_faiseur_actif_verrouille.sql`. **Le
+corps ci-dessous reprend celui de 20260814150000 À L'IDENTIQUE**, en n'ajoutant que le
+`for share` et la garde d'état élargie. Ne rien réordonner, ne rien « simplifier » :
+chaque ligne conservée l'est parce qu'elle a déjà été payée.
+
+```sql
+-- Phase 5, D99 / D83 — CORRECTIF sur du code DÉPLOYÉ, strictement additif.
+--
+-- DEUX DÉFAUTS FERMÉS ICI, tous deux vérifiés dans la migration 20260814150000 et non
+-- dans sa description.
+--
+-- 1. LA GARDE D'ÉTAT NE CONNAISSAIT QUE `archive`, alors que public.etat_membre a TROIS
+--    valeurs (20260812120000). Rien n'interdisait de rattacher un membre ACTIF à un
+--    faiseur `en_attente`. Or l'arborescence de la phase 5 exclut `en_attente`
+--    EXACTEMENT comme `archive` : un tel maillon rendrait toute sa descendance active
+--    INATTEIGNABLE depuis la liste des racines — ces fiches ont un faiseur, donc ne sont
+--    pas racines, et leur parent n'est jamais rendu. Elles disparaissent sans signal.
+--    Forme reprise de convertir_participant_externe (20260818220000), qui écrit déjà
+--    `if v_etat_cible is distinct from 'actif'` : `is distinct from` et non `<>`, pour
+--    que la sûreté dépende d'une EXPRESSION et non d'un raisonnement sur la nullité
+--    qu'une retouche future invaliderait.
+--
+-- 2. L'ÉTAT DU FAISEUR ÉTAIT LU SANS VERROU DE LIGNE. Le verrou consultatif
+--    pg_advisory_xact_lock(20260814, 1) sérialise les écritures d'ARBRE entre elles ;
+--    il ne dit RIEN de l'archivage, qui passe par un `update` PostgREST direct
+--    (archiverMembre) et ne peut pas prendre de verrou consultatif sans créer un chemin
+--    d'écriture de plus. En `read committed`, un rattachement et un archivage concurrents
+--    ne se voyaient donc pas : le rattachement lisait `actif` (l'archivage n'était pas
+--    encore commis), l'archivage comptait 0 disciple actif (le rattachement non plus), et
+--    LES DEUX VALIDAIENT — laissant un membre actif sous un faiseur archivé. C'est la
+--    classe de défaut que la 1c a explicitement jugée inacceptable (« deux transactions
+--    voient chacune un arbre sans cycle et valident toutes les deux »).
+--
+--    `for share` referme les DEUX SENS : il conflit avec le FOR NO KEY UPDATE que prend
+--    tout `update … set etat`. Archivage d'abord : la lecture attend, puis relit la
+--    version la PLUS RÉCENTE de la ligne et refuse. Rattachement d'abord : l'archivage
+--    attend, puis rejoue son déclencheur `before update` et RECOMPTE les disciples.
+--    LA SECONDE MOITIÉ EST MESURÉE, PAS SUPPOSÉE : voir le rapport de tâche.
+--
+-- MARQUEUR NOUVEAU, ET IL NE POUVAIT PAS ÊTRE `faiseur_de_disciple_archive` :
+-- ce marqueur-là commande un message affiché qui dit « est archivé ». Le rendre pour un
+-- faiseur `en_attente` afficherait à l'utilisateur une phrase que le code ne tient pas.
+-- D'où `faiseur_de_disciple_inactif`, distinct, pour ce cas et pour lui seul. Les deux
+-- branches existent donc côte à côte, et l'ordre compte : `archive` est testé D'ABORD,
+-- pour que toutes les branches applicatives qui discriminent aujourd'hui
+-- `faiseur_de_disciple_archive` continuent de recevoir EXACTEMENT ce qu'elles recevaient.
+--
+-- CONSÉQUENCE ASSUMÉE : desarchiverMembre et /membres/[id]/arbre ne connaissent pas le
+-- marqueur nouveau et ne sont pas modifiés — ils retombent sur leur message générique, et
+-- le marqueur reste journalisé. Le cas n'est atteignable qu'en forgeant un appel, les
+-- sélecteurs ne proposant que des membres actifs. De même, la validation d'une demande
+-- `demande_suivi` dont le demandeur porterait une fiche non active échouerait désormais
+-- avec ce marqueur au lieu de rattacher : refus FERMÉ, message générique, marqueur
+-- journalisé — préférable à un trou muet dans l'arbre.
+
+create or replace function public.definir_arbre(
+  p_membre uuid,
+  p_faiseur_de_disciple uuid,
+  p_dirigeant uuid,
+  p_dirigeant_force boolean
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_etat_faiseur public.etat_membre;
+begin
+  -- PREMIÈRE instruction, avant toute lecture : voir l'en-tête de 20260814100000.
+  -- Clé (20260814, 1) = arbre. La clé (20260814, 2) est réservée aux rôles.
+  perform pg_advisory_xact_lock(20260814, 1);
+
+  perform 1 from public.membres m where m.id = p_membre for update;
+  if not found then
+    raise exception 'Membre inconnu.' using detail = 'membre_inconnu';
+  end if;
+
+  if p_faiseur_de_disciple is not null then
+    -- `for share` : voir l'en-tête, point 2. Il ne bloque pas deux rattachements
+    -- concurrents sous le MÊME faiseur (deux verrous partagés sont compatibles) ; il ne
+    -- bloque que ce qui change la ligne du faiseur — c'est-à-dire exactement ce qui peut
+    -- rendre cette lecture périmée.
+    select m.etat into v_etat_faiseur
+    from public.membres m
+    where m.id = p_faiseur_de_disciple
+    for share;
+    if not found then
+      raise exception 'Faiseur de disciple inconnu.' using detail = 'faiseur_inconnu';
+    end if;
+    if v_etat_faiseur = 'archive' then
+      raise exception 'Le faiseur de disciple choisi est archivé.'
+        using detail = 'faiseur_de_disciple_archive';
+    end if;
+    if v_etat_faiseur is distinct from 'actif' then
+      raise exception 'Le faiseur de disciple choisi n''est pas un membre actif.'
+        using detail = 'faiseur_de_disciple_inactif';
+    end if;
+  end if;
+
+  if p_dirigeant is not null then
+    perform 1 from public.membres m where m.id = p_dirigeant;
+    if not found then
+      raise exception 'Dirigeant inconnu.' using detail = 'dirigeant_inconnu';
+    end if;
+  end if;
+
+  -- Affectation DIRECTE et non `coalesce` : contrairement à `attribuer_statut`, un
+  -- `null` veut dire ici « détacher », pas « ne change pas ». Détacher un membre pour
+  -- en faire une racine de l'arbre est une opération légitime et prévue par la spec
+  -- (« NULL pour les racines de l'arbre »). Le `coalesce` de la 1b avait justement
+  -- rendu l'effacement volontaire impossible ; on ne reproduit pas ce choix là où
+  -- l'effacement est un usage normal.
+  update public.membres
+     set faiseur_de_disciple_id = p_faiseur_de_disciple,
+         dirigeant_id = p_dirigeant,
+         dirigeant_force = p_dirigeant_force
+   where id = p_membre;
+end;
+$$;
+
+comment on function public.definir_arbre(uuid, uuid, uuid, boolean) is
+  'Passerelle sérialisée (verrou consultatif 20260814,1) vers l''écriture de l''arbre des faiseurs de disciple et du dirigeant. Refuse un membre, un faiseur de disciple ou un dirigeant inconnu, et un cycle. AMENDÉE PAR LA PHASE 5 (D99, D83) sur DEUX points. (1) La garde d''état ne connaissait que ''archive'' alors que public.etat_membre a trois valeurs : un faiseur ''en_attente'' était accepté, et rendait toute sa descendance active inatteignable depuis les racines de l''arborescence, qui exclut ''en_attente'' comme ''archive''. Un faiseur archivé rend toujours faiseur_de_disciple_archive ; un faiseur ni actif ni archivé rend le marqueur NOUVEAU faiseur_de_disciple_inactif — distinct, parce que le message commandé par le premier dit « est archivé » et mentirait ici. (2) L''état du faiseur est désormais lu SOUS VERROU DE LIGNE (for share) : le verrou consultatif sérialise les écritures d''arbre entre elles mais ne dit rien de l''archivage, qui passe par un update PostgREST direct et ne peut pas prendre de verrou consultatif ; sans for share, un rattachement et un archivage concurrents ne se voyaient pas et validaient tous les deux, laissant un membre actif sous un faiseur archivé. Exécution réservée à service_role.';
+```
+
+- [ ] **Étape 3 : écrire la migration des trois gardes d'état**
+
+Créer `supabase/migrations/<NUMERO+2>_gardes_etat_arbre_elargies.sql`. **Les trois corps
+reprennent ceux de 20260814120000, 20260814140000 et 20260814150000 À L'IDENTIQUE**, en
+n'élargissant que les comparaisons d'état. **Aucun `create trigger` : les trois
+déclencheurs existent déjà et pointent sur ces fonctions.**
+
+```sql
+-- Phase 5, D99 — CORRECTIF sur du code DÉPLOYÉ, strictement additif : seuls les CORPS de
+-- trois fonctions de déclencheur sont réécrits. AUCUN déclencheur n'est créé, supprimé ni
+-- redéfini ; les trois `create trigger` de 20260814120000, 20260814140000 et
+-- 20260814150000 restent en place et continuent de pointer sur ces mêmes fonctions.
+--
+-- L'INVARIANT QUE CES TROIS GARDES TIENNENT, ÉLARGI :
+--   AUCUN MEMBRE `actif` N'A D'ANCÊTRE QUI NE SOIT PAS `actif`.
+--
+-- Il était énoncé « pas d'ancêtre `archive` », et les trois corps comparaient
+-- littéralement à 'archive'. Or public.etat_membre a TROIS valeurs (20260812120000), et
+-- l'arborescence de la phase 5 exclut `en_attente` EXACTEMENT comme `archive`
+-- (`.eq('etat','actif')` sur les deux lectures paginées). Un maillon `en_attente`
+-- produisait donc le même trou qu'un maillon `archive`, avec une conséquence que le cas
+-- `archive` n'avait pas : toute la descendance ACTIVE d'un faiseur `en_attente` devenait
+-- INATTEIGNABLE depuis la liste des racines — ces fiches ont un faiseur, donc ne sont pas
+-- racines, et leur parent n'est jamais rendu. Rien ne le signalait.
+--
+-- MARQUEURS. `disciples_a_reaffecter` et `faiseur_de_disciple_archive` gardent leur texte
+-- ET leur sens : les branches applicatives qui les discriminent aujourd'hui continuent de
+-- recevoir exactement ce qu'elles recevaient. Le seul cas nouveau — faiseur ni actif ni
+-- archivé — reçoit le marqueur NOUVEAU `faiseur_de_disciple_inactif`, parce que le message
+-- commandé par `faiseur_de_disciple_archive` dit « est archivé » et mentirait ici. L'ordre
+-- des branches est donc `archive` D'ABORD, `is distinct from 'actif'` ensuite.
+--
+-- VERROU DE LIGNE dans les deux gardes qui lisent l'état du FAISEUR. Ces déclencheurs sont
+-- la barrière de TOUTE écriture, y compris les `insert` directs qui ne passent pas par
+-- public.definir_arbre — celui de convertir_participant_externe (chemin 2, 20260818220000)
+-- pose un faiseur sans jamais lire son état. Sans `for share`, un archivage concurrent du
+-- faiseur restait invisible à la lecture du déclencheur : les deux transactions
+-- validaient. Ce n'est PAS une redondance avec le `for share` de public.definir_arbre :
+-- celui-là sert à rendre un message JUSTE avant d'écrire, celui-ci protège les écritures
+-- qui ne passent pas par la passerelle.
+
+-- (1) Quitter l'état `actif` alors qu'on a encore des disciples actifs.
+--     ANCIENNE CONDITION : `if new.etat <> 'archive' or old.etat = 'archive'` — elle ne
+--     surveillait QUE la transition vers `archive`, et laissait passer `actif` ->
+--     `en_attente` avec des disciples actifs.
+--     NOUVELLE CONDITION : on sort si la fiche RESTE active (rien à vérifier), ou si son
+--     état ne change pas (une mise à jour sans effet ne doit pas refuser ce qui existe
+--     déjà). Toute AUTRE transition — donc toute sortie de `actif`, et le passage
+--     `en_attente` -> `archive` que l'ancienne condition couvrait déjà — recompte.
+create or replace function prive.refuser_archivage_faiseur_de_disciple()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_disciples integer;
+begin
+  if new.etat = 'actif' or old.etat = new.etat then
+    return new;
+  end if;
+
+  select count(*) into v_disciples
+  from public.membres m
+  where m.faiseur_de_disciple_id = new.id
+    and m.etat = 'actif';
+
+  if v_disciples > 0 then
+    raise exception 'Ce membre est encore faiseur de disciple de % personne(s) active(s).', v_disciples
+      using detail = 'disciples_a_reaffecter';
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function prive.refuser_archivage_faiseur_de_disciple() is
+  'Déclencheur before update of etat sur public.membres : refuse à un membre de QUITTER l''état actif tant qu''il est encore faiseur de disciple d''au moins un membre actif (spec §7). ÉLARGI PAR LA PHASE 5 (D99) : la condition ne surveillait que la transition vers ''archive'' et laissait donc passer actif -> en_attente avec des disciples actifs, ce qui rendait toute la descendance active inatteignable depuis les racines de l''arborescence. Une mise à jour qui ne change pas l''état ne déclenche rien. Barrière de dernier recours : le contrôle en amont, dans archiverMembre, nomme les personnes concernées avant d''écrire ; ce déclencheur protège même une écriture directe ou concurrente. Marqueur inchangé : disciples_a_reaffecter.';
+
+-- (2) Redevenir `actif` alors que son faiseur ne l'est pas.
+create or replace function prive.refuser_desarchivage_faiseur_archive()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_etat_faiseur public.etat_membre;
+begin
+  if new.etat <> 'actif' or old.etat = 'actif' then
+    return new;
+  end if;
+
+  if new.faiseur_de_disciple_id is null then
+    return new;
+  end if;
+
+  select m.etat into v_etat_faiseur
+  from public.membres m
+  where m.id = new.faiseur_de_disciple_id
+  for share;
+
+  if v_etat_faiseur = 'archive' then
+    raise exception 'Le faiseur de disciple de ce membre est archivé.'
+      using detail = 'faiseur_de_disciple_archive';
+  end if;
+  if v_etat_faiseur is distinct from 'actif' then
+    raise exception 'Le faiseur de disciple de ce membre n''est pas un membre actif.'
+      using detail = 'faiseur_de_disciple_inactif';
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function prive.refuser_desarchivage_faiseur_archive() is
+  'Déclencheur before update of etat sur public.membres : refuse de rendre un membre actif quand son faiseur de disciple ne l''est pas. Ferme le contournement de 20260814120000 : archiver le disciple puis son faiseur passe, mais rétablir ensuite le disciple recréerait l''état que l''archivage interdit. ÉLARGI PAR LA PHASE 5 (D99) : la comparaison ne portait que sur ''archive'' ; un faiseur ''en_attente'' passait, et l''arborescence l''exclut comme un archivé. VERROUILLÉ PAR LA PHASE 5 (D83) : l''état du faiseur est lu `for share`, sans quoi un archivage concurrent du faiseur restait invisible et les deux transactions validaient. Faiseur archivé : marqueur faiseur_de_disciple_archive, inchangé. Faiseur ni actif ni archivé : marqueur NOUVEAU faiseur_de_disciple_inactif. Barrière de dernier recours : le contrôle en amont, dans desarchiverMembre, nomme le faiseur concerné avant d''écrire.';
+
+-- (3) Se rattacher à un faiseur qui n'est pas actif, à l'`insert` COMME à l'`update`.
+create or replace function prive.refuser_faiseur_de_disciple_archive()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_etat_faiseur public.etat_membre;
+begin
+  if new.faiseur_de_disciple_id is null then
+    return new;
+  end if;
+
+  select m.etat into v_etat_faiseur
+  from public.membres m
+  where m.id = new.faiseur_de_disciple_id
+  for share;
+
+  if v_etat_faiseur = 'archive' then
+    raise exception 'Le faiseur de disciple choisi est archivé.'
+      using detail = 'faiseur_de_disciple_archive';
+  end if;
+  if v_etat_faiseur is distinct from 'actif' then
+    raise exception 'Le faiseur de disciple choisi n''est pas un membre actif.'
+      using detail = 'faiseur_de_disciple_inactif';
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function prive.refuser_faiseur_de_disciple_archive() is
+  'Déclencheur before insert or update of faiseur_de_disciple_id sur public.membres : refuse de rattacher un membre à un faiseur de disciple qui n''est pas ACTIF. Barrière de dernier recours, sur le même modèle que membres_anti_cycle : public.definir_arbre porte la même vérification pour produire un message avant d''écrire ; ce déclencheur protège aussi les écritures directes — l''insert de convertir_participant_externe (chemin 2) pose un faiseur sans jamais lire son état. ÉLARGI PAR LA PHASE 5 (D99) : la comparaison ne portait que sur ''archive'', et rien n''interdisait de rattacher un membre actif à un faiseur ''en_attente'', que l''arborescence exclut comme un archivé. VERROUILLÉ PAR LA PHASE 5 (D83) : l''état du faiseur est lu `for share`, sans quoi un archivage concurrent du faiseur restait invisible à ce déclencheur. Faiseur archivé : marqueur faiseur_de_disciple_archive, inchangé — même fait constaté que dans prive.refuser_desarchivage_faiseur_archive. Faiseur ni actif ni archivé : marqueur NOUVEAU faiseur_de_disciple_inactif, distinct parce que le message commandé par le premier dit « est archivé » et mentirait ici.';
+```
+
+- [ ] **Étape 4 : appliquer**
+
+```bash
+npx supabase db push --linked
+```
+
+- [ ] **Étape 5 : VÉRIFIER QUE LES QUATRE CORPS ONT VRAIMENT CHANGÉ EN BASE, ET QUE LES REFUS MORDENT**
+
+C'est le contrôle qui manquait les deux fois où le piège des numéros de migration s'est
+refermé : **interroger la base, pas la liste des migrations.** Dans l'éditeur SQL
+Supabase :
+
+```sql
+select p.proname,
+       pg_get_functiondef(p.oid) like '%for share%'          as porte_for_share,
+       pg_get_functiondef(p.oid) like '%faiseur_de_disciple_inactif%' as porte_marqueur_nouveau
+from pg_proc p
+join pg_namespace n on n.oid = p.pronamespace
+where (n.nspname = 'public' and p.proname = 'definir_arbre')
+   or (n.nspname = 'prive' and p.proname in (
+        'refuser_archivage_faiseur_de_disciple',
+        'refuser_desarchivage_faiseur_archive',
+        'refuser_faiseur_de_disciple_archive'))
+order by p.proname;
+```
+
+**Attendu, et à consigner ligne par ligne :** `definir_arbre` → `t`, `t` ;
+`refuser_archivage_faiseur_de_disciple` → `f`, `f` (elle ne lit aucun faiseur et ne pose pas
+ce marqueur) ; les deux autres → `t`, `t`.
+
+**Puis les refus eux-mêmes, avec leur contrôle positif.** Recréer
+`scripts/.tmp-course/gardes.mjs` :
+
+```javascript
+import { createClient } from '@supabase/supabase-js'
+
+const admin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY,
+  { auth: { autoRefreshToken: false, persistSession: false } },
+)
+
+const PREFIXE = 'ZZCourse-'
+
+async function creer(suffixe, etat, faiseur) {
+  const { data, error } = await admin
+    .from('membres')
+    .insert({
+      nom: `${PREFIXE}${suffixe}`,
+      prenom: 'Garde',
+      etat,
+      faiseur_de_disciple_id: faiseur ?? null,
+    })
+    .select('id')
+    .single()
+  if (error || !data) throw new Error(`préparation « ${suffixe} » impossible : ${error?.message}`)
+  return data.id
+}
+
+function decrire(erreur) {
+  return erreur ? `REFUS [${erreur.details ?? 'sans marqueur'}] ${erreur.message}` : 'PASSE'
+}
+
+try {
+  await admin.from('membres').delete().like('nom', `${PREFIXE}%`)
+
+  const enAttente = await creer('garde-en-attente', 'en_attente', null)
+  const actif = await creer('garde-actif', 'actif', null)
+  const cible = await creer('garde-cible', 'actif', null)
+  const parent = await creer('garde-parent', 'actif', null)
+  await creer('garde-enfant', 'actif', parent)
+
+  // 1. La passerelle refuse un faiseur en_attente.
+  const a = await admin.rpc('definir_arbre', {
+    p_membre: cible, p_faiseur_de_disciple: enAttente, p_dirigeant: null, p_dirigeant_force: false,
+  })
+  console.log('1. definir_arbre vers un faiseur en_attente →', decrire(a.error))
+
+  // 2. Le DÉCLENCHEUR refuse le même rattachement par un `insert` DIRECT, qui ne passe
+  //    par aucune passerelle.
+  const b = await admin
+    .from('membres')
+    .insert({ nom: `${PREFIXE}garde-insert`, prenom: 'Garde', faiseur_de_disciple_id: enAttente })
+  console.log('2. insert direct sous un faiseur en_attente →', decrire(b.error))
+
+  // 3. Quitter `actif` pour `en_attente` avec un disciple actif est refusé.
+  const c = await admin.from('membres').update({ etat: 'en_attente' }).eq('id', parent).select('id')
+  console.log('3. parent actif -> en_attente avec un disciple actif →', decrire(c.error))
+
+  // CONTRÔLES POSITIFS — sans eux, les trois refus seraient aussi satisfaits par des
+  // gardes qui refuseraient TOUT.
+  const d = await admin.rpc('definir_arbre', {
+    p_membre: cible, p_faiseur_de_disciple: actif, p_dirigeant: null, p_dirigeant_force: false,
+  })
+  console.log('4. CONTRÔLE POSITIF definir_arbre vers un faiseur ACTIF →', decrire(d.error))
+
+  const e = await admin.from('membres').update({ etat: 'archive' }).eq('id', actif).select('id')
+  console.log('5. CONTRÔLE POSITIF archivage d’un membre SANS disciple actif →', decrire(e.error))
+} finally {
+  const { error } = await admin.from('membres').delete().like('nom', `${PREFIXE}%`)
+  if (error) throw new Error(`nettoyage impossible : ${error.message}`)
+  const { count, error: erreurCompte } = await admin
+    .from('membres')
+    .select('id', { count: 'exact', head: true })
+    .like('nom', `${PREFIXE}%`)
+  if (erreurCompte) throw new Error(`comptage de contrôle impossible : ${erreurCompte.message}`)
+  if (count !== 0) throw new Error(`RÉSIDU : ${count} fiche(s) « ${PREFIXE} » subsistent EN BASE`)
+  console.log('nettoyage : ok, résidu 0')
+}
+```
+
+```bash
+npx dotenv -e .env.local -- node scripts/.tmp-course/gardes.mjs
+```
+
+**Attendu :** 1, 2 et 3 **refusent**, 1 et 2 avec le marqueur `faiseur_de_disciple_inactif`
+et 3 avec `disciples_a_reaffecter` ; **4 et 5 passent**. Consigner la sortie **verbatim**,
+marqueurs compris. **Le contrôle 4 arrive après le refus 1 sur la MÊME fiche cible** : il
+prouve donc que le refus 1 tient à l'état du faiseur, et non à la cible.
+
+Attention au contrôle 5 : il archive `garde-actif`, qui vient de devenir le faiseur de
+`garde-cible` par le contrôle 4. Il doit donc **échouer** avec `disciples_a_reaffecter` —
+et c'est encore un résultat juste, mais **ce n'est pas le contrôle positif voulu**. Si
+c'est ce qui est observé, refaire le contrôle 5 sur une fiche neuve sans disciple, et
+consigner les deux sorties.
+
+- [ ] **Étape 6 : REJOUER LA COURSE — la même, sans rien changer au script**
+
+```bash
+npx dotenv -e .env.local -- node scripts/.tmp-course/course-arbre.mjs
+```
+
+**Attendu APRÈS correction : les TROIS verdicts disent `invariant tenu`**, et les lignes de
+détail montrent **lequel** des deux appels a été refusé, avec **quel marqueur**. Consigner
+la sortie **verbatim**, à côté de celle de l'étape 1 : c'est la comparaison des deux
+sorties qui constitue la preuve, aucune des deux ne prouve rien seule.
+
+**Si un scénario reste `INVARIANT VIOLÉ` après correction**, ne rien maquiller : consigner
+la sortie, et **écrire dans le rapport que la moitié correspondante du remède n'est pas
+tenue**. Une preuve probabiliste rapportée comme certaine serait le pire résultat possible
+de cette tâche.
+
+- [ ] **Étape 7 : SUPPRIMER LES FONCTIONS TEMPORAIRES, ET VÉRIFIER QU'ELLES ONT DISPARU**
+
+Dans l'éditeur SQL Supabase :
+
+```sql
+drop function if exists public.zz_course_arbre(uuid, uuid, double precision);
+drop function if exists public.zz_course_etat(uuid, public.etat_membre, double precision);
+
+select count(*) as restantes
+from pg_proc p
+join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public' and p.proname like 'zz\_course\_%';
+-- ATTENDU : 0.
+
+select count(*) as fiches_residuelles from public.membres where nom like 'ZZCourse-%';
+-- ATTENDU : 0.
+
+notify pgrst, 'reload schema';
+```
+
+```bash
+rm -rf scripts/.tmp-course
+```
+
+**Les deux comptages sont consignés.** Une fonction `zz_course_*` laissée en base serait un
+chemin d'écriture permanent et non recensé ; une fiche `ZZCourse-` sans faiseur de disciple
+**est une racine**, donc elle fausserait la mesure que l'écran `/arborescence` existe pour
+rendre lisible.
+
+- [ ] **Étape 8 : les portes rapides, puis commit**
+
+```bash
+npx tsc --noEmit && npm run lint && npm test && npm run test:rls
+```
+
+`npm run test:rls` et `npm run test:e2e` **doivent rester verts sans qu'aucun test soit
+modifié** : aucun marqueur existant n'a changé de sens, aucun message existant n'a changé
+de texte. **Si un test tombe, c'est cette tâche qui a dévié** — relire les corps réécrits
+contre les originaux avant de toucher au moindre test.
+
+```bash
+git add supabase/migrations/<NUMERO+1>_definir_arbre_faiseur_actif_verrouille.sql \
+  supabase/migrations/<NUMERO+2>_gardes_etat_arbre_elargies.sql
+git commit -m "fix: elargir a en_attente et verrouiller l'invariant d'arbre des faiseurs de disciple (D99, D83)"
+```
+
+**Preuves produites par cette tâche :** la sortie **réelle** des deux commandes de
+l'étape 0 et les deux numéros retenus ; la sortie **verbatim** de la course **avant**
+correction (trois verdicts) ; la sortie **verbatim** des cinq contrôles de gardes, marqueurs
+compris ; la sortie **verbatim** de la course **après** correction ; les deux comptages de
+l'étape 7 ; et, s'il y a lieu, le **nombre d'essais** nécessaires à la reproduction et la
+mention explicite de tout scénario **non reproduit**.
+
+**Livrable indépendamment éprouvable :** l'invariant « aucun membre `actif` n'a d'ancêtre
+qui ne soit pas `actif` » est tenu par trois gardes qui connaissent les **trois** valeurs
+d'état, et il résiste à une course **reproduite**, pas seulement raisonnée.
+
+---
+
 ### Task 2 : couche domaine — `statutsIncompatibles` et `lignesStatutsDepuisFormData` (D84)
 
 **Fichiers :**
@@ -751,10 +1611,15 @@ export type CoupleIncompatible = { groupe: string; premier: string; second: stri
  * ne fait confiance à aucune liste venue de l'écran ; celle-ci sert à nommer les deux
  * statuts avant même d'écrire.
  *
- * ÉCHEC FERMÉ. Un identifiant absent du catalogue fourni LÈVE, il n'est jamais ignoré :
- * `listerCatalogue` est non bornée, et un catalogue tronqué ne doit pas se lire comme
- * « aucun conflit détecté ». C'est la même famille de mensonge silencieux que la
- * troncature `max_rows`.
+ * ÉCHEC FERMÉ, ET SA PORTÉE EXACTE. Un identifiant absent du catalogue fourni LÈVE, il
+ * n'est jamais ignoré : `listerCatalogue` est non bornée, et un catalogue tronqué ne doit
+ * pas se lire comme « aucun conflit détecté ». C'est la même famille de mensonge
+ * silencieux que la troncature `max_rows`. MAIS l'échec fermé n'est PAS TOTAL, et il ne
+ * faut pas le croire tel : cette fonction RETOURNE au premier couple exclusif trouvé, donc
+ * un identifiant inconnu situé APRÈS ce couple dans la sélection n'est jamais examiné.
+ * C'est sans conséquence ici — le retour est déjà un refus, et l'appelant s'arrête —, mais
+ * quiconque ferait de cette fonction un validateur de sélection devrait la relire en deux
+ * passes : indexation et vérification d'appartenance d'abord, détection du couple ensuite.
  *
  * Un même statut sélectionné DEUX FOIS n'est pas un couple exclusif : c'est un doublon,
  * traité plus loin par l'upsert de `prive.attribuer_statut`, qui ne journalise aucun
@@ -820,9 +1685,14 @@ export type LigneStatutSaisie = {
  * PAR CONSTRUCTION tant que le composant rend les trois champs pour chaque ligne — un
  * champ vide est quand même soumis, avec une chaîne vide.
  *
- * Le contrôle de longueur ci-dessous n'est donc pas décoratif : il est la seule chose qui
- * distingue « le composant a changé » d'un décalage silencieux qui associerait la date
- * d'une ligne au statut d'une autre.
+ * Le contrôle ci-dessous n'est donc pas décoratif : il est la seule chose qui distingue
+ * « le composant a changé » d'un décalage silencieux qui associerait la date d'une ligne au
+ * statut d'une autre. CE QU'IL ATTRAPE, EXACTEMENT, ET RIEN DE PLUS : il compare des
+ * LONGUEURS. Un champ manquant ou en trop tombe ; une PERMUTATION à cardinalité égale — le
+ * composant rendrait les dates dans un autre ordre que les statuts — passerait sans être
+ * vue. Aucun contrôle de longueur ne peut voir cela ; seule la discipline « ne jamais
+ * rendre une ligne partielle, et toujours les trois champs dans le même ordre » le peut,
+ * et c'est pourquoi elle est écrite en tête du composant.
  *
  * Une ligne SANS statut choisi est REFUSÉE, jamais ignorée : l'ignorer ferait disparaître
  * en silence la date et la note qui l'accompagnent, et l'utilisateur croirait avoir
@@ -1008,6 +1878,7 @@ refus d'un catalogue incomplet est prouvé et **distingué** d'un refus universe
 **Fichiers :**
 - Modifier : `src/app/membres/messages.ts`
 - Modifier : `src/app/membres/actions.ts`
+- Modifier : `src/lib/securite/garde.ts` (**un mot dans un commentaire**, étape 3)
 
 **Interfaces :**
 - Consomme : `public.creer_membre_enrichi` (Task 1) ; `statutsIncompatibles`,
@@ -1016,7 +1887,7 @@ refus d'un catalogue incomplet est prouvé et **distingué** d'un refus universe
   `listerCatalogue` (existant) ; `exigerAdministrateur` (existant) ;
   `MESSAGE_DIRIGEANT_INCONNU`, `MESSAGE_FAISEUR_ARCHIVE`, `MESSAGE_FAISEUR_INCONNU`,
   `messageCycle` (existants, `src/app/membres/[id]/arbre/messages.ts`) ;
-  `MESSAGE_STATUT_EXCLUSIF`, `MESSAGE_STATUT_INCONNU` (existants,
+  `MESSAGE_STATUT_INCONNU` (existant,
   `src/app/membres/[id]/statuts/messages.ts`) ; `cheminArbre` (existant).
 - Produit :
   ```ts
@@ -1027,6 +1898,7 @@ refus d'un catalogue incomplet est prouvé et **distingué** d'un refus universe
   ): Promise<EtatFormulaireMembre>
   export function messageStatutsIncompatibles(couple: CoupleIncompatible): string
   export const MESSAGE_STATUTS_EXCLUSIFS_PASSERELLE: string
+  export const MESSAGE_FAISEUR_NON_ACTIF: string
   ```
   Consommées par la Task 4.
 - **Retire :** `creerMembre`. **D87 : elle est REMPLACÉE, pas doublée.** Deux chemins pour
@@ -1072,6 +1944,23 @@ export const MESSAGE_ECHEC_ENREGISTREMENT =
  */
 export const MESSAGE_STATUTS_EXCLUSIFS_PASSERELLE =
   "Deux des statuts choisis appartiennent au même groupe exclusif : un membre ne peut porter que l'un des deux. Retirez-en un, puis recommencez."
+
+/**
+ * Le faiseur de disciple visé existe, mais il n'est NI actif NI archivé — donc en attente
+ * de validation (marqueur `faiseur_de_disciple_inactif`).
+ *
+ * DISTINCT de `MESSAGE_FAISEUR_ARCHIVE`, et ce n'est pas une redite : ce message-là dit
+ * « est archivé », et l'afficher pour une fiche en attente serait une phrase que le code
+ * ne tient pas. Le marqueur est distinct EXACTEMENT pour cette raison ; le message doit
+ * l'être aussi, sans quoi la distinction faite en base serait perdue à l'écran.
+ *
+ * Ce message est ici, dans `src/app/membres/messages.ts`, et NON dans
+ * `src/app/membres/[id]/arbre/messages.ts` : ce dossier appartient à un écran que cette
+ * phase laisse rigoureusement inchangé, et un balayage de la phase vérifie que son diff
+ * est vide.
+ */
+export const MESSAGE_FAISEUR_NON_ACTIF =
+  "Le faiseur de disciple choisi n'est pas un membre actif : ce rattachement n'est pas autorisé."
 
 /**
  * Refus du couple exclusif NOMMÉ, produit par le contrôle amont `statutsIncompatibles`
@@ -1120,16 +2009,22 @@ import {
   MESSAGE_FAISEUR_INCONNU,
   messageCycle,
 } from './[id]/arbre/messages'
-import {
-  MESSAGE_STATUT_EXCLUSIF,
-  MESSAGE_STATUT_INCONNU,
-} from './[id]/statuts/messages'
+import { MESSAGE_STATUT_INCONNU } from './[id]/statuts/messages'
 import {
   MESSAGE_ECHEC_ENREGISTREMENT,
+  MESSAGE_FAISEUR_NON_ACTIF,
   MESSAGE_STATUTS_EXCLUSIFS_PASSERELLE,
   messageStatutsIncompatibles,
 } from './messages'
 ```
+
+**`MESSAGE_STATUT_EXCLUSIF` n'est PAS importé, et c'est délibéré.** Ce message est celui du
+déclencheur `membre_statuts_exclusivite` (code `23514`), qui protège une attribution
+**ultérieure** sur une fiche qui porte **déjà** un statut du groupe. Sur ce chemin-ci, il
+ne peut pas se déclencher : la passerelle refuse le couple exclusif **avant toute
+écriture**, et la fiche vient de naître sans aucun statut. L'importer obligerait à écrire
+une branche `error.code === '23514'` — voir l'étape 2 pour pourquoi cette branche serait
+**pire qu'inutile**.
 
 `ficheMembreVersColonnes` **reste importée** : `modifierMembre` s'en sert toujours.
 **Elle n'est en revanche PAS employée par la création**, et c'est délibéré : un appel `rpc`
@@ -1144,17 +2039,24 @@ Conserver les trois constantes de marqueurs déjà présentes
 ```ts
 // Marqueurs RÉUTILISÉS, jamais réinventés — conséquence directe de D82 : la passerelle
 // `creer_membre_enrichi` COMPOSE `public.definir_arbre` et `public.attribuer_statut`, donc
-// elle rend LEURS marqueurs, avec LEUR sens. `statuts_exclusifs_incompatibles` est le SEUL
-// marqueur nouveau de toute la phase 5.
+// elle rend LEURS marqueurs, avec LEUR sens. La phase 5 n'ajoute que DEUX marqueurs :
+// `statuts_exclusifs_incompatibles` (posé par la passerelle elle-même) et
+// `faiseur_de_disciple_inactif` (posé par `public.definir_arbre` et par le déclencheur
+// `membres_faiseur_de_disciple_archive` quand le faiseur visé existe mais n'est ni actif
+// ni archivé). Tous les autres sont préexistants.
 const DETAIL_STATUTS_EXCLUSIFS_INCOMPATIBLES = 'statuts_exclusifs_incompatibles'
 const DETAIL_MEMBRE_INCONNU = 'membre_inconnu'
 const DETAIL_STATUT_INCONNU = 'statut_inconnu'
 const DETAIL_FAISEUR_INCONNU = 'faiseur_inconnu'
+// `DETAIL_FAISEUR_DE_DISCIPLE_ARCHIVE` existe DÉJÀ, juste au-dessus, et vaut
+// 'faiseur_de_disciple_archive' : on la réutilise, on n'en déclare pas une seconde sous un
+// autre nom. Celle-ci est son voisin, et le voisinage est le point : deux marqueurs, deux
+// faits DIFFÉRENTS, deux messages différents — « archivé » et « pas actif » ne se
+// remplacent pas l'un l'autre. Les confondre afficherait « ce faiseur est archivé » à
+// propos d'une fiche en attente de validation.
+const DETAIL_FAISEUR_NON_ACTIF = 'faiseur_de_disciple_inactif'
 const DETAIL_DIRIGEANT_INCONNU = 'dirigeant_inconnu'
 const DETAIL_CYCLE = 'cycle_faiseur_de_disciple'
-// check_violation, déclencheur `membre_statuts_exclusivite`. Même code, même sens que
-// dans `src/app/membres/[id]/statuts/actions.ts` : on ne le réemploie pour rien d'autre.
-const CODE_INVARIANT_EXCLUSIF = '23514'
 
 function champOuNull(donnees: FormData, champ: string): string | null {
   const valeur = donnees.get(champ)
@@ -1227,7 +2129,16 @@ export async function creerMembreEnrichi(
   if (lignesStatuts.length > 0) {
     let catalogue
     try {
-      catalogue = await listerCatalogue()
+      // `listerCatalogue(true)` — INACTIFS COMPRIS, et ce n'est pas un détail.
+      // `listerCatalogue()` filtre `actif === true`. Un statut RÉEL mais DÉSACTIVÉ,
+      // soumis par un onglet resté ouvert ou par un appel forgé, serait alors absent du
+      // catalogue passé à `statutsIncompatibles`, qui échoue fermé : l'utilisateur lirait
+      // « un statut sélectionné est introuvable dans le catalogue » là où la vérité est
+      // « ce statut a été désactivé ». La passerelle, elle, ne filtre pas sur `st.actif`
+      // et laisse `attribuer_statut` refuser avec `statut_inconnu`, dont le message dit
+      // « inconnu OU désactivé ». On donne donc ici le catalogue COMPLET, pour que le
+      // contrôle amont ne s'arroge pas un refus qui appartient à la passerelle.
+      catalogue = await listerCatalogue(true)
     } catch (erreur) {
       console.error('creerMembreEnrichi : lecture du catalogue impossible', { erreur })
       return { erreur: MESSAGE_ECHEC_ENREGISTREMENT }
@@ -1298,8 +2209,17 @@ export async function creerMembreEnrichi(
     if (error.details === DETAIL_FAISEUR_INCONNU) {
       return { erreur: MESSAGE_FAISEUR_INCONNU }
     }
-    if (error.details === DETAIL_FAISEUR_ARCHIVE) {
+    // Le nom exact de la constante existante est `DETAIL_FAISEUR_DE_DISCIPLE_ARCHIVE`
+    // (déclarée plus haut dans ce même fichier depuis la 1c) : il n'y a PAS de
+    // `DETAIL_FAISEUR_ARCHIVE` dans ce module, et l'écrire ainsi ne compilerait pas.
+    if (error.details === DETAIL_FAISEUR_DE_DISCIPLE_ARCHIVE) {
       return { erreur: MESSAGE_FAISEUR_ARCHIVE }
+    }
+    // Faiseur de disciple qui existe mais n'est NI actif NI archivé. Message DISTINCT du
+    // précédent : dire « est archivé » d'une fiche en attente de validation serait une
+    // phrase que le code ne tient pas.
+    if (error.details === DETAIL_FAISEUR_NON_ACTIF) {
+      return { erreur: MESSAGE_FAISEUR_NON_ACTIF }
     }
     if (error.details === DETAIL_DIRIGEANT_INCONNU) {
       return { erreur: MESSAGE_DIRIGEANT_INCONNU }
@@ -1307,16 +2227,42 @@ export async function creerMembreEnrichi(
     if (error.details === DETAIL_STATUT_INCONNU) {
       return { erreur: MESSAGE_STATUT_INCONNU }
     }
-    if (error.code === CODE_INVARIANT_EXCLUSIF) {
-      return { erreur: MESSAGE_STATUT_EXCLUSIF }
-    }
+    // ═══ AUCUNE BRANCHE SUR LE CODE 23514 ICI, ET C'EST DÉLIBÉRÉ ═══
+    // Une telle branche afficherait « ce membre porte déjà un statut du groupe exclusif ».
+    // Pour cette cause, elle est MORTE : la passerelle refuse le couple exclusif avant
+    // toute écriture, et la fiche vient de naître sans aucun statut — le déclencheur
+    // `membre_statuts_exclusivite` ne peut pas lever. Pour une AUTRE cause, elle est bien
+    // vivante et NUISIBLE : contrairement à `/membres/[id]/statuts`, ce chemin écrit aussi
+    // `public.membres`, porteuse de SIX contraintes `check` (`membres_nom_non_vide`,
+    // `membres_prenom_non_vide`, `membres_report_positif`,
+    // `membres_domaine_reserve_etudiant`, `membres_pas_son_propre_fdd`,
+    // `membres_pas_son_propre_dirigeant`), toutes en 23514. L'utilisateur lirait un message
+    // sur les statuts pour un problème de colonne de fiche. On retombe donc sur
+    // MESSAGE_ECHEC_ENREGISTREMENT, et le code réel reste JOURNALISÉ ci-dessus, là où il
+    // sert au diagnostic.
     if (error.details === DETAIL_CYCLE) {
       // INATTEIGNABLE PAR CONSTRUCTION sur ce chemin : la fiche vient d'être insérée dans
       // la même transaction, elle n'a aucun descendant, aucun cycle ne peut se refermer
       // sur elle. Traité quand même — et c'est la bonne direction : ce qui « ne peut pas
       // arriver » et arrive doit produire un message juste, pas un message générique.
-      // `cheminArbre` est HORS de tout `try` et ne redirige pas.
-      const chemin = faiseurId ? await cheminArbre(faiseurId) : []
+      //
+      // `cheminArbre` LÈVE sur un échec de lecture (elle ne rend jamais `[]` en silence).
+      // On l'enveloppe donc : sur cette branche déjà anormale, laisser une seconde panne
+      // remonter en exception ferait perdre le refus MÉTIER qu'on est en train de rendre —
+      // or une action RETOURNE son refus, elle ne le lève pas. `messageCycle([])` a déjà
+      // son texte de repli, sans le chemin. Aucun `redirect()` dans ce `try` : il n'y en a
+      // pas dans cette fonction avant sa dernière instruction.
+      let chemin: Awaited<ReturnType<typeof cheminArbre>> = []
+      if (faiseurId) {
+        try {
+          chemin = await cheminArbre(faiseurId)
+        } catch (erreurChemin) {
+          console.error('creerMembreEnrichi : lecture du chemin fautif impossible', {
+            faiseurId,
+            erreur: erreurChemin,
+          })
+        }
+      }
       return { erreur: messageCycle(chemin) }
     }
     if (error.details === DETAIL_MEMBRE_INCONNU) {
@@ -1348,12 +2294,36 @@ export async function creerMembreEnrichi(
 - [ ] **Étape 3 : vérifier qu'aucun appelant de `creerMembre` ne subsiste**
 
 ```bash
-grep -rn "creerMembre\b" src/ tests/ --include=*.ts --include=*.tsx
+grep -rn "creerMembre\b" src/app --include=*.ts --include=*.tsx
 ```
 
-**Attendu :** aucune occurrence de `creerMembre` (le mot exact). `creerMembreEnrichi` est
-un autre mot et n'est pas capturé par `\b` après `creerMembre`. Si `grep` en trouve une,
-c'est la Task 4 qui la retirera — la noter, ne pas la laisser passer en silence.
+**Attendu, À CE STADE : exactement DEUX lignes, toutes deux dans
+`src/app/membres/nouveau/page.tsx`** — son `import` et son usage dans le JSX.
+`src/app/membres/actions.ts` ne doit **plus** en porter aucune : l'étape 2 a **remplacé**
+la fonction, elle ne l'a pas doublée (D87). **S'il en reste une dans `actions.ts`, le
+remplacement de l'étape 2 est incomplet** — c'est le premier endroit à relire.
+**Attendu APRÈS la Task 4 : aucune ligne.** Consigner le nombre réel des deux côtés.
+
+`creerMembreEnrichi` n'est **pas** capturé : `\b` après `creerMembre` exige un caractère
+non-mot, et `E` n'en est pas un.
+
+## ⚠️ LE BALAYAGE PORTE SUR `src/app`, ET PAS SUR `src/` NI SUR `tests/`. NE PAS L'ÉLARGIR.
+
+Élargi à `src/ tests/`, il rend **une soixantaine** de lignes qui ne sont **pas** des
+appelants :
+
+- **`tests/`** contient de nombreuses fonctions locales `creerMembre` — des **helpers de
+  préparation homonymes**, définis dans chaque suite (`tests/e2e/arbre.spec.ts`,
+  `tests/e2e/autorite.spec.ts`, `tests/e2e/ael-preuves.spec.ts`, `tests/rls/arbre.test.ts`,
+  et d'autres). Ils insèrent une ligne dans `membres` par la clé de service et n'ont
+  **aucun rapport** avec la Server Action. **Ne pas y toucher :** les supprimer casserait
+  des suites qui n'ont rien à voir avec cette phase.
+- **`src/lib/securite/garde.ts`** cite `creerMembre` **dans un commentaire de prose**, qui
+  énumère les écritures ne passant pas par `exigerAutoriteSur`. Ce n'est pas un appelant —
+  mais c'est un commentaire qui nommera bientôt une fonction qui n'existe plus.
+  **Le corriger ici, et seulement lui** : dans le commentaire de tête d'`exigerAutoriteSur`,
+  remplacer le mot `creerMembre` par `creerMembreEnrichi`. **Aucune ligne exécutable de ce
+  fichier ne change**, et le fichier rejoint le commit de la Task 4.
 
 **CONTRÔLE POSITIF DU BALAYAGE** — sans lui, une commande mal formée rendrait « aucune
 occurrence » pour toujours :
@@ -1375,8 +2345,16 @@ npx tsc --noEmit && npm run lint && npm test && npm run test:rls
 `creerMembre`. **C'est attendu** : la Task 4 le corrige. **Ne pas commiter tant que `tsc`
 est rouge** — Tasks 3 et 4 forment un seul commit, fait à la fin de la Task 4.
 
+**Ce qu'il faut vérifier exactement : TOUTES les erreurs portent sur ce SEUL fichier.** Un
+même import disparu peut en produire plusieurs dans le même fichier (l'`import`, puis
+chaque usage) — le nombre n'est donc pas le critère. Le critère est le **jeu de fichiers en
+erreur**, qui doit être réduit à `src/app/membres/nouveau/page.tsx`. **Toute erreur dans un
+AUTRE fichier est un défaut de cette tâche**, à corriger avant d'aller plus loin : c'est
+ainsi qu'on découvre une constante mal nommée ou un import oublié, plutôt qu'en la
+découvrant deux tâches plus tard.
+
 **Preuve produite :** la sortie du balayage et de son contrôle positif ; la sortie de `tsc`
-montrant **exactement une** erreur, sur `nouveau/page.tsx`, et aucune autre.
+**intégrale**, montrant que le seul fichier en erreur est `nouveau/page.tsx`.
 
 **Livrable indépendamment éprouvable :** la Task 4 le rend compilable ; le contrat de
 cette tâche est la **signature** et la **table de classification des erreurs**, que la
@@ -2124,7 +3102,7 @@ pas toucher au code de production pour faire passer un test.
 - [ ] **Étape 6 : commit (Tasks 3 et 4 ensemble)**
 
 ```bash
-git add src/app/membres/messages.ts src/app/membres/actions.ts \
+git add src/app/membres/messages.ts src/app/membres/actions.ts src/lib/securite/garde.ts \
   src/app/membres/formulaire-membre.tsx src/app/membres/nouveau/bloc-enrichissement.tsx \
   src/app/membres/nouveau/page.tsx tests/e2e/annuaire.spec.ts
 git commit -m "feat: création enrichie d'un membre en une transaction, formulaire entièrement contrôlé (D85 à D88, D90)"
@@ -2144,6 +3122,7 @@ enrichie en une soumission, et un refus n'efface plus rien.
 
 **Fichiers :**
 - Modifier : `src/app/inscription/formulaire-inscription.tsx`
+- Modifier : `tests/e2e/inscription.spec.ts` (**trois lignes**, étape 3)
 
 **Interfaces :**
 - Consomme : `sInscrire`, `EtatInscription`, `LONGUEUR_MDP_MINIMALE`, `Antenne` — tous
@@ -2430,31 +3409,77 @@ ne rend rien non plus, c'est le balayage qui est cassé.
 Puis compter les champs contrôlés du fichier corrigé :
 
 ```bash
-grep -c "value={" src/app/inscription/formulaire-inscription.tsx
+grep -cE "^\s*value=\{" src/app/inscription/formulaire-inscription.tsx
 ```
 
 **Attendu : 8.** Consigner le nombre réel.
 
-- [ ] **Étape 3 : les portes rapides et la porte de production**
+**L'ANCRAGE `^\s*` N'EST PAS DÉCORATIF.** Un `grep -c "value={"` non ancré rend **9** et
+non 8 : il capte aussi `<option key={antenne.id} value={antenne.id}>`, où `value=` est un
+attribut d'`<option>` au milieu d'une ligne, et non le `value` **contrôlé** d'un champ.
+Compter 9 en annonçant 8 laisserait croire à un champ contrôlé de plus qu'il n'y en a.
+
+- [ ] **Étape 3 : LE SEUL COUPLAGE RÉEL AVEC `tests/e2e/inscription.spec.ts`, ET IL FAUT LE TRAITER**
+
+`inscription.spec.ts` ne se contente pas de remplir des champs par leur libellé — ce qui
+survivrait effectivement au passage en contrôlé. **Un de ses tests FORGE l'antenne en
+manipulant le DOM directement**, sans passer par React (le test qui vérifie qu'un
+`antenne_id` inexistant est refusé **avant** que le token ne soit consommé) :
+
+```ts
+  await page.evaluate((valeur) => {
+    const select = document.querySelector<HTMLSelectElement>('select[name="antenneId"]')!
+    const option = document.createElement('option')
+    option.value = valeur
+    option.textContent = 'Antenne forgée'
+    select.append(option)
+    select.value = valeur
+  }, idInexistant)
+```
+
+Sur un `<select>` **contrôlé**, `select.value = valeur` écrit dans le DOM une valeur que
+l'état React ignore : **toute passe de rendu la restaure à `''`**. Le test peut rester vert
+— le `FormData` est construit au moment de la soumission, avant que le re-rendu déclenché
+par l'état « en cours » n'ait restauré la valeur —, mais **il resterait vert pour une
+raison que personne n'a choisie**, et un simple changement de timing le ferait basculer.
+
+**Correction, trois lignes, dans `tests/e2e/inscription.spec.ts`** : ajouter la dépêche de
+l'événement `change` **juste après** `select.value = valeur`, à l'intérieur du même
+`page.evaluate` :
+
+```ts
+    select.value = valeur
+    // Le champ est CONTRÔLÉ depuis la phase 5 : écrire `select.value` ne met pas à jour
+    // l'état React, et la première passe de rendu le restaurerait à ''. On dépêche donc
+    // l'événement que React écoute, pour que la forge passe par le MÊME chemin qu'une
+    // sélection humaine — ce que ce test prétend éprouver.
+    select.dispatchEvent(new Event('change', { bubbles: true }))
+```
+
+**Ne rien changer d'autre dans ce fichier.** Les libellés, les noms de champs et les
+messages sont inchangés : tout le reste de la suite doit rester vert **sans être touché**.
+
+- [ ] **Étape 4 : les portes rapides et la porte de production**
 
 ```bash
 npx tsc --noEmit && npm run lint && npm test && npm run test:rls && npm run test:e2e
 ```
 
-`tests/e2e/inscription.spec.ts` **doit rester vert sans être modifié** : aucun nom de
-champ, aucun libellé, aucun message n'a changé. **S'il tombe, c'est cette tâche qui a
+Hors la dépêche d'événement de l'étape 3, `tests/e2e/inscription.spec.ts` **doit rester
+vert sans autre modification**. **Si un autre de ses tests tombe, c'est cette tâche qui a
 dévié**, pas le test.
 
-- [ ] **Étape 4 : commit**
+- [ ] **Étape 5 : commit**
 
 ```bash
-git add src/app/inscription/formulaire-inscription.tsx
+git add src/app/inscription/formulaire-inscription.tsx tests/e2e/inscription.spec.ts
 git commit -m "fix: rendre contrôlés les huit champs du formulaire public d'inscription (arbitrage phase 5)"
 ```
 
 **Preuves produites :** les trois balayages avec leur contrôle positif ; `test:e2e` vert
-**sans modification d'`inscription.spec.ts`** ; et la preuve rejouable de survie de la
-saisie, écrite en **Task 8** contre un build de production.
+**sans autre modification d'`inscription.spec.ts` que la dépêche d'événement de
+l'étape 3** ; et la preuve rejouable de survie de la saisie, écrite en **Task 8** contre un
+build de production.
 
 **Livrable indépendamment éprouvable :** sur `/inscription`, un code invalide affiche le
 message indifférencié **et laisse les huit champs remplis**.
@@ -2512,6 +3537,7 @@ const PREFIXE = `${PREFIXE_FAMILLE}${crypto.randomUUID().slice(0, 8)}`
 let clientSimple: SupabaseClient
 let profilAdminId: string
 let idFaiseurArchive: string
+let idFaiseurEnAttente: string
 let statutExclusifA: string
 let statutExclusifB: string
 let statutCumulable: string
@@ -2544,6 +3570,41 @@ async function compterMembresDuPrefixe(): Promise<number> {
     .select('id', { count: 'exact', head: true })
     .like('nom', `${PREFIXE_FAMILLE}%`)
   if (error) throw new Error(`comptage des membres impossible : ${error.message}`)
+  if (count === null) throw new Error('comptage absent de la réponse PostgREST')
+  return count
+}
+
+/**
+ * Lignes de `journal_statuts` portées par les fiches DE CETTE FAMILLE DE PRÉFIXE.
+ *
+ * DEUX RAISONS, ET AUCUNE N'EST DÉCORATIVE.
+ *
+ * 1. L'ERREUR EST VÉRIFIÉE, ET UN `count` ABSENT LÈVE. Un comptage écrit
+ *    `const { count } = await …` sans vérifier `error` rend `null` sur échec ; comparer
+ *    `null` à `null` fait PASSER l'assertion de delta, et le test devient un contrôle qui
+ *    ne peut plus échouer. Même discipline que `compterMembresDuPrefixe` ci-dessus.
+ * 2. LE DELTA EST RESTREINT AU PRÉFIXE, JAMAIS GLOBAL. Un comptage global filtré sur
+ *    `statut_id` porterait sur TOUTE la base : le groupe exclusif amorcé est celui du
+ *    « Cheminement », soit exactement les statuts qu'attribue `tests/e2e/statuts.spec.ts`.
+ *    Un lancement concurrent de `test:e2e` produirait alors un faux échec, pour une raison
+ *    étrangère à ce qu'on éprouve.
+ *
+ * `.in('membre_id', [])` sur une famille vide rend 0, ce qui est la bonne réponse : sans
+ * fiche du préfixe, il ne peut y avoir aucune ligne de journal du préfixe.
+ */
+async function compterJournalDuPrefixe(): Promise<number> {
+  const { data: fiches, error: erreurFiches } = await admin
+    .from('membres')
+    .select('id')
+    .like('nom', `${PREFIXE_FAMILLE}%`)
+  if (erreurFiches) throw new Error(`lecture des fiches du préfixe impossible : ${erreurFiches.message}`)
+  const ids = (fiches ?? []).map((ligne) => ligne.id as string)
+
+  const { count, error } = await admin
+    .from('journal_statuts')
+    .select('id', { count: 'exact', head: true })
+    .in('membre_id', ids)
+  if (error) throw new Error(`comptage du journal impossible : ${error.message}`)
   if (count === null) throw new Error('comptage absent de la réponse PostgREST')
   return count
 }
@@ -2611,6 +3672,19 @@ beforeAll(async () => {
   }
   idFaiseurArchive = archive.id as string
 
+  // Un faiseur EN ATTENTE. `public.etat_membre` a TROIS valeurs, pas deux, et
+  // l'arborescence exclut `en_attente` exactement comme `archive` : un faiseur en attente
+  // rendrait toute sa descendance active inatteignable depuis la liste des racines.
+  const { data: enAttente, error: erreurEnAttente } = await admin
+    .from('membres')
+    .insert({ nom: `${PREFIXE}-faiseur-en-attente`, prenom: 'Test', etat: 'en_attente' })
+    .select('id')
+    .single()
+  if (erreurEnAttente || !enAttente) {
+    throw new Error(`création du faiseur en attente impossible : ${erreurEnAttente?.message}`)
+  }
+  idFaiseurEnAttente = enAttente.id as string
+
   await reperersStatuts()
 
   const { data: compte, error: erreurCompte } = await admin.auth.admin.createUser({
@@ -2647,8 +3721,16 @@ afterAll(async () => {
   // COMPTAGE DE CONTRÔLE INDÉPENDANT du balayage : l'absence d'erreur au `delete` ne
   // prouve rien — un `delete` qui ne touche aucune ligne ne rend aucune erreur.
   expect(await compterMembresDuPrefixe()).toBe(0)
-  const { data: residus } = await admin.from('profils').select('id').eq('identifiant', IDENT_SIMPLE)
-  expect(residus ?? []).toHaveLength(0)
+  const { data: residus, error: erreurResidus } = await admin
+    .from('profils')
+    .select('id')
+    .eq('identifiant', IDENT_SIMPLE)
+  // `error` VÉRIFIÉ, et assertion SANS `?? []` : sur échec de lecture, `data` vaut `null`,
+  // et `residus ?? []` convertirait la panne en « aucun résidu ». Toute la valeur de ce
+  // contrôle est d'être INDÉPENDANT du balayage ; un contrôle qui ne peut plus échouer ne
+  // l'est plus de rien.
+  if (erreurResidus) throw new Error(`lecture des profils résiduels impossible : ${erreurResidus.message}`)
+  expect(residus).toHaveLength(0)
 })
 
 // ───────────────────────────────────────────────────────────────────────────────
@@ -2788,8 +3870,15 @@ describe('les gardes des passerelles appelées mordent à travers la nouvelle po
     expect(error).not.toBeNull()
     // LE MARQUEUR, pas la prose : c'est lui qui identifie la barrière atteinte.
     expect(error?.details).toBe('faiseur_de_disciple_archive')
-    // ET RIEN N'A PERSISTÉ. Sans cette assertion, le test prouverait le refus mais pas
-    // l'atomicité — la fiche pourrait très bien avoir été insérée puis laissée.
+    // ET RIEN N'A PERSISTÉ.
+    //
+    // CE QUE CETTE ASSERTION FERME EXACTEMENT, ET RIEN DE PLUS. Elle ne prouve PAS
+    // l'atomicité : un `select public.creer_membre_enrichi(…)` via PostgREST est une seule
+    // instruction dans une transaction implicite, donc une exception annule de toute façon
+    // l'insertion. Ce qu'elle ferme est le SEUL mode de défaillance réel qui reste ici :
+    // un `exception when others` ajouté un jour dans le corps, qui avalerait le refus et
+    // laisserait la fiche derrière lui. Coût nul, valeur réelle — mais l'atomicité, elle,
+    // est prouvée par la mutation de l'étape 4, et par elle seule.
     expect(await compterMembresDuPrefixe()).toBe(avant)
   })
 
@@ -2864,10 +3953,7 @@ describe('les gardes des passerelles appelées mordent à travers la nouvelle po
 describe('refus du couple exclusif par la passerelle elle-même (D84)', () => {
   it('refuse deux statuts du même groupe exclusif, et n’écrit NI fiche NI statut NI journal', async () => {
     const avantMembres = await compterMembresDuPrefixe()
-    const { count: avantJournal } = await admin
-      .from('journal_statuts')
-      .select('id', { count: 'exact', head: true })
-      .in('statut_id', [statutExclusifA, statutExclusifB])
+    const avantJournal = await compterJournalDuPrefixe()
 
     const { error } = await admin.rpc(
       'creer_membre_enrichi',
@@ -2879,19 +3965,35 @@ describe('refus du couple exclusif par la passerelle elle-même (D84)', () => {
       }),
     )
 
-    expect(error).not.toBeNull()
-    // LE SEUL MARQUEUR NOUVEAU DE TOUTE LA PHASE.
-    expect(error?.details).toBe('statuts_exclusifs_incompatibles')
+    const apresMembres = await compterMembresDuPrefixe()
+    const apresJournal = await compterJournalDuPrefixe()
 
-    // TROIS ABSENCES, EN DELTA. La troisième est la plus importante : si l'éviction de
-    // `prive.attribuer_statut` avait joué au lieu du refus, le journal porterait un
-    // `retrait` d'un statut que personne n'a jamais porté plus d'une transaction.
-    expect(await compterMembresDuPrefixe()).toBe(avantMembres)
-    const { count: apresJournal } = await admin
-      .from('journal_statuts')
-      .select('id', { count: 'exact', head: true })
-      .in('statut_id', [statutExclusifA, statutExclusifB])
-    expect(apresJournal).toBe(avantJournal)
+    /*
+      ═══ LES QUATRE ASSERTIONS SONT `expect.soft`, ET C'EST LE POINT DE CE TEST ═══
+
+      `expect()` LÈVE. Écrites en dur et dans l'ordre naturel — marqueur d'abord, delta du
+      journal en dernier —, la première qui tombe empêcherait les suivantes de s'exécuter.
+      Or le scénario que ce test existe pour attraper est précisément celui où la garde
+      d'exclusivité n'existe pas et où l'ÉVICTION de `prive.attribuer_statut` a joué : dans
+      ce monde-là, `error` est nul, l'assertion du marqueur tombe la première, et le delta
+      du journal — LA SEULE ASSERTION QUI VERRAIT LE `retrait` MENSONGER — ne s'exécuterait
+      JAMAIS. Le test dirait « marqueur absent » et tairait le fait le plus grave.
+
+      En `soft`, les quatre s'exécutent et les quatre échecs sont rapportés. Le diagnostic
+      dit alors ce qui s'est réellement passé, pas seulement ce qui a manqué en premier.
+    */
+    expect.soft(error, "la passerelle a ACCEPTÉ le couple exclusif").not.toBeNull()
+    // La fiche n'existe pas : ni elle, ni rien de ce qui devait la suivre.
+    expect.soft(apresMembres, 'une fiche a persisté malgré le refus').toBe(avantMembres)
+    // LA PLUS IMPORTANTE. Si l'éviction de `prive.attribuer_statut` avait joué au lieu du
+    // refus, le journal porterait un `retrait` d'un statut que personne n'a jamais porté
+    // plus d'une transaction — et le journal mentirait sur ce qui s'est passé.
+    expect
+      .soft(apresJournal, "le journal a bougé : l'éviction a joué au lieu du refus")
+      .toBe(avantJournal)
+    // L'un des deux marqueurs NOUVEAUX de la phase, et le seul posé par la passerelle
+    // elle-même.
+    expect.soft(error?.details).toBe('statuts_exclusifs_incompatibles')
   })
 
   // CONTRÔLE POSITIF DANS LE MÊME TEST-CI : le MÊME appel avec UN SEUL des deux réussit.
@@ -2911,13 +4013,18 @@ describe('refus du couple exclusif par la passerelle elle-même (D84)', () => {
     expect(porte?.[0]?.statut_id).toBe(statutExclusifB)
   })
 
-  it('accepte deux statuts de groupes DIFFÉRENTS quand l’un n’est pas exclusif', async () => {
+  it('accepte deux statuts de groupes DIFFÉRENTS quand l’un n’est pas exclusif', async (contexte) => {
     if (statutCumulable === '') {
-      // Aucun groupe cumulable au catalogue : ce cas ne peut pas être construit. On le
-      // DIT plutôt que de rendre le test vert sur rien.
-      console.warn(
-        'creation-enrichie : aucun groupe non exclusif au catalogue — ce contrôle positif est sauté',
-      )
+      // Aucun groupe cumulable au catalogue : ce cas ne peut pas être construit.
+      //
+      // `contexte.skip()` et NON un `return` : un `return` dans un `it` le rend VERT, pas
+      // *skipped*, et le rapport de `npm test` afficherait un contrôle positif réussi qui
+      // n'a rien exécuté. Le `console.warn` qui l'accompagnait, lui, se perd dans le bruit
+      // de la sortie. Un cas non construit doit se VOIR dans le décompte.
+      //
+      // Sur le catalogue amorcé réel (20260813100000), cette branche ne se déclenche pas —
+      // d'où la facilité avec laquelle un `return` y passerait inaperçu.
+      contexte.skip()
       return
     }
     const { data: identifiant, error } = await admin.rpc(
@@ -2935,6 +4042,127 @@ describe('refus du couple exclusif par la passerelle elle-même (D84)', () => {
       .select('statut_id')
       .eq('membre_id', identifiant)
     expect(porte).toHaveLength(2)
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────────
+// L'INVARIANT D'ARBRE COUVRE LES TROIS ÉTATS, PAS DEUX (D99)
+//
+// `public.etat_membre` a TROIS valeurs : `en_attente`, `actif`, `archive`
+// (20260812120000). L'arborescence exclut `en_attente` EXACTEMENT comme `archive`
+// (`.eq('etat','actif')` sur ses deux lectures paginées). Un faiseur `en_attente`
+// produirait donc le même trou qu'un faiseur `archive`, avec une conséquence que le cas
+// `archive` n'a pas : toute sa descendance ACTIVE deviendrait INATTEIGNABLE depuis la
+// liste des racines — ces fiches ont un faiseur, donc ne sont pas racines, et leur parent
+// n'est jamais rendu. Rien ne le signalerait.
+//
+// CES TROIS PREUVES SONT DURABLES, ET C'EST LEUR RAISON D'ÊTRE : les gardes vivent en
+// base, où aucune porte de ce dépôt ne les relit. Sans elles, une réécriture future des
+// déclencheurs pourrait rétrécir la garde à `archive` sans faire tomber quoi que ce soit.
+// ───────────────────────────────────────────────────────────────────────────────
+
+describe("les gardes d'état de l'arbre couvrent en_attente comme archive", () => {
+  it('refuse un faiseur de disciple EN ATTENTE, avec son marqueur propre, et ne laisse AUCUNE fiche', async () => {
+    const avant = await compterMembresDuPrefixe()
+    const { error } = await admin.rpc(
+      'creer_membre_enrichi',
+      argumentsCreation({ p_faiseur_de_disciple: idFaiseurEnAttente }),
+    )
+    expect(error).not.toBeNull()
+    // MARQUEUR DISTINCT de `faiseur_de_disciple_archive`, et c'est le point : le message
+    // que commande ce dernier dit « est archivé », ce qui serait faux ici. Deux faits
+    // différents, deux marqueurs, deux messages.
+    expect(error?.details).toBe('faiseur_de_disciple_inactif')
+    expect(await compterMembresDuPrefixe()).toBe(avant)
+  })
+
+  it("refuse le même rattachement par un INSERT DIRECT, qui ne passe par aucune passerelle", async () => {
+    // La passerelle explique ; le DÉCLENCHEUR protège. Sans cette preuve, une garde
+    // retirée du déclencheur et laissée dans la passerelle resterait verte partout
+    // ailleurs — alors qu'un `insert` direct la contournerait entièrement.
+    const { error } = await admin.from('membres').insert({
+      nom: `${PREFIXE}-sous-en-attente`,
+      prenom: 'Test',
+      faiseur_de_disciple_id: idFaiseurEnAttente,
+    })
+    expect(error).not.toBeNull()
+    expect(error?.details).toBe('faiseur_de_disciple_inactif')
+  })
+
+  it("refuse de faire sortir de l'état actif un membre qui a encore un disciple actif", async () => {
+    const { data: parent, error: erreurParent } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE}-parent-actif`, prenom: 'Test' })
+      .select('id')
+      .single()
+    if (erreurParent || !parent) throw new Error(`préparation impossible : ${erreurParent?.message}`)
+    const { error: erreurEnfant } = await admin
+      .from('membres')
+      .insert({
+        nom: `${PREFIXE}-enfant-actif`,
+        prenom: 'Test',
+        faiseur_de_disciple_id: parent.id,
+      })
+    if (erreurEnfant) throw new Error(`préparation impossible : ${erreurEnfant.message}`)
+
+    // `en_attente` et NON `archive` : c'est la transition que l'ancienne garde laissait
+    // passer, parce qu'elle ne testait que `new.etat <> 'archive'`.
+    const { error } = await admin
+      .from('membres')
+      .update({ etat: 'en_attente' })
+      .eq('id', parent.id)
+      .select('id')
+    expect(error).not.toBeNull()
+    expect(error?.details).toBe('disciples_a_reaffecter')
+
+    // ET L'ÉTAT N'A PAS BOUGÉ : un refus qui laisserait l'écriture passer serait pire
+    // qu'aucun refus.
+    const { data: relu, error: erreurRelu } = await admin
+      .from('membres')
+      .select('etat')
+      .eq('id', parent.id)
+      .single()
+    if (erreurRelu) throw new Error(`relecture impossible : ${erreurRelu.message}`)
+    expect(relu?.etat).toBe('actif')
+  })
+
+  // CONTRÔLE POSITIF DES TROIS CI-DESSUS, ET IL N'EST PAS INERTE : sans lui, les trois
+  // refus seraient aussi satisfaits par des gardes qui refuseraient TOUTE écriture d'arbre
+  // et TOUT changement d'état. Il exige un succès RÉEL, vérifié en base.
+  it('mais accepte un faiseur ACTIF, et laisse sortir de l’état actif un membre SANS disciple', async () => {
+    const { data: faiseur, error: erreurFaiseur } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE}-faiseur-actif-controle`, prenom: 'Test' })
+      .select('id')
+      .single()
+    if (erreurFaiseur || !faiseur) throw new Error(`préparation impossible : ${erreurFaiseur?.message}`)
+
+    const { data: identifiant, error } = await admin.rpc(
+      'creer_membre_enrichi',
+      argumentsCreation({ p_faiseur_de_disciple: faiseur.id }),
+    )
+    expect(error).toBeNull()
+    const { data: fiche, error: erreurFiche } = await admin
+      .from('membres')
+      .select('faiseur_de_disciple_id')
+      .eq('id', identifiant)
+      .single()
+    if (erreurFiche) throw new Error(`relecture impossible : ${erreurFiche.message}`)
+    expect(fiche?.faiseur_de_disciple_id).toBe(faiseur.id)
+
+    // Une fiche SANS disciple : elle, on peut la sortir de l'état actif.
+    const { data: seule, error: erreurSeule } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE}-sans-disciple`, prenom: 'Test' })
+      .select('id')
+      .single()
+    if (erreurSeule || !seule) throw new Error(`préparation impossible : ${erreurSeule?.message}`)
+    const { error: erreurArchivage } = await admin
+      .from('membres')
+      .update({ etat: 'archive' })
+      .eq('id', seule.id)
+      .select('id')
+    expect(erreurArchivage).toBeNull()
   })
 })
 
@@ -3014,9 +4242,29 @@ select
 -- ATTENDU : 1, 1, 1, 1.
 ```
 
-Puis la mutation. **Recopier ici le corps EXACT de la fonction depuis la migration**, en
-insérant `raise exception 'MUTATION';` **entre** l'insertion de la fiche et l'appel à
-`definir_arbre` :
+## ⚠️ OÙ LA MUTATION EST INSÉRÉE EST *TOUT* CE QUI FAIT LA VALEUR DE CETTE PREUVE
+
+Le geste naturel — insérer `raise exception 'MUTATION';` **entre** l'insertion de la fiche
+et l'appel à `definir_arbre` — produirait une preuve **creuse**, et il faut voir pourquoi
+avant d'écrire quoi que ce soit. À cette position, `definir_arbre` et la boucle
+`attribuer_statut` **ne sont jamais atteintes** : les colonnes d'arbre ne sont jamais
+écrites, aucun `membre_statuts` ni aucun `journal_statuts` n'est jamais inséré — **même
+dans un monde parfaitement non atomique**. Trois des quatre comptages vaudraient alors zéro
+**par position dans le corps**, jamais par atomicité.
+
+**La mutation va donc à la FIN du corps** : après la boucle `for v_ligne in … end loop;` et
+**avant** `return v_membre;`. Les quatre écritures ont alors TOUTES eu lieu dans la
+transaction, et leur disparition est exactement le fait que cette preuve vise.
+
+**Et les quatre lectures doivent être RÉELLEMENT quatre.** Écrites en joignant
+`public.membres` sur le même nom, les comptages de statuts et de journal valent zéro dès
+que la fiche a disparu — **par arithmétique, pas par constat** : une écriture partielle qui
+aurait laissé des `membre_statuts` derrière elle serait comptée zéro et passerait pour un
+succès. Les deux comptages ci-dessous ne joignent donc **rien** : ce sont des **deltas** sur
+les tables entières, mesurés avant et après.
+
+**Recopier ici le corps EXACT de la fonction depuis la migration**, avec cette seule ligne
+ajoutée à cette seule place :
 
 ```sql
 -- 2. EMPREINTE AVANT — à conserver pour la comparaison finale.
@@ -3024,11 +4272,27 @@ select pg_get_functiondef(p.oid) as avant
 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 where n.nspname = 'public' and p.proname = 'creer_membre_enrichi';
 
--- 3. MUTATION : `create or replace` du corps identique, plus un `raise exception` APRÈS
---    le `returning id into v_membre` et AVANT le bloc `if ... definir_arbre`.
---    [recopier ici la migration entière, avec cette seule ligne ajoutée]
+-- 3. COMPTAGES DE RÉFÉRENCE, PRIS MAINTENANT — après le contrôle positif, avant la
+--    mutation. SANS AUCUNE JOINTURE sur `membres` : c'est ce qui rend les lectures de
+--    l'étape 5 indépendantes du sort de la fiche.
+select
+  (select count(*) from public.membre_statuts)                                       as statuts_avant,
+  (select count(*) from public.journal_statuts)                                      as journal_avant,
+  (select count(*) from public.membres where faiseur_de_disciple_id = '<ID_FAISEUR>') as sous_faiseur_avant;
+-- CONSIGNER CES TROIS NOMBRES : ce sont eux, et non « 0 », qui sont attendus à l'étape 5.
 
--- 4. REJOUER LA MÊME CRÉATION.
+-- 4. MUTATION : `create or replace` du corps IDENTIQUE à la migration, plus un
+--    `raise exception 'MUTATION';` inséré APRÈS la boucle `for v_ligne in … end loop;`
+--    et AVANT `return v_membre;`.
+--
+--    LA POSITION EST LE POINT. Placée avant `definir_arbre`, la mutation ne ferait
+--    disparaître que la fiche : les trois autres comptages vaudraient zéro même sans
+--    atomicité, puisque ni l'arbre ni les statuts n'auraient jamais été écrits. Placée
+--    ICI, les quatre écritures ont TOUTES eu lieu dans la transaction.
+--
+--    [recopier ici la migration entière, avec cette seule ligne ajoutée à cette place]
+
+-- 5. REJOUER LA MÊME CRÉATION.
 select public.creer_membre_enrichi(
   'ZZMutation-atomique', 'Test', null, null, null, null, null,
   null, null, 0,
@@ -3038,31 +4302,35 @@ select public.creer_membre_enrichi(
 );
 -- ATTENDU : l'exception « MUTATION ».
 
--- 5. QUATRE LECTURES DISTINCTES, DANS LA MÊME SESSION : RIEN N'A PERSISTÉ.
+-- 6. QUATRE LECTURES RÉELLEMENT DISTINCTES, DANS LA MÊME SESSION : RIEN N'A PERSISTÉ.
 select
-  (select count(*) from public.membres where nom = 'ZZMutation-atomique') as fiche,
-  (select count(*) from public.membres where nom = 'ZZMutation-atomique' and faiseur_de_disciple_id is not null) as arbre,
-  (select count(*) from public.membre_statuts ms
-     join public.membres m on m.id = ms.membre_id where m.nom = 'ZZMutation-atomique') as statuts,
-  (select count(*) from public.journal_statuts j
-     join public.membres m on m.id = j.membre_id where m.nom = 'ZZMutation-atomique') as journal;
--- ATTENDU : 0, 0, 0, 0.
+  (select count(*) from public.membres where nom = 'ZZMutation-atomique')            as fiche,
+  (select count(*) from public.membres where faiseur_de_disciple_id = '<ID_FAISEUR>') as sous_faiseur,
+  (select count(*) from public.membre_statuts)                                       as statuts,
+  (select count(*) from public.journal_statuts)                                      as journal;
+-- ATTENDU : fiche = 0 ; sous_faiseur = sous_faiseur_avant ; statuts = statuts_avant ;
+--           journal = journal_avant.
+--
+-- Les trois derniers sont des DELTAS À ZÉRO sur des tables entières, et non des zéros
+-- absolus : la base sert aussi de production, et `membre_statuts` comme `journal_statuts`
+-- y portent déjà des lignes réelles. Un zéro absolu y serait faux pour toujours.
 
--- 6. RESTAURATION IMMÉDIATE : rejouer la migration TELLE QUELLE, sans la ligne ajoutée.
+-- 7. RESTAURATION IMMÉDIATE : rejouer la migration TELLE QUELLE, sans la ligne ajoutée.
 
--- 7. EMPREINTE APRÈS — doit être IDENTIQUE CARACTÈRE POUR CARACTÈRE à `avant`.
+-- 8. EMPREINTE APRÈS — doit être IDENTIQUE CARACTÈRE POUR CARACTÈRE à `avant`.
 select pg_get_functiondef(p.oid) as apres
 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 where n.nspname = 'public' and p.proname = 'creer_membre_enrichi';
 
--- 8. NETTOYAGE, disciples avant faiseurs — ici la suppression par préfixe les prend
+-- 9. NETTOYAGE, disciples avant faiseurs — ici la suppression par préfixe les prend
 --    ensemble, et `membre_statuts` / `journal_statuts` partent en cascade.
 delete from public.membres where nom like 'ZZMutation-%';
 select count(*) from public.membres where nom like 'ZZMutation-%';   -- ATTENDU : 0
 ```
 
-**Consigner verbatim :** les quatre `1` du contrôle positif, l'exception observée, les
-quatre `0`, `avant` et `apres`, et le comptage final.
+**Consigner verbatim :** les quatre `1` du contrôle positif, les trois comptages de
+référence de l'étape 3, l'exception observée, les quatre valeurs de l'étape 6 **comparées
+une à une** à leurs références, `avant` et `apres`, et le comptage final.
 
 - [ ] **Étape 5 : les portes rapides, puis commit**
 
@@ -3222,7 +4490,38 @@ async function compterFichesNommees(nom: string): Promise<number> {
     .select('id', { count: 'exact', head: true })
     .eq('nom', nom)
   if (error) throw new Error(`comptage impossible : ${error.message}`)
-  return count ?? 0
+  // `count === null` LÈVE, il ne retombe PAS sur 0. Ce compteur sert trois assertions de
+  // SÉCURITÉ (« ce rôle n'a écrit aucune fiche ») : un comptage absent de la réponse
+  // PostgREST y deviendrait « aucune fiche », c'est-à-dire un refus RÉUSSI, pour une
+  // panne. Même discipline que `totalObligatoire` dans `pagination.ts`.
+  if (count === null) throw new Error(`comptage absent de la réponse PostgREST pour « ${nom} »`)
+  return count
+}
+
+/**
+ * Nombre total de lignes de `membre_statuts` et de `journal_statuts`, SANS AUCUN FILTRE.
+ *
+ * Employé en DELTA, jamais en absolu. C'est la seule mesure qui puisse voir une écriture
+ * partielle sous un `membre_id` que le NOM ne trahit pas — précisément le scénario que
+ * cette preuve prétend fermer, et qu'un balayage par préfixe de nom ne peut pas voir.
+ *
+ * `error` vérifié et `count === null` levé aux deux comptages : sans cela, une panne de
+ * lecture rendrait deux `null`, et `null === null` ferait passer le delta.
+ */
+async function compterEcrituresDeStatuts(): Promise<{ statuts: number; journal: number }> {
+  const { count: statuts, error: erreurStatuts } = await admin
+    .from('membre_statuts')
+    .select('statut_id', { count: 'exact', head: true })
+  if (erreurStatuts) throw new Error(`comptage des statuts impossible : ${erreurStatuts.message}`)
+  if (statuts === null) throw new Error('comptage des statuts absent de la réponse PostgREST')
+
+  const { count: journal, error: erreurJournal } = await admin
+    .from('journal_statuts')
+    .select('id', { count: 'exact', head: true })
+  if (erreurJournal) throw new Error(`comptage du journal impossible : ${erreurJournal.message}`)
+  if (journal === null) throw new Error('comptage du journal absent de la réponse PostgREST')
+
+  return { statuts, journal }
 }
 
 test.beforeAll(async () => {
@@ -3246,11 +4545,15 @@ test.afterAll(async () => {
     .select('id', { count: 'exact', head: true })
     .like('nom', `${PREFIXE_FAMILLE}%`)
   expect(count).toBe(0)
-  const { data: residus } = await admin
+  const { data: residus, error: erreurResidus } = await admin
     .from('profils')
     .select('id')
     .in('identifiant', [IDENT_ADMIN, IDENT_SIMPLE, IDENT_MODERATEUR])
-  expect(residus ?? []).toHaveLength(0)
+  // `error` VÉRIFIÉ, et assertion SANS `?? []` : sur échec de lecture, `data` vaut `null`,
+  // et `residus ?? []` convertirait la panne en « aucun résidu ». Un contrôle de nettoyage
+  // qui ne peut plus échouer ne contrôle plus rien.
+  if (erreurResidus) throw new Error(`lecture des profils résiduels impossible : ${erreurResidus.message}`)
+  expect(residus).toHaveLength(0)
 })
 
 /**
@@ -3273,6 +4576,10 @@ test('un compte SIMPLE puis un compte MODÉRATEUR ne peuvent pas créer de fiche
   expect(await compterFichesNommees(NOM_FORGE_SIMPLE)).toBe(0)
   expect(await compterFichesNommees(NOM_FORGE_MODERATEUR)).toBe(0)
   expect(await compterFichesNommees(NOM_CANARI)).toBe(0)
+
+  // ÉCRITURES DE STATUTS AVANT LES FORGES. Voir plus bas pour ce que ce delta ferme, et
+  // pourquoi il est GLOBAL.
+  const ecrituresAvant = await compterEcrituresDeStatuts()
 
   // Capture des champs `$ACTION_*` depuis une session ADMINISTRATEUR : ce sont des
   // références déterministes à la fonction serveur pour cette version du code, pas un
@@ -3304,18 +4611,38 @@ test('un compte SIMPLE puis un compte MODÉRATEUR ne peuvent pas créer de fiche
     expect(await compterFichesNommees(nomVise), `${identifiant} a écrit une fiche`).toBe(0)
   }
 
-  // VÉRIFICATION EN BASE DE L'ABSENCE DE STATUT ET DE JOURNAL, et pas seulement de fiche :
-  // le design l'exige, et une écriture partielle serait le pire des résultats.
-  const { count: statutsOrphelins } = await admin
-    .from('membre_statuts')
-    .select('statut_id', { count: 'exact', head: true })
-    .in(
-      'membre_id',
-      (
-        await admin.from('membres').select('id').like('nom', `${PREFIXE_FAMILLE}%`)
-      ).data?.map((l) => l.id as string) ?? ['00000000-0000-0000-0000-000000000000'],
-    )
-  expect(statutsOrphelins ?? 0).toBe(0)
+  /*
+    ═══ AUCUNE ÉCRITURE DE STATUT NI DE JOURNAL, ET LA MESURE EST UN DELTA GLOBAL ═══
+
+    Une écriture PARTIELLE — la fiche refusée mais un `membre_statuts` laissé derrière —
+    serait le pire des résultats, et c'est ce que ces deux nombres ferment.
+
+    POURQUOI GLOBAL, ET NON RESTREINT AUX FICHES DU PRÉFIXE. Un balayage par préfixe de nom
+    ne peut voir que les lignes rattachées à une fiche que le NOM trahit. Or le scénario
+    craint est justement celui d'une écriture sous un `membre_id` que le nom ne trahit pas —
+    une fiche partiellement créée puis annulée laisserait des lignes orphelines qu'aucun
+    `like 'ZZ…%'` ne retrouverait. Un tel balayage, de surcroît, serait ici INERTE : ce test
+    est le premier de la suite en mode `serial`, aucune fiche du préfixe n'existe encore, et
+    `.in('membre_id', [])` ne matcherait rien — vrai par construction, donc sans valeur.
+
+    POURQUOI UN DELTA, ET NON UN ABSOLU. Ces deux tables portent des lignes RÉELLES : la
+    base sert aussi de production. Un absolu y serait faux dès le premier vrai statut
+    attribué. Le prix du delta est connu et assumé : une attribution de statut faite par un
+    administrateur réel PENDANT ce test le ferait échouer. Les suites e2e sont sérialisées
+    (`workers: 1`) et durent quelques secondes ; c'est le meilleur compromis disponible.
+
+    LA MESURE EST PRISE ICI, AVANT LE CANARI : celui-ci crée légitimement une fiche, sans
+    aucun statut — mais mesurer après lui ferait dépendre le résultat d'un succès attendu.
+  */
+  const ecrituresApres = await compterEcrituresDeStatuts()
+  expect(
+    ecrituresApres.statuts,
+    'une forge refusée a laissé une ligne dans membre_statuts',
+  ).toBe(ecrituresAvant.statuts)
+  expect(
+    ecrituresApres.journal,
+    'une forge refusée a laissé une ligne dans journal_statuts',
+  ).toBe(ecrituresAvant.journal)
 
   // ═══ CANARI PAR LE MÊME CANAL ═══
   // Exactement le même `request.post`, depuis la session qui a le droit. S'il échoue,
@@ -3430,17 +4757,22 @@ réussit** — sans quoi les deux refus ne prouveraient rien.
 - Produit : les preuves n°6 et n°7 du design, **plus** la preuve de survie de la saisie sur
   l'écran public (arbitrage 3).
 
-## ⚠️ LA SUITE E2E ORDINAIRE NE PEUT PAS VOIR CE DÉFAUT
+## ⚠️ UNE SEULE DES DEUX PREUVES DE CETTE SUITE EXIGE LE MODE PRODUCTION. L'AUTRE Y EST PAR CHOIX.
 
-`npm run test:e2e` sert `npm run dev`. Ce mode ne peut **pas** révéler ce que cette suite
-éprouve. Deux mécanismes distincts, et il faut savoir lequel s'applique :
+`npm run test:e2e` sert `npm run dev`. **Ce titre serait faux s'il disait que ce mode ne
+peut voir aucun des deux défauts** : les deux mécanismes ne sont pas de même nature, et
+citer la mauvaise raison en revue serait pire que ne rien citer.
 
-- **La survie de la saisie (preuve n°6)** — React réinitialise les champs non contrôlés
-  d'un `<form action>` à toute complétion, **y compris sur un refus retourné**. Ce
-  mécanisme existe **dans les deux modes**, mais **c'est la première preuve de cette
-  classe dans le projet** : les quatorze composants recensés au README n'en ont aucune, et
-  elle est écrite ici, contre un build **réel**, pour qu'elle ne dépende d'aucune
-  particularité du serveur de développement.
+- **La survie de la saisie (preuve n°6) — CE MÉCANISME EXISTE DANS LES DEUX MODES, et cette
+  preuve pourrait techniquement vivre dans `tests/e2e/`.** React réinitialise les champs
+  non contrôlés d'un `<form action>` à toute complétion, **y compris sur un refus
+  retourné**, en développement comme en production. **Elle est ici par un choix assumé, et
+  non par nécessité technique** : c'est la **première preuve de cette classe dans le
+  projet** — les quatorze composants recensés au README n'en ont aucune —, elle porte sur
+  le **seul écran public** de l'application, et la seule chose qui la rendrait fausse
+  serait une particularité du serveur de développement. La faire tourner contre un build
+  **réel** retire cette dernière échappatoire. **Ne pas la déplacer sans reprendre cette
+  phrase.**
 - **Le refus RETOURNÉ et non levé (preuve n°7)** — une exception levée depuis une Server
   Action perd son message en **production seulement** : React la remplace par un digest
   interne. **Nuance : sur cet écran, le composant n'attrape aucune exception** — il lit
@@ -3483,16 +4815,47 @@ const admin = createClient(
 
 const MDP = `Test-${crypto.randomUUID()}`
 const IDENT_ADMIN = 'test.e2e.prod.creation.admin'
+// IDENTIFIANT PUBLIC DÉTERMINISTE, jamais tiré par exécution : le chemin d'inscription
+// qu'éprouve la troisième preuve pourrait un jour créer l'utilisateur `auth` AVANT
+// d'échouer. Un identifiant aléatoire rendrait cet orphelin introuvable, et il
+// s'accumulerait EN PRODUCTION sans qu'aucune assertion ne le voie. Format conforme au
+// contrôle d'identifiant du projet : lettres, chiffres, points ou tirets, commençant par
+// une lettre.
+const IDENT_PUBLIC = 'zz.prod.creation.publique'
 const PREFIXE_FAMILLE = 'ZZCreationProdE2E-'
 const PREFIXE = `${PREFIXE_FAMILLE}${crypto.randomUUID().slice(0, 8)}`
 
-// Texte statique de `src/app/error.tsx`, à ne JAMAIS voir sur ces écrans. Relu depuis le
-// fichier plutôt que recopié ? Non : `error.tsx` est un composant client, et l'importer
-// ici tirerait React dans la suite. On recopie donc un FRAGMENT DISTINCTIF, et on le
-// vérifie une fois à la main. S'il change, ce test devient un faux négatif silencieux —
-// d'où l'assertion positive qui l'accompagne toujours (« le message ATTENDU est là »),
-// qui, elle, tomberait.
+/*
+  DEUX TEXTES À NE JAMAIS VOIR SUR CES ÉCRANS, ET ILS NE DISENT PAS LA MÊME CHOSE.
+
+  `FRAGMENT_DIGEST_REACT` — le digest anglais que React substitue au message d'une
+  exception en build de production, LORSQUE le composant l'attrape pour l'afficher.
+  `comptes/ligne-compte.tsx` est le seul composant du dépôt dans ce cas. **Sur les écrans
+  visés ici, ce texte est IMPOSSIBLE**, et le plan de cette tâche le démontre plus haut :
+  le composant lit `etat.erreur` d'un `useActionState` et n'attrape aucune exception ; un
+  `throw` y remonterait à `src/app/error.tsx`. La sonde est conservée parce qu'elle coûte
+  une ligne et qu'elle deviendrait pertinente si un jour un `try/catch` apparaissait — mais
+  **elle ne vise pas le symptôme réel de cet écran**.
+
+  `FRAGMENT_LIMITE_ERREUR` — LE symptôme réel. C'est le titre statique de
+  `src/app/error.tsx` (vérifié : `<h1>Une erreur est survenue</h1>`). S'il apparaît, c'est
+  qu'une exception a remonté à la limite d'erreur au lieu d'un refus RETOURNÉ : le motif
+  nommé est perdu, en développement comme en production. C'est exactement ce que la
+  preuve n°7 verrouille.
+
+  Recopiés et non importés : `error.tsx` est un composant client, et l'importer ici
+  tirerait React dans la suite. Si l'un des deux textes changeait, ces sondes deviendraient
+  des faux négatifs silencieux — d'où l'assertion POSITIVE qui les accompagne toujours
+  (« le message ATTENDU est là »), qui, elle, tomberait.
+*/
 const FRAGMENT_DIGEST_REACT = 'Minified React error'
+const FRAGMENT_LIMITE_ERREUR = 'Une erreur est survenue'
+
+// Sélecteur d'alerte PORTÉ : Next.js pose son propre `<div role="alert"
+// id="__next-route-announcer__">` sur chaque page. Un `getByRole('alert')` nu en trouve
+// donc toujours DEUX et viole le mode strict de Playwright. Motif déjà constantisé dans
+// `tests/e2e/statuts.spec.ts` et repris trois fois dans `tests/e2e-prod/`.
+const ALERTE = '[role="alert"]:not(#__next-route-announcer__)'
 
 let idFaiseurArchive: string
 
@@ -3518,6 +4881,10 @@ async function seConnecter(page: Page, identifiant: string) {
 test.beforeAll(async () => {
   await admin.from('membres').delete().like('nom', `${PREFIXE_FAMILLE}%`)
   await supprimerCompte(IDENT_ADMIN)
+  // L'identifiant PUBLIC aussi : un résidu d'exécution interrompue ferait échouer
+  // l'inscription pour « identifiant déjà pris » au lieu de « code invalide », et la
+  // preuve porterait alors sur un tout autre refus.
+  await supprimerCompte(IDENT_PUBLIC)
 
   const { data: compte, error } = await admin.auth.admin.createUser({
     email: identifiantVersEmail(IDENT_ADMIN),
@@ -3534,27 +4901,43 @@ test.beforeAll(async () => {
     .insert({ profil_id: compte.user.id, role: 'administrateur' })
   if (erreurRole) throw new Error(`attribution du rôle impossible : ${erreurRole.message}`)
 
-  // Le faiseur de disciple ARCHIVÉ : le refus le plus sûr à provoquer depuis l'écran,
-  // parce qu'il ne dépend d'AUCUNE particularité du catalogue de statuts.
-  const { data: archive, error: erreurArchive } = await admin
+  // ═══ LE FAISEUR DE DISCIPLE EST CRÉÉ **ACTIF**, ET ARCHIVÉ PLUS TARD ═══
+  // Il doit être ACTIF ici pour être trouvable par le sélecteur de l'écran, qui ne propose
+  // que des membres actifs. La preuve l'archivera juste avant de soumettre. C'est le refus
+  // le plus sûr à provoquer depuis l'écran, parce qu'il ne dépend d'AUCUNE particularité
+  // du catalogue de statuts.
+  const { data: faiseur, error: erreurFaiseur } = await admin
     .from('membres')
-    .insert({ nom: `${PREFIXE}-archive`, prenom: 'Test', etat: 'archive' })
+    .insert({ nom: `${PREFIXE}-faiseur`, prenom: 'Test' })
     .select('id')
     .single()
-  if (erreurArchive || !archive) {
-    throw new Error(`création du faiseur archivé impossible : ${erreurArchive?.message}`)
+  if (erreurFaiseur || !faiseur) {
+    throw new Error(`création du faiseur impossible : ${erreurFaiseur?.message}`)
   }
-  idFaiseurArchive = archive.id as string
+  idFaiseurArchive = faiseur.id as string
 })
 
 test.afterAll(async () => {
   await admin.from('membres').delete().like('nom', `${PREFIXE_FAMILLE}%`)
   await supprimerCompte(IDENT_ADMIN)
+  await supprimerCompte(IDENT_PUBLIC)
+
   const { count } = await admin
     .from('membres')
     .select('id', { count: 'exact', head: true })
     .like('nom', `${PREFIXE_FAMILLE}%`)
   expect(count).toBe(0)
+
+  // LES DEUX PROFILS AUSSI, VÉRIFIÉS PAR COMPTAGE. L'absence d'erreur au nettoyage ne
+  // prouve rien : une suppression qui ne touche personne ne rend aucune erreur. Et
+  // `IDENT_PUBLIC` est le cas qui compte vraiment — si le chemin d'inscription créait un
+  // jour l'utilisateur `auth` avant d'échouer, l'orphelin s'accumulerait EN PRODUCTION.
+  const { data: residus, error: erreurResidus } = await admin
+    .from('profils')
+    .select('id')
+    .in('identifiant', [IDENT_ADMIN, IDENT_PUBLIC])
+  if (erreurResidus) throw new Error(`lecture des profils résiduels impossible : ${erreurResidus.message}`)
+  expect(residus).toHaveLength(0)
 })
 
 test('en production, un refus de création affiche son motif NOMMÉ et la saisie survit ENTIÈREMENT', async ({
@@ -3591,21 +4974,50 @@ test('en production, un refus de création affiche son motif NOMMÉ et la saisie
   await selectStatut.selectOption(valeurStatut!)
   await page.getByLabel('Note').fill('note qui doit survivre')
 
-  // Le refus : un faiseur de disciple ARCHIVÉ, choisi par une requête forgée sur le champ
-  // caché — le sélecteur ne propose que des membres actifs, et c'est justement ce que
-  // `definir_arbre` défend par ailleurs.
-  await page.locator('input[name="faiseurDeDiscipleId"]').evaluate((element, valeur) => {
-    const champ = element as HTMLInputElement
-    champ.value = valeur
-  }, idFaiseurArchive)
+  /*
+    ═══ LE REFUS : UN FAISEUR DE DISCIPLE ARCHIVÉ — CHOISI PAR L'INTERFACE, PUIS ARCHIVÉ ═══
+
+    NE PAS FORGER LE CHAMP CACHÉ. `src/app/membres/selecteur-membre.tsx` rend
+    `<input type="hidden" name={nom} value={valeur?.id ?? ''} />` : ce champ est CONTRÔLÉ,
+    et toute passe de rendu restaure `''`. Écrire `champ.value = …` par `evaluate` fait
+    dépendre le test d'une course entre l'écriture DOM et le prochain rendu React : si la
+    course tourne mal, la valeur repart vide, **la création RÉUSSIT**, l'assertion tombe, et
+    l'échec est attribué au mauvais mécanisme — on croirait le message perdu alors que le
+    refus n'a jamais eu lieu.
+
+    On choisit donc le faiseur PAR L'ÉCRAN, comme un utilisateur (le sélecteur ne propose
+    que des membres actifs, d'où un faiseur créé actif), et on l'archive EN BASE juste avant
+    de soumettre. Le refus vient alors de la même barrière — `public.definir_arbre` et son
+    déclencheur —, sans dépendre du cycle de rendu.
+  */
+  const zoneFaiseur = page.locator('div').filter({ hasText: /^Faiseur de disciple/ }).last()
+  await zoneFaiseur.getByPlaceholder('Chercher par nom ou prénom').fill(`${PREFIXE}-faiseur`)
+  await page.getByRole('button', { name: `Test ${PREFIXE}-faiseur` }).click()
+  // Le champ caché porte bien l'identifiant : sans cette assertion, l'archivage ci-dessous
+  // porterait sur une fiche que le formulaire n'a jamais retenue, et le refus attendu
+  // n'aurait aucune raison de se produire.
+  await expect(page.locator('input[name="faiseurDeDiscipleId"]')).toHaveValue(idFaiseurArchive)
+
+  const { error: erreurArchivage } = await admin
+    .from('membres')
+    .update({ etat: 'archive' })
+    .eq('id', idFaiseurArchive)
+    .select('id')
+  expect(erreurArchivage, "l'archivage de préparation a échoué : le refus attendu ne peut pas se produire").toBeNull()
 
   await page.getByRole('button', { name: 'Créer la fiche' }).click()
 
   // ═══ PREUVE N°7 : LE MOTIF NOMMÉ ATTEINT L'ÉCRAN ═══
-  const alerte = page.getByRole('alert')
+  // Sélecteur PORTÉ : Next.js pose son propre `<div role="alert">` sur chaque page, et un
+  // `getByRole('alert')` nu en trouverait deux — violation du mode strict.
+  const alerte = page.locator(ALERTE)
   await expect(alerte).toHaveText(MESSAGE_FAISEUR_ARCHIVE)
-  // Et ni le digest React, ni le texte statique de la limite d'erreur.
+  // Ni le digest React (impossible sur cet écran, sonde conservée par précaution)…
   await expect(page.locator('body')).not.toContainText(FRAGMENT_DIGEST_REACT)
+  // …NI le titre de la limite d'erreur, qui est LE symptôme réel : s'il apparaissait, une
+  // exception aurait remonté à `src/app/error.tsx` au lieu d'un refus RETOURNÉ, et le
+  // motif nommé serait perdu.
+  await expect(page.locator('body')).not.toContainText(FRAGMENT_LIMITE_ERREUR)
 
   // ═══ PREUVE N°6 : CHAQUE CHAMP PORTE ENCORE SA VALEUR ═══
   await expect(page.getByLabel('Prénom (obligatoire)', { exact: true })).toHaveValue(valeurs.prenom)
@@ -3666,7 +5078,10 @@ test('en production, un code d’inscription invalide laisse les HUIT champs rem
 
   const valeurs = {
     code: 'code-manifestement-invalide',
-    identifiant: `zz.prod.${crypto.randomUUID().slice(0, 8)}`,
+    // DÉTERMINISTE, pas tiré par exécution : voir la déclaration d'`IDENT_PUBLIC`. C'est
+    // la seule prise par laquelle le nettoyage peut retrouver un compte que ce chemin
+    // aurait créé avant d'échouer.
+    identifiant: IDENT_PUBLIC,
     motDePasse: 'MotDePasseAssezLong123',
     prenom: 'Publique',
     nom: `${PREFIXE}-publique`,
@@ -3677,7 +5092,11 @@ test('en production, un code d’inscription invalide laisse les HUIT champs rem
   await page.getByLabel('Identifiant choisi').fill(valeurs.identifiant)
   await page.getByLabel('Mot de passe choisi').fill(valeurs.motDePasse)
   await page.getByLabel('Prénom').fill(valeurs.prenom)
-  await page.getByLabel('Nom').fill(valeurs.nom)
+  // `{ exact: true }` OBLIGATOIRE : `getByLabel` non exact cherche une SOUS-CHAÎNE et est
+  // insensible à la casse — « nom » est contenu dans « Prénom », et ce formulaire rend les
+  // deux. Sans `exact`, le locateur en trouve DEUX et viole le mode strict. Le dépôt le
+  // sait déjà : `tests/e2e/inscription.spec.ts` l'écrit ainsi depuis la 2b.
+  await page.getByLabel('Nom', { exact: true }).fill(valeurs.nom)
   await page.getByLabel('Téléphone').fill(valeurs.telephone)
   await page.getByLabel('Ville').fill(valeurs.ville)
 
@@ -3691,25 +5110,34 @@ test('en production, un code d’inscription invalide laisse les HUIT champs rem
 
   await page.getByRole('button', { name: "S'inscrire" }).click()
 
-  // Le refus indifférencié s'affiche…
-  await expect(page.getByRole('alert')).toBeVisible()
+  // Le refus indifférencié s'affiche… (sélecteur PORTÉ : Next.js pose son propre
+  // `<div role="alert" id="__next-route-announcer__">` sur chaque page, et un
+  // `getByRole('alert')` nu en trouverait deux — violation du mode strict.)
+  await expect(page.locator(ALERTE)).toBeVisible()
   await expect(page.locator('body')).not.toContainText(FRAGMENT_DIGEST_REACT)
+  // Et surtout PAS la limite d'erreur : `sInscrire` RETOURNE son refus, elle ne le lève
+  // pas. C'est ce texte-là, et non le digest, qui apparaîtrait si elle levait.
+  await expect(page.locator('body')).not.toContainText(FRAGMENT_LIMITE_ERREUR)
 
   // …ET LES HUIT CHAMPS SONT ENCORE LÀ.
   await expect(page.getByLabel("Code d'inscription")).toHaveValue(valeurs.code)
   await expect(page.getByLabel('Identifiant choisi')).toHaveValue(valeurs.identifiant)
   await expect(page.getByLabel('Mot de passe choisi')).toHaveValue(valeurs.motDePasse)
   await expect(page.getByLabel('Prénom')).toHaveValue(valeurs.prenom)
-  await expect(page.getByLabel('Nom')).toHaveValue(valeurs.nom)
+  await expect(page.getByLabel('Nom', { exact: true })).toHaveValue(valeurs.nom)
   await expect(page.getByLabel('Téléphone')).toHaveValue(valeurs.telephone)
   await expect(page.getByLabel('Ville')).toHaveValue(valeurs.ville)
   if (valeurAntenne) {
     await expect(antenne).toHaveValue(valeurAntenne)
   }
 
-  // Et AUCUN compte n'a été créé : le code était invalide.
-  const { data } = await admin.from('profils').select('id').eq('identifiant', valeurs.identifiant)
-  expect(data ?? []).toHaveLength(0)
+  // Et AUCUN compte n'a été créé : le code était invalide. `error` VÉRIFIÉ, et assertion
+  // SANS `?? []` : sur échec de lecture, `data` vaut `null`, et `data ?? []` convertirait
+  // la panne en « aucun compte créé » — l'assertion de sécurité deviendrait un contrôle
+  // qui ne peut plus échouer.
+  const { data, error } = await admin.from('profils').select('id').eq('identifiant', valeurs.identifiant)
+  if (error) throw new Error(`lecture des profils impossible : ${error.message}`)
+  expect(data).toHaveLength(0)
 })
 ```
 
@@ -3730,8 +5158,8 @@ npx tsc --noEmit && npm run lint && npm test && npm run test:rls && npm run test
 ```
 
 **Si l'une de ces suites échoue, ÉTABLIR QUEL COMMIT L'A CASSÉE par un rejeu en
-isolation**, et le consigner. Les commits du volet 1 sont ceux des Tasks 1, 2+3+4, 5, 6 et
-7.
+isolation**, et le consigner. Les commits du volet 1 sont ceux des Tasks 1, **1 bis**,
+2+3+4, 5, 6 et 7.
 
 - [ ] **Étape 4 : commit**
 
@@ -3852,11 +5280,19 @@ export function libelleFiche(
 
 - [ ] **Étape 2 : `cheminAvecLibelles` dans `src/lib/domaine/arbre.ts`**
 
-À la **fin** du fichier :
+**L'`import` va EN TÊTE du fichier, avec les autres ; le reste va à la FIN.** L'écrire en
+bas serait valide en ESM — les `import` sont hissés — mais la règle `import/first`
+d'ESLint le signalerait, et `npm run lint` est une porte de cette tâche.
+
+Import à ajouter **en tête** :
 
 ```ts
 import { libelleFiche, LIBELLE_FICHE_NON_CONSULTABLE } from './membre'
+```
 
+Puis, à la **fin** du fichier :
+
+```ts
 /** Un maillon du chemin, prêt à afficher. */
 export type MaillonNomme = { id: string; libelle: string }
 
@@ -3867,7 +5303,10 @@ export type MaillonNomme = { id: string; libelle: string }
  * La FORME du chemin — la suite d'identifiants — est lue AFFRANCHIE DE LA RLS, par
  * `public.ancetres_membre` (D19, `security definer`, réservée à `service_role`). Une
  * remontée soumise à la RLS s'arrêterait sur un ancêtre invisible et ferait MENTIR l'écran
- * sur la profondeur. Les NOMS, eux, sont lus SOUS RLS, par `membresBrefsParIds`.
+ * sur la profondeur. Les NOMS, eux, sont lus SOUS RLS **et filtrés `etat = 'actif'`
+ * explicitement**, par l'appelant — sans ce filtre, l'exclusion des fiches non actives
+ * serait déléguée à la RLS, et un administrateur lirait un nom là où un compte ordinaire
+ * lit « Fiche non consultable ».
  *
  * ═══ UN MAILLON ILLISIBLE GARDE SA PLACE ═══
  * Un identifiant présent dans la forme et absent de la lecture sous RLS devient
@@ -4054,13 +5493,26 @@ elle est prouvée **sans base**, et `/membres/[id]` rend exactement ce qu'il ren
     supabase: SupabaseClient,
     options?: { page?: number; taillePage?: number },
   ): Promise<PageLue<MembreBref>>
+  export async function nomsMaillonsActifs(
+    supabase: SupabaseClient,
+    ids: readonly string[],
+  ): Promise<MembreBref[]>
+  export async function pageContenantDisciple(
+    supabase: SupabaseClient,
+    parentId: string,
+    discipleId: string,
+    taillePage: number,
+  ): Promise<number>
 
   // src/lib/donnees/arbre.ts — `server-only`
   export async function disciplesPage(membreId: string, page: number): Promise<PageLue<MembreBref>>
   export async function racinesPage(page: number): Promise<PageLue<MembreBref>>
+  export async function nomsMaillonsChemin(ids: readonly string[]): Promise<MembreBref[]>
+  export async function pageDuDisciple(parentId: string, discipleId: string): Promise<number>
   ```
-  Consommées par la Task 11 (`disciplesPage`) et la Task 12 (`racinesPage`), et par la
-  Task 13 (les deux **cœurs**, avec une taille de page abaissée).
+  Consommées par la Task 11 (`disciplesPage`, `nomsMaillonsChemin`, `pageDuDisciple`) et la
+  Task 12 (`racinesPage`), et par la Task 13 (les **cœurs**, avec une taille de page
+  abaissée).
 
 ## ⚠️ `disciplesDe` N'EST NI RÉUTILISÉE NI MODIFIÉE (D94). NE PAS LA « CORRIGER ».
 
@@ -4291,6 +5743,149 @@ export async function racinesParPage(
     total: totalObligatoire(count, 'racinesParPage'),
   }
 }
+
+/**
+ * Noms des maillons d'un chemin, filtrés `etat = 'actif'` EXPLICITEMENT (D93).
+ *
+ * ═══ POURQUOI CETTE FONCTION EXISTE, ET POURQUOI ELLE N'EST PAS `membresBrefsParIds` ═══
+ *
+ * `membresBrefsParIds` (`src/lib/donnees/membres.ts`) ne porte AUCUN filtre d'état et lit
+ * sous RLS. Or la politique `membres_lecture` délègue à `prive.peut_lire_membre`, qui ouvre
+ * TOUTE fiche à l'administrateur. Employée pour nommer les maillons d'un chemin, elle
+ * produirait donc deux arbres différents : un administrateur lirait le NOM d'un maillon
+ * archivé ou en attente, là où un compte ordinaire lit « Fiche non consultable ». L'écran,
+ * lui, annonce que seuls les membres actifs y figurent — il mentirait.
+ *
+ * C'est exactement ce que D93 refuse : un filtre explicite est une RÈGLE ÉNONCÉE, un trou
+ * creusé par la RLS est un MENSONGE. Ici, la règle est énoncée POUR TOUS LES RÔLES, et
+ * l'exclusion ne dépend plus du lecteur.
+ *
+ * ═══ ET `membresBrefsParIds` N'EST PAS MODIFIÉE ═══
+ * Elle a CINQ autres appelants (`ael/seances/[id]`, `demandes`, `membres/[id]/arbre` —
+ * action et page —, `membres/[id]`), dont plusieurs doivent au contraire nommer des fiches
+ * NON actives. Lui ajouter un filtre les casserait en silence. Même raison qui protège
+ * `disciplesDe` en D94 : deux besoins différents, deux fonctions.
+ *
+ * ═══ CE QU'ELLE NE FAIT PAS ═══
+ * Elle ne complète pas les trous. Un identifiant absent du résultat — parce que la fiche
+ * n'est pas active, ou parce que la RLS la cache — est simplement ABSENT. C'est
+ * `cheminAvecLibelles` (couche domaine) qui le rend « Fiche non consultable », À SA PLACE
+ * dans le chemin : l'effacer ferait mentir l'écran sur la profondeur.
+ *
+ * Découpée en lots de 500, comme `membresBrefsParIds` : `.in('id', lot)` sur la clé
+ * primaire ne peut jamais rendre plus de lignes que `lot.length`, donc aucun `.range()`
+ * n'est nécessaire — mais un `ids` un jour plus long que `max_rows` (1000) resterait
+ * tronqué par PostgREST sans ce découpage.
+ */
+export async function nomsMaillonsActifs(
+  supabase: SupabaseClient,
+  ids: readonly string[],
+): Promise<MembreBref[]> {
+  if (ids.length === 0) {
+    return []
+  }
+  const TAILLE_LOT = 500
+  const resultat: MembreBref[] = []
+  for (let debut = 0; debut < ids.length; debut += TAILLE_LOT) {
+    const lot = ids.slice(debut, debut + TAILLE_LOT)
+    const { data, error } = await supabase
+      .from('membres')
+      .select('id, nom, prenom')
+      .in('id', lot)
+      .eq('etat', 'actif')
+    // Un échec de lecture ne doit pas être indistinguable d'un maillon illisible : rendre
+    // `[]` ferait afficher « Fiche non consultable » sur TOUT le chemin, et personne ne
+    // saurait que la base est en panne.
+    if (error) {
+      throw new Error(`Lecture des maillons du chemin impossible : ${error.message}`)
+    }
+    resultat.push(
+      ...(data ?? []).map((ligne) => ({
+        id: ligne.id as string,
+        nom: ligne.nom as string,
+        prenom: ligne.prenom as string,
+      })),
+    )
+  }
+  return resultat
+}
+
+/**
+ * Échappe une valeur destinée à une expression `or(...)` de PostgREST.
+ *
+ * NON DÉCORATIF. Dans `nom.lt.Dupont`, la valeur est lue jusqu'à la prochaine virgule ou
+ * parenthèse : un nom contenant `,`, `(`, `)`, `.`, `"` ou `\` — « Dupont, Jean »,
+ * « O'Neill (père) » — casserait l'expression, ou pire, la ferait porter sur autre chose
+ * que ce qu'on croit. PostgREST accepte une valeur entre GUILLEMETS DOUBLES, dans lesquels
+ * `"` et `\` s'échappent par `\`. On cite donc TOUJOURS, sans se demander si c'est
+ * nécessaire : le jour où ça le devient, personne ne s'en apercevra autrement.
+ */
+function citerValeurPostgrest(valeur: string): string {
+  return `"${valeur.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+}
+
+/**
+ * Numéro de la page de `disciplesParPage(parentId, …)` qui CONTIENT `discipleId`.
+ *
+ * ═══ CE QUE CETTE FONCTION EMPÊCHE ═══
+ * Sans elle, la recherche de l'écran `/arborescence` chargerait TOUJOURS la page 1 de
+ * chaque maillon du chemin. Au premier maillon qui a plus de `TAILLE_PAGE_DISCIPLES`
+ * disciples, si le maillon suivant n'est pas dans sa première page, la branche
+ * s'arrêterait là : la personne cherchée ne serait JAMAIS rendue dans l'arbre, rien ne la
+ * mettrait en évidence, et AUCUN message ne signalerait l'interruption — pendant que le
+ * fil d'Ariane, lui, continuerait d'afficher le chemin complet. Deux vérités
+ * contradictoires sur le même écran.
+ *
+ * ═══ COMMENT ═══
+ * Le tri de `disciplesParPage` est `(nom, prenom, id)`. Le RANG du disciple visé est donc
+ * le NOMBRE de ses frères actifs qui le précèdent strictement dans cet ordre, et sa page
+ * est `floor(rang / taillePage) + 1`. Un seul aller-retour, un `count` exact, aucune ligne
+ * ramenée.
+ *
+ * ═══ CE QU'ELLE RÉPOND QUAND ELLE NE SAIT PAS ═══
+ * Si le disciple visé n'est pas lisible ou n'est pas actif, elle rend `1` — elle ne
+ * prétend pas savoir où il est. **L'appelant ne doit donc PAS traiter son résultat comme
+ * une garantie** : c'est à lui de constater, après chargement, que le maillon suivant
+ * figure bien dans la page obtenue, et de le DIRE à l'écran sinon.
+ */
+export async function pageContenantDisciple(
+  supabase: SupabaseClient,
+  parentId: string,
+  discipleId: string,
+  taillePage: number,
+): Promise<number> {
+  verifierTaillePage(taillePage, 'pageContenantDisciple')
+
+  const { data: cible, error: erreurCible } = await supabase
+    .from('membres')
+    .select('nom, prenom')
+    .eq('id', discipleId)
+    .eq('etat', 'actif')
+    .maybeSingle()
+  if (erreurCible) {
+    throw new Error(`Lecture du disciple visé impossible : ${erreurCible.message}`)
+  }
+  if (!cible) {
+    return 1
+  }
+
+  const nom = citerValeurPostgrest(cible.nom as string)
+  const prenom = citerValeurPostgrest(cible.prenom as string)
+  const { count, error } = await supabase
+    .from('membres')
+    .select('id', { count: 'exact', head: true })
+    .eq('faiseur_de_disciple_id', parentId)
+    .eq('etat', 'actif')
+    .or(
+      `nom.lt.${nom},` +
+        `and(nom.eq.${nom},prenom.lt.${prenom}),` +
+        `and(nom.eq.${nom},prenom.eq.${prenom},id.lt.${discipleId})`,
+    )
+  if (error) {
+    throw new Error(`Comptage du rang du disciple impossible : ${error.message}`)
+  }
+  return Math.floor(totalObligatoire(count, 'pageContenantDisciple') / taillePage) + 1
+}
 ```
 
 - [ ] **Étape 2 : les enveloppes `server-only` dans `src/lib/donnees/arbre.ts`**
@@ -4298,7 +5893,13 @@ export async function racinesParPage(
 Ajouter en tête du fichier, à la suite des imports existants :
 
 ```ts
-import { disciplesParPage, racinesParPage } from './arbre-lots'
+import {
+  disciplesParPage,
+  nomsMaillonsActifs,
+  pageContenantDisciple,
+  racinesParPage,
+  TAILLE_PAGE_DISCIPLES,
+} from './arbre-lots'
 import type { PageLue } from './pagination'
 ```
 
@@ -4324,6 +5925,35 @@ export async function disciplesPage(membreId: string, page: number): Promise<Pag
 export async function racinesPage(page: number): Promise<PageLue<MembreBref>> {
   const supabase = await clientServeur()
   return racinesParPage(supabase, { page })
+}
+
+/**
+ * Noms des maillons d'un chemin, filtrés `etat = 'actif'` EXPLICITEMENT (D93).
+ *
+ * DISTINCTE de `membresBrefsParIds` (`src/lib/donnees/membres.ts`), qui n'a AUCUN filtre
+ * d'état et qu'on ne modifie PAS : elle a cinq autres appelants, dont plusieurs doivent au
+ * contraire nommer des fiches non actives. Sans ce filtre explicite, l'exclusion des
+ * fiches `archive` et `en_attente` du chemin serait entièrement déléguée à la RLS — un
+ * administrateur verrait le NOM là où un compte ordinaire lit « Fiche non consultable »,
+ * et l'écran mentirait sur sa propre légende.
+ */
+export async function nomsMaillonsChemin(ids: readonly string[]): Promise<MembreBref[]> {
+  const supabase = await clientServeur()
+  return nomsMaillonsActifs(supabase, ids)
+}
+
+/**
+ * Numéro de la page de disciples de `parentId` qui CONTIENT `discipleId`, à la taille de
+ * page réelle de l'écran.
+ *
+ * Sans elle, la recherche de `/arborescence` chargerait toujours la page 1 de chaque
+ * maillon, et la branche s'arrêterait au premier maillon à plus de
+ * `TAILLE_PAGE_DISCIPLES` disciples — la personne cherchée disparaîtrait de son propre
+ * chemin, SANS AUCUN SIGNAL.
+ */
+export async function pageDuDisciple(parentId: string, discipleId: string): Promise<number> {
+  const supabase = await clientServeur()
+  return pageContenantDisciple(supabase, parentId, discipleId, TAILLE_PAGE_DISCIPLES)
 }
 ```
 
@@ -4360,9 +5990,11 @@ preuves de pagination et de tri total sont écrites en **Task 13**.
 - Créer : `src/app/arborescence/actions.ts`
 
 **Interfaces :**
-- Consomme : `disciplesPage`, `TAILLE_PAGE_DISCIPLES` (Task 10) ; `ancetresDeMembre`
-  (existant) ; `membresBrefsParIds` (existant) ; `cheminAvecLibelles`, `MaillonNomme`
-  (Task 9) ; `exigerProfilActif` (existant).
+- Consomme : `disciplesPage`, `nomsMaillonsChemin`, `pageDuDisciple`,
+  `TAILLE_PAGE_DISCIPLES` (Task 10) ; `ancetresDeMembre` (existant) ;
+  `cheminAvecLibelles`, `MaillonNomme` (Task 9) ; `exigerProfilActif` (existant).
+  **`membresBrefsParIds` n'est PAS consommée par ce module**, et son absence est un choix
+  écrit : elle ne porte aucun filtre d'état.
 - Produit :
   ```ts
   export type PageDisciples = {
@@ -4373,8 +6005,10 @@ preuves de pagination et de tri total sont écrites en **Task 13**.
   }
   export async function chargerDisciples(membreId: string, page: number): Promise<PageDisciples>
   export async function chargerChemin(membreId: string): Promise<MaillonNomme[]>
+  export async function pageContenant(parentId: string, discipleId: string): Promise<number>
   export const MESSAGE_ECHEC_LECTURE_NOEUD: string
   export const MESSAGE_ECHEC_LECTURE_CHEMIN: string
+  export const MESSAGE_CHEMIN_PARTIEL: string
   ```
   Consommées par la Task 12.
 
@@ -4423,6 +6057,20 @@ export const MESSAGE_ECHEC_LECTURE_NOEUD =
 
 export const MESSAGE_ECHEC_LECTURE_CHEMIN =
   "Le chemin de cette personne dans l'arbre n'a pas pu être chargé. Réessayez ; si le problème persiste, contactez un administrateur technique."
+
+/**
+ * Le chemin a été chargé, mais l'arbre n'a pas pu être déplié JUSQU'À la personne visée.
+ *
+ * ═══ POURQUOI CE MESSAGE EXISTE, ET POURQUOI SON ABSENCE SERAIT GRAVE ═══
+ * L'écran déplie le chemin maillon par maillon, en chargeant pour chacun la page de
+ * disciples qui contient le maillon suivant. Si ce calcul ne peut pas aboutir — maillon
+ * intermédiaire devenu illisible ou non actif, branche modifiée entre les deux lectures —,
+ * la personne cherchée n'apparaît PAS dans l'arbre, alors que le fil d'Ariane, lui,
+ * continue d'afficher son chemin complet. Deux vérités contradictoires sur le même écran :
+ * exactement ce que cet écran refuse ailleurs. Le dire est le minimum.
+ */
+export const MESSAGE_CHEMIN_PARTIEL =
+  "Le chemin de cette personne est affiché ci-dessus, mais l'arbre n'a pas pu être déplié jusqu'à elle. Ouvrez sa fiche depuis le chemin, ou dépliez la branche à la main."
 ```
 
 - [ ] **Étape 2 : les actions**
@@ -4433,9 +6081,13 @@ Créer `src/app/arborescence/actions.ts` :
 'use server'
 
 import { cheminAvecLibelles, type MaillonNomme } from '@/lib/domaine/arbre'
-import { ancetresDeMembre, disciplesPage } from '@/lib/donnees/arbre'
+import {
+  ancetresDeMembre,
+  disciplesPage,
+  nomsMaillonsChemin,
+  pageDuDisciple,
+} from '@/lib/donnees/arbre'
 import { TAILLE_PAGE_DISCIPLES } from '@/lib/donnees/arbre-lots'
-import { membresBrefsParIds } from '@/lib/donnees/membres'
 import { exigerProfilActif } from '@/lib/securite/garde'
 
 /**
@@ -4503,37 +6155,61 @@ export async function chargerDisciples(membreId: string, page: number): Promise<
  *
  * ═══ DEUX LECTURES, DEUX RÉGIMES, ET C'EST LE POINT LE PLUS DÉLICAT DE L'ÉCRAN ═══
  *
- * | Étape | Lecture | Sous RLS ? |
- * |---|---|---|
- * | la FORME du chemin | `public.ancetres_membre` via `clientAdmin()` | NON (D19) |
- * | les NOMS | `membresBrefsParIds` via `clientServeur()` | OUI |
- * | l'AFFICHAGE de chaque maillon | `libelleFiche` (D100) | — |
+ * | Étape | Lecture | Sous RLS ? | Filtre d'état ? |
+ * |---|---|---|---|
+ * | la FORME du chemin | `public.ancetres_membre`, `security definer` | NON (D19) | aucun |
+ * | les NOMS | `nomsMaillonsChemin` via `clientServeur()` | OUI | `etat = 'actif'`, EXPLICITE |
+ * | l'AFFICHAGE de chaque maillon | `libelleFiche` (D100) | — | — |
  *
- * AUCUN NOM LU AFFRANCHI DE LA RLS N'ATTEINT JAMAIS L'ÉCRAN : `ancetresDeMembre` ne rend
- * que des IDENTIFIANTS, et les noms sont relus sous RLS, comme partout ailleurs. Un
+ * AUCUN NOM LU AFFRANCHI DE LA RLS N'ATTEINT JAMAIS L'ÉCRAN : la lecture affranchie ne
+ * rend que des IDENTIFIANTS, et les noms sont relus sous RLS, comme partout ailleurs. Un
  * maillon que l'appelant ne peut pas lire devient « Fiche non consultable », À SA PLACE
  * dans le chemin, jamais effacé ni sauté — l'effacer ferait mentir l'écran sur la
  * profondeur et pourrait détacher toute la descendance.
  *
- * ═══ L'INVARIANT QUE TROIS DÉCLENCHEURS TIENNENT ET QUE PERSONNE N'AVAIT ÉCRIT (D99) ═══
+ * ═══ LE FILTRE `etat = 'actif'` EST EXPLICITE ICI AUSSI, ET POUR TOUS LES RÔLES (D93) ═══
  *
- *   AUCUN MEMBRE À L'ÉTAT `actif` N'A D'ANCÊTRE À L'ÉTAT `archive`.
+ * `nomsMaillonsChemin` porte un `.eq('etat', 'actif')` ÉCRIT. Ce n'est pas une précaution
+ * décorative : la politique `membres_lecture` délègue à `prive.peut_lire_membre`, qui
+ * ouvre TOUTE fiche à l'administrateur. Nommer les maillons par une lecture sans filtre
+ * d'état produirait donc DEUX ARBRES : l'administrateur lirait le nom d'un maillon
+ * archivé ou en attente, là où un compte ordinaire lit « Fiche non consultable » — et
+ * l'écran, qui annonce que seuls les membres actifs y figurent, mentirait à l'un des deux.
+ * Un filtre explicite est une RÈGLE ÉNONCÉE ; un trou creusé par la RLS est un MENSONGE.
+ * NE JAMAIS remplacer cet appel par une lecture sans filtre d'état pour « simplifier ».
  *
- * Maintenu par trois barrières, chacune fermant une porte différente :
- *  - `membres_archivage_faiseur_de_disciple` (20260814120000) refuse d'archiver qui a des
- *    disciples actifs ;
- *  - `membres_desarchivage_faiseur_archive` (20260814140000) est `before update of etat` et
- *    couvre TOUTE transition vers `actif`, y compris `en_attente -> actif`, donc la
- *    validation d'une demande ;
- *  - `membres_faiseur_de_disciple_archive` (20260814150000) refuse de rattacher à un
- *    faiseur archivé, à l'`insert` COMME à l'`update`.
+ * ═══ L'INVARIANT QUE TROIS DÉCLENCHEURS TIENNENT, ET CE QU'IL COUVRE EXACTEMENT (D99) ═══
  *
- * Conséquence : un membre archivé ne peut jamais être un maillon INTERMÉDIAIRE entre une
- * racine et un membre actif. Le cas « Fiche non consultable » est donc, par construction,
- * INATTEIGNABLE pour un membre actif. IL EST TRAITÉ QUAND MÊME : c'est une DÉFENSE, pas un
- * chemin normal, et cet écran doit dégrader proprement si l'invariant tombait un jour —
- * plutôt que de mentir sur la profondeur. L'invariant est écrit ICI parce qu'il n'était
- * écrit NULLE PART, et qu'une modification future doit savoir ce qu'elle casserait.
+ *   AUCUN MEMBRE `actif` N'A D'ANCÊTRE QUI NE SOIT PAS `actif`.
+ *
+ * `public.etat_membre` a TROIS valeurs — `en_attente`, `actif`, `archive` — et l'énoncé
+ * porte bien sur les trois : l'arborescence exclut `en_attente` EXACTEMENT comme
+ * `archive`, et un maillon `en_attente` rendrait toute sa descendance active
+ * INATTEIGNABLE depuis la liste des racines. Trois barrières le tiennent, chacune fermant
+ * une porte différente :
+ *  - `membres_archivage_faiseur_de_disciple` (20260814120000, élargie en phase 5) refuse
+ *    à un membre de QUITTER l'état actif tant qu'il a des disciples actifs — vers
+ *    `archive` comme vers `en_attente` ;
+ *  - `membres_desarchivage_faiseur_archive` (20260814140000, élargie en phase 5) est
+ *    `before update of etat` et couvre TOUTE transition vers `actif`, y compris
+ *    `en_attente -> actif`, donc la validation d'une demande ; elle refuse un faiseur qui
+ *    n'est pas actif ;
+ *  - `membres_faiseur_de_disciple_archive` (20260814150000, élargie en phase 5) refuse de
+ *    rattacher à un faiseur qui n'est pas actif, à l'`insert` COMME à l'`update`.
+ *
+ * Les deux gardes qui lisent l'état du faiseur le lisent SOUS VERROU DE LIGNE
+ * (`for share`), et `public.definir_arbre` aussi : sans cela, un rattachement et un
+ * archivage concurrents ne se voyaient pas et validaient tous les deux — la classe de
+ * défaut que la 1c a jugée inacceptable.
+ *
+ * ═══ ET POURTANT « FICHE NON CONSULTABLE » EST TRAITÉ, ET CE N'EST PAS UNE REDONDANCE ═══
+ *
+ * Cet écran ne s'appuie PAS sur l'invariant pour être correct. Ce n'est pas une défense
+ * théorique : la RLS, elle, ne connaît pas cet invariant, et un compte ordinaire ne lit de
+ * toute façon pas toutes les fiches. Le filtre explicite ci-dessus et le repli
+ * « Fiche non consultable » rendent l'écran juste QUE L'INVARIANT TIENNE OU NON — c'est la
+ * seule parade qui ne dépende pas d'une propriété maintenue ailleurs, par du code que ce
+ * module ne relit jamais.
  *
  * Le chemin est borné à 64 niveaux par `ancetres_membre` elle-même — borne posée en 1c et
  * qualifiée de « seule protection restante si une donnée corrompue franchissait un jour
@@ -4548,33 +6224,95 @@ export async function chargerChemin(membreId: string): Promise<MaillonNomme[]> {
   const ancetres = await ancetresDeMembre(membreId)
   const identifiants = [...ancetres].reverse().concat(membreId)
 
-  // Les NOMS, sous RLS. `membresBrefsParIds` découpe en lots de 500 : le chemin est borné
-  // à 64, donc un seul lot — mais on ne s'appuie pas sur ce raisonnement, la fonction
-  // partagée porte déjà la garantie.
-  const brefs = await membresBrefsParIds(identifiants)
+  // Les NOMS, sous RLS ET filtrés `etat = 'actif'` explicitement. Découpage en lots de
+  // 500 : le chemin est borné à 64, donc un seul lot — mais on ne s'appuie pas sur ce
+  // raisonnement, la fonction partagée porte déjà la garantie.
+  const brefs = await nomsMaillonsChemin(identifiants)
 
   return cheminAvecLibelles(identifiants, brefs)
+}
+
+/**
+ * Numéro de la page de disciples de `parentId` qui CONTIENT `discipleId` (D97).
+ *
+ * ═══ LE GARDE EST LA PREMIÈRE INSTRUCTION (D103) ═══
+ * Toute fonction exportée d'un fichier `'use server'` est appelable depuis le navigateur,
+ * Y COMPRIS quand elle ne fait que LIRE et ne rend qu'un nombre. Un numéro de page est
+ * déjà une information sur l'arbre : combien de personnes précèdent celle-là sous ce
+ * faiseur. Précédent exact et commenté : `src/app/membres/recherche-action.ts` (1c).
+ *
+ * ═══ POURQUOI L'ÉCRAN EN A BESOIN ═══
+ * La recherche déplie le chemin maillon par maillon. Sans ce calcul, elle chargerait
+ * toujours la PAGE 1 de chaque maillon : au premier maillon à plus de
+ * `TAILLE_PAGE_DISCIPLES` disciples dont le suivant n'est pas dans la première page, la
+ * branche s'arrêterait là. La personne cherchée ne serait jamais rendue, rien ne la
+ * mettrait en évidence, et AUCUN message ne signalerait l'interruption — pendant que le
+ * fil d'Ariane continuerait d'afficher le chemin complet.
+ *
+ * ═══ ELLE NE GARANTIT RIEN, ET L'APPELANT DOIT LE SAVOIR ═══
+ * Si le disciple visé n'est pas lisible ou n'est pas actif, elle rend `1` : elle ne
+ * prétend pas savoir où il est. C'est à l'appelant de constater, après chargement, que le
+ * maillon suivant figure bien dans la page obtenue, et de le DIRE à l'écran sinon.
+ */
+export async function pageContenant(parentId: string, discipleId: string): Promise<number> {
+  await exigerProfilActif()
+  return pageDuDisciple(parentId, discipleId)
 }
 ```
 
 - [ ] **Étape 3 : vérifier le vide d'écriture, à la main, AVANT que la Task 13 ne l'automatise**
 
+## ⚠️ LE BALAYAGE PORTE SUR LE CODE, PAS SUR LES COMMENTAIRES — ET SI CE BALAYAGE EST ROUGE, LA RÉPONSE N'EST **JAMAIS** D'ÉLARGIR OU D'ASSOUPLIR LE MOTIF
+
+Ce module **PARLE** de la clé de service — il explique en commentaire pourquoi il ne
+l'emploie pas — **sans jamais l'appeler**. Un balayage qui confond une occurrence de code
+et une occurrence de commentaire ne prouve rien de plus qu'une **interdiction de
+vocabulaire**, et il rendrait rouge un fichier parfaitement correct.
+
+**Le danger n'est pas la ligne rouge : c'est la réparation naturelle.** Devant un motif qui
+« trouve » quelque chose dans un fichier qui n'écrit rien, la tentation est de rétrécir le
+motif — ou de supprimer le commentaire qui porte l'explication la plus importante du
+module. Dans les deux cas, la barrière D92 sortirait **dégradée de sa propre preuve**.
+
+**RÈGLE, sans exception :** le motif recherché ne se touche pas. Si le balayage rend une
+ligne, on lit la ligne. Si c'est du **code**, on retire le code. Si c'est un **commentaire**
+que le filtre ci-dessous n'a pas écarté, on corrige le **filtre**, jamais le motif.
+
+```bash
+grep -nE "clientAdmin|\.insert\(|\.update\(|\.delete\(|\.upsert\(|\.rpc\(" src/app/arborescence/ \
+  | grep -vE ':[[:space:]]*(\*|//|/\*)'
+```
+
+Le second `grep` écarte les lignes dont le premier caractère non blanc est `*`, `//` ou
+`/*` — c'est-à-dire les lignes de commentaire et les continuations de bloc.
+
+**Attendu : aucune ligne.** `ancetresDeMembre` appelle bien la clé de service et un `rpc`,
+mais **dans `src/lib/donnees/arbre.ts`**, pas ici — c'est exactement la frontière que ce
+balayage doit voir.
+
+**Contrôle du filtre lui-même**, sans lequel on ne saurait pas s'il écarte trop :
+
 ```bash
 grep -nE "clientAdmin|\.insert\(|\.update\(|\.delete\(|\.upsert\(|\.rpc\(" src/app/arborescence/
 ```
 
-**Attendu : aucune ligne.** `ancetresDeMembre` appelle bien `clientAdmin()` et un `rpc`,
-mais **dans `src/lib/donnees/arbre.ts`**, pas ici — c'est exactement la frontière que ce
-balayage doit voir.
+**Attendu : au moins une ligne, et TOUTES de commentaire.** Il y en a une, voulue : celle
+qui, dans l'en-tête d'`actions.ts`, nomme la frontière que ce balayage doit voir.
+**Consigner ces lignes verbatim dans le rapport de tâche**, avec la mention « occurrences
+de COMMENTAIRE, voulues ». Si cette commande ne rend **rien**, ce n'est pas une bonne
+nouvelle : c'est que le commentaire a été supprimé, ou que le motif ne fonctionne plus.
 
 **CONTRÔLE POSITIF du balayage** — sans lui, une commande mal formée rendrait « aucune
 ligne » pour toujours :
 
 ```bash
-grep -nE "clientAdmin|\.insert\(|\.update\(|\.delete\(|\.upsert\(|\.rpc\(" src/app/membres/actions.ts
+grep -nE "clientAdmin|\.insert\(|\.update\(|\.delete\(|\.upsert\(|\.rpc\(" src/app/membres/actions.ts \
+  | grep -vE ':[[:space:]]*(\*|//|/\*)'
 ```
 
-**Attendu : plusieurs lignes.**
+**Attendu : plusieurs lignes**, et ce sont de vraies écritures. Le contrôle positif passe
+par **le même filtre** que le balayage : un contrôle positif qui ne franchirait pas le
+filtre ne prouverait pas que le filtre laisse passer le code.
 
 - [ ] **Étape 4 : les portes rapides, puis commit**
 
@@ -4602,8 +6340,9 @@ le chemin sépare rigoureusement la **forme** (affranchie) des **noms** (sous RL
 
 **Interfaces :**
 - Consomme : `racinesPage`, `TAILLE_PAGE_RACINES` (Task 10) ; `chargerDisciples`,
-  `chargerChemin`, `PageDisciples`, `MESSAGE_ECHEC_LECTURE_NOEUD`,
-  `MESSAGE_ECHEC_LECTURE_CHEMIN` (Task 11) ; `MaillonNomme` (Task 9) ; `SelecteurMembre`
+  `chargerChemin`, `pageContenant`, `PageDisciples`, `MESSAGE_ECHEC_LECTURE_NOEUD`,
+  `MESSAGE_ECHEC_LECTURE_CHEMIN`, `MESSAGE_CHEMIN_PARTIEL` (Task 11) ;
+  `MaillonNomme` (Task 9) ; `SelecteurMembre`
   (existant, 1c, **réutilisé sans modification**) ; `exigerProfilActif`,
   `estAdministrateur` (existants) ; `pageDemandee` (existant, `pagination.ts`).
 - Produit : la route `/arborescence`, et deux liens vers elle.
@@ -4678,9 +6417,20 @@ export default async function PageArborescence({
 
       <header className="mt-4 mb-8">
         <h1 className="text-2xl font-semibold">Arborescence</h1>
+        {/*
+          LA LÉGENDE DIT EXACTEMENT CE QUE LE CODE FAIT, ET PAS UN MOT DE PLUS.
+          « Seuls les membres actifs y figurent » est vrai parce que les TROIS lectures de
+          cet écran portent un `etat = 'actif'` ÉCRIT — les disciples, les racines, et les
+          noms des maillons du chemin —, et non parce que la RLS cacherait quelque chose à
+          certains. La seconde phrase existe parce que la première, seule, serait un
+          demi-mensonge : un maillon non actif ne DISPARAÎT pas du chemin, il y garde sa
+          place sans nom, faute de quoi l'écran mentirait sur la profondeur. Ne pas retirer
+          cette phrase sans retirer le repli qu'elle décrit.
+        */}
         <p className="mt-1 text-sm text-neutral-500">
           L&apos;arbre des faiseurs de disciple, déplié à la demande. Seuls les membres
-          actifs y figurent.
+          actifs y figurent ; dans le chemin d&apos;une personne, un maillon qui ne
+          l&apos;est pas garde sa place, sans son nom.
         </p>
       </header>
 
@@ -4721,8 +6471,12 @@ import type { MaillonNomme } from '@/lib/domaine/arbre'
 // vérités, et c'est exactement ce que D100 vient de supprimer.
 import { LIBELLE_FICHE_NON_CONSULTABLE } from '@/lib/domaine/membre'
 import type { MembreBref } from '@/lib/donnees/membres'
-import { chargerChemin, chargerDisciples, type PageDisciples } from './actions'
-import { MESSAGE_ECHEC_LECTURE_CHEMIN, MESSAGE_ECHEC_LECTURE_NOEUD } from './messages'
+import { chargerChemin, chargerDisciples, pageContenant, type PageDisciples } from './actions'
+import {
+  MESSAGE_CHEMIN_PARTIEL,
+  MESSAGE_ECHEC_LECTURE_CHEMIN,
+  MESSAGE_ECHEC_LECTURE_NOEUD,
+} from './messages'
 
 /**
  * ═══ D104 — L'INDENTATION EST PLAFONNÉE, ET LE FIL D'ARIANE PORTE LE RESTE ═══
@@ -4761,6 +6515,11 @@ export function Arborescence({ racines, totalRacines, page, pages, estAdmin }: P
   const [chemin, setChemin] = useState<MaillonNomme[] | null>(null)
   const [cibleId, setCibleId] = useState<string | null>(null)
   const [erreurChemin, setErreurChemin] = useState<string | null>(null)
+  // Le chemin a bien été lu, mais l'arbre n'a pas pu être déplié JUSQU'À la cible. Distinct
+  // d'`erreurChemin` : là, rien n'est affiché ; ici, le fil d'Ariane est juste et seul
+  // l'arbre est incomplet. Les confondre dirait à l'utilisateur que rien n'a marché alors
+  // qu'il a sous les yeux le chemin complet.
+  const [avertissementChemin, setAvertissementChemin] = useState<string | null>(null)
   const [rechercheEnCours, demarrerRecherche] = useTransition()
 
   async function lireNoeud(membreId: string, numeroPage: number): Promise<PageDisciples | null> {
@@ -4838,17 +6597,37 @@ export function Arborescence({ racines, totalRacines, page, pages, estAdmin }: P
    * de SES disciples. Montrer la seule personne perdrait le « où dans l'arbre », qui est
    * toute la raison d'être de cet écran — on l'a déjà sur `/membres/[id]`. Montrer les
    * seuls ancêtres ne répondrait pas à « qui suit-il ? ». C'est le SEUL état de l'écran
-   * qui répond aux deux questions à la fois, et il ne coûte qu'une lecture de plus.
+   * qui répond aux deux questions à la fois.
+   *
+   * ═══ CHAQUE MAILLON EST CHARGÉ DANS LA PAGE QUI CONTIENT LE MAILLON SUIVANT ═══
+   *
+   * PAS la page 1. Le rendu d'un nœud ne montre que les disciples de la page CHARGÉE : si
+   * un maillon du chemin a plus de `TAILLE_PAGE_DISCIPLES` disciples et que le maillon
+   * suivant n'est pas dans la première page de son tri `(nom, prenom, id)`, la branche
+   * S'ARRÊTE LÀ. La personne cherchée n'est jamais rendue, `cibleId` ne surligne rien, et
+   * le fil d'Ariane, lui, continue d'afficher le chemin complet — deux vérités
+   * contradictoires sur le même écran. À l'échelle visée par la conception (« un millier
+   * de membres ou plus »), c'est le cas normal, pas le cas limite.
+   *
+   * ═══ ET SI LE CALCUL NE SUFFIT PAS, ON LE DIT ═══
+   *
+   * `pageContenant` rend `1` quand elle ne sait pas — maillon devenu illisible ou non
+   * actif, branche modifiée entre deux lectures. On ne lui fait donc pas confiance sur
+   * parole : après chaque chargement, on VÉRIFIE que le maillon suivant figure bien dans
+   * la page obtenue. Sinon, l'arbre est incomplet, et un message le dit. Un dépliage
+   * silencieusement tronqué serait pire qu'un dépliage refusé.
    */
   function allerA(membre: MembreBref | null) {
     if (!membre) {
       setChemin(null)
       setCibleId(null)
       setErreurChemin(null)
+      setAvertissementChemin(null)
       return
     }
     demarrerRecherche(async () => {
       setErreurChemin(null)
+      setAvertissementChemin(null)
       let maillons: MaillonNomme[]
       try {
         maillons = await chargerChemin(membre.id)
@@ -4867,8 +6646,42 @@ export function Arborescence({ racines, totalRacines, page, pages, estAdmin }: P
         ...precedent,
         deplies: Array.from(new Set([...precedent.deplies, ...maillons.map((m) => m.id)])),
       }))
-      for (const maillon of maillons) {
-        await lireNoeud(maillon.id, 1)
+
+      let brancheComplete = true
+      for (let indice = 0; indice < maillons.length; indice += 1) {
+        const suivant = maillons[indice + 1]
+
+        // Le DERNIER maillon est la cible elle-même : on affiche la PREMIÈRE page de SES
+        // disciples, il n'y a pas de « suivant » à atteindre.
+        let numero = 1
+        if (suivant) {
+          try {
+            numero = await pageContenant(maillons[indice].id, suivant.id)
+          } catch (erreur) {
+            // Un échec de calcul n'interrompt pas le dépliage : on retombe sur la page 1,
+            // et la vérification ci-dessous constatera, ou non, que cela suffisait.
+            console.error('arborescence : calcul de la page du maillon suivant impossible', {
+              parentId: maillons[indice].id,
+              discipleId: suivant.id,
+              erreur,
+            })
+          }
+        }
+
+        const page = await lireNoeud(maillons[indice].id, numero)
+        if (page === null) {
+          // `lireNoeud` a déjà posé le message d'échec SUR CE NŒUD. La branche s'arrête.
+          brancheComplete = false
+          break
+        }
+        if (suivant && !page.disciples.some((disciple) => disciple.id === suivant.id)) {
+          brancheComplete = false
+          break
+        }
+      }
+
+      if (!brancheComplete) {
+        setAvertissementChemin(MESSAGE_CHEMIN_PARTIEL)
       }
     })
   }
@@ -4891,6 +6704,17 @@ export function Arborescence({ racines, totalRacines, page, pages, estAdmin }: P
       {erreurChemin ? (
         <p role="alert" className="text-sm text-red-600">
           {erreurChemin}
+        </p>
+      ) : null}
+
+      {/*
+        AVERTISSEMENT, PAS ERREUR : le chemin ci-dessous est juste et complet ; c'est
+        l'arbre qui n'a pas pu être déplié jusqu'au bout. `role="status"` et non `alert` —
+        rien n'a échoué, et rien n'est perdu pour l'utilisateur, qui garde le fil d'Ariane.
+      */}
+      {avertissementChemin ? (
+        <p role="status" className="text-sm text-amber-700">
+          {avertissementChemin}
         </p>
       ) : null}
 
@@ -5203,12 +7027,39 @@ phase.
 
 **D92 — le volet 2 n'écrit rien :**
 
+## ⚠️ LE BALAYAGE PORTE SUR LE CODE, PAS SUR LES COMMENTAIRES — ET S'IL EST ROUGE, LA RÉPONSE N'EST **JAMAIS** D'ÉLARGIR OU D'ASSOUPLIR LE MOTIF
+
+`src/app/arborescence/actions.ts` **PARLE** de la clé de service — il explique en
+commentaire pourquoi il ne l'emploie pas — **sans jamais l'appeler**. Un balayage qui
+confond une occurrence de code et une occurrence de commentaire ne prouve rien de plus
+qu'une **interdiction de vocabulaire**, et il rend rouge un fichier parfaitement correct.
+
+**Le danger n'est pas la ligne rouge : c'est la réparation naturelle.** Devant un motif qui
+« trouve » quelque chose dans un dossier qui n'écrit rien, la tentation est de rétrécir le
+motif — ou de supprimer le commentaire qui porte l'explication la plus importante du
+module. Dans les deux cas, la barrière D92 sortirait **dégradée de sa propre preuve**.
+
+**RÈGLE, sans exception :** le motif ne se touche pas. Si le balayage rend une ligne, on lit
+la ligne. Si c'est du **code**, on retire le code. Si c'est un **commentaire** que le filtre
+n'a pas écarté, on corrige le **filtre**, jamais le motif.
+
 ```bash
-grep -rnE "clientAdmin|\.insert\(|\.update\(|\.delete\(|\.upsert\(|\.rpc\(" src/app/arborescence/
+grep -rnE "clientAdmin|\.insert\(|\.update\(|\.delete\(|\.upsert\(|\.rpc\(" src/app/arborescence/ \
+  | grep -vE ':[[:space:]]*(\*|//|/\*)'
 ```
 
-**Attendu : aucune ligne.** **CONTRÔLE POSITIF :** la même commande sur
-`src/app/membres/actions.ts` doit rendre plusieurs lignes.
+**Attendu : aucune ligne.**
+
+**CONTRÔLE POSITIF, PAR LE MÊME FILTRE** — sans lui, une commande mal formée rendrait
+« aucune ligne » pour toujours, et un contrôle positif qui ne franchirait pas le filtre ne
+prouverait pas que le filtre laisse passer le code :
+
+```bash
+grep -rnE "clientAdmin|\.insert\(|\.update\(|\.delete\(|\.upsert\(|\.rpc\(" src/app/membres/actions.ts \
+  | grep -vE ':[[:space:]]*(\*|//|/\*)'
+```
+
+**Attendu : plusieurs lignes**, et ce sont de vraies écritures.
 
 - [ ] **Étape 5 : les portes rapides puis, FIN DU LOT « VOLET 2 », les portes complètes**
 
@@ -5247,7 +7098,10 @@ recherche qui mène au chemin déplié d'une personne.
 - Consomme : `disciplesParPage`, `racinesParPage` (Task 10) — **importées directement
   depuis `arbre-lots.ts`**, avec une **taille de page abaissée**. C'est la seule raison
   d'être de ce module séparé.
-- Produit : les preuves n°9, 10, 12, 13 et 16 du design.
+- Produit : les preuves n°9, 10, 12, 13 et 16 du design, **plus** deux preuves que le
+  design n'exigeait pas et dont l'absence laissait un trou : le filtre `etat = 'actif'`
+  **des noms du chemin**, éprouvé depuis deux sessions réelles, et la **mesure** de
+  l'invariant d'arbre sur la base réelle, avec le compte rendu de ce sur quoi elle a porté.
 
 **Préfixe de famille : `ZZArborescence-`.**
 
@@ -5273,7 +7127,11 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { disciplesParPage, racinesParPage } from '../../src/lib/donnees/arbre-lots'
+import {
+  disciplesParPage,
+  nomsMaillonsActifs,
+  racinesParPage,
+} from '../../src/lib/donnees/arbre-lots'
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const admin = createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
@@ -5289,7 +7147,15 @@ const PREFIXE = `${PREFIXE_FAMILLE}${crypto.randomUUID().slice(0, 8)}`
 
 // Le nom des HOMONYMES : identique pour deux fiches, à un suffixe près sur AUCUN des deux
 // champs de tri (nom, prenom). Seul `id` les départage — c'est tout le point.
-const NOM_HOMONYME = `${PREFIXE}-homonyme`
+//
+// LE SUFFIXE `-disciple-m` N'EST PAS ARBITRAIRE. Il place le couple au MILIEU de l'ordre
+// alphabétique des cinq disciples (`-disciple-a`, `-disciple-m`, `-disciple-m`,
+// `-disciple-y`, `-disciple-z`), donc À CHEVAL sur la frontière entre la page 1 et la
+// page 2 avec une taille de page de 2. Un nom hors de la famille `-disciple-*` — par
+// exemple `-homonyme` — trierait APRÈS `-disciple-z` (« d » < « h ») et le couple ne
+// serait plus à cheval : la preuve resterait verte, mais pour une raison qui n'est pas
+// celle qu'on écrit. Ne pas renommer sans refaire ce calcul.
+const NOM_HOMONYME = `${PREFIXE}-disciple-m`
 const PRENOM_HOMONYME = 'Alex'
 
 // Cinq disciples : assez pour franchir DEUX frontières avec une page de 2, et pour que le
@@ -5373,9 +7239,15 @@ beforeAll(async () => {
   if (erreurFaiseur || !faiseur) throw new Error(`création du faiseur : ${erreurFaiseur?.message}`)
   idFaiseur = faiseur.id as string
 
-  // Les cinq disciples, dont DEUX HOMONYMES EXACTS. Les noms sont construits pour que le
-  // couple tombe au MILIEU de l'ordre alphabétique, donc à cheval sur une frontière avec
-  // une page de 2 : `-a`, homonyme, homonyme, `-y`, `-z`.
+  // Les cinq disciples, dont DEUX HOMONYMES EXACTS.
+  //
+  // ORDRE RÉEL, calculé et non supposé — le tri est (nom, prenom, id), et les cinq noms
+  // partagent le préfixe `${PREFIXE}-disciple-` :
+  //     -disciple-a, -disciple-m, -disciple-m, -disciple-y, -disciple-z
+  // Avec une taille de page de 2 : page 1 = [a, m], page 2 = [m, y], page 3 = [z]. LE
+  // COUPLE D'HOMONYMES EST DONC À CHEVAL sur la frontière 1/2, ce qui est exactement le cas
+  // que `.order('id')` existe pour rendre déterministe. Si l'un de ces noms change, refaire
+  // ce calcul : une preuve qui fonctionne par accident ne prouve rien de durable.
   const aInserer = [
     { nom: `${PREFIXE}-disciple-a`, prenom: 'Test' },
     { nom: NOM_HOMONYME, prenom: PRENOM_HOMONYME },
@@ -5520,31 +7392,67 @@ describe('racinesParPage', () => {
     expect(resultat.total).toBe(independant)
   })
 
+  /*
+    ═══ CE PARCOURS EST CONSTRUIT POUR TENIR SUR UNE BASE DE PRODUCTION ═══
+
+    Trois choix, et chacun ferme un défaut précis.
+
+    1. AUCUN COMPTAGE ABSOLU. Pas de `expect(collectes).toHaveLength(total)` : le parcours
+       dure plusieurs allers-retours SÉQUENTIELS, et une seule racine créée par
+       l'administrateur réel pendant ce temps le ferait tomber. On assert sur ce que cette
+       suite a créé — un DELTA —, jamais sur le total de la base.
+
+    2. UNE TAILLE DE PAGE DE 200, ET NON DE 3. La pagination par DÉCALAGE est instable sous
+       écriture concurrente : une insertion de nom bas décale toutes les pages suivantes et
+       produit un VRAI doublon. `new Set(collectes).size === collectes.length` tomberait
+       alors pour une raison ÉTRANGÈRE au code éprouvé, en accusant le tri total d'un
+       défaut qui n'est pas le sien. Moins il y a de pages, moins il y a de fenêtres. Le
+       cas homonyme à cheval, lui, est déjà prouvé plus haut avec une taille de 2 et un cas
+       CONSTRUIT : ce parcours-ci n'a pas à le refaire.
+
+    3. UNE BORNE EN LIGNES, PAS EN PAGES. Une borne de 500 pages à 3 lignes ne se
+       déclencherait qu'au-delà de 1 500 racines, alors que le parcours coûte déjà
+       beaucoup trop cher bien avant. La borne est donc posée sur le NOMBRE DE LIGNES,
+       assertée AVANT la boucle, et le nombre de pages en découle.
+  */
   it('parcourt toutes les pages sans doublon, et retrouve les trois racines créées', async () => {
-    const TAILLE = 3
+    const TAILLE = 200
+    const totalInitial = await compterRacinesIndependamment(admin)
+    expect(
+      totalInitial,
+      "plus de 20 000 racines : le parcours exhaustif de cette preuve n'est plus tenable sur une base de production, revoir le protocole avant de la faire passer",
+    ).toBeLessThan(20_000)
+    const PAGES_MAX = Math.ceil(totalInitial / TAILLE) + 2
+
     const collectes: string[] = []
-    let total = -1
     let page = 1
-    const PAGES_MAX = 500
     for (; page <= PAGES_MAX; page += 1) {
       const resultat = await racinesParPage(admin, { page, taillePage: TAILLE })
-      if (total === -1) total = resultat.total
       collectes.push(...resultat.lignes.map((ligne) => ligne.id))
       if (page * TAILLE >= resultat.total) break
     }
     expect(
       page,
-      'plus de 500 pages de racines : le parcours exhaustif de cette preuve n’est plus tenable, revoir le protocole',
-    ).toBeLessThan(PAGES_MAX)
+      'la boucle a atteint sa borne : la pagination ne progresse pas, ou la liste grandit plus vite que le parcours',
+    ).toBeLessThanOrEqual(PAGES_MAX)
 
+    // AUCUN DOUBLON. Le `+2` de la borne absorbe une insertion concurrente sans faire
+    // tomber la boucle ; ce doublon-ci, en revanche, dirait quelque chose du tri.
     expect(new Set(collectes).size).toBe(collectes.length)
-    expect(collectes).toHaveLength(total)
-    // DELTA, jamais un absolu : la base sert aussi de production, et le nombre total de
-    // racines y change sans nous.
+
+    // ET LE DELTA : les trois racines de cette suite ont été rendues, chacune UNE FOIS.
+    // C'est la seule assertion de complétude qui soit vraie sur une base partagée.
     for (const identifiant of idsRacinesAttendues) {
-      expect(collectes.filter((collecte) => collecte === identifiant)).toHaveLength(1)
+      expect(
+        collectes.filter((collecte) => collecte === identifiant),
+        'une racine créée par cette suite est absente du parcours, ou rendue deux fois',
+      ).toHaveLength(1)
     }
     expect(idsRacinesAttendues).toHaveLength(NOMBRE_RACINES)
+    // NON INERTE : le parcours doit avoir rendu quelque chose. Une base en panne rendrait
+    // trois listes vides et les assertions ci-dessus tomberaient — mais celle-ci le dit
+    // plus clairement.
+    expect(collectes.length).toBeGreaterThanOrEqual(NOMBRE_RACINES)
   })
 
   it('rend une page vide et un total JUSTE quand la page demandée est hors bornes', async () => {
@@ -5564,13 +7472,48 @@ describe('racinesParPage', () => {
 
 describe('filtre etat = actif, explicite et non délégué à la RLS', () => {
   it("n'expose ni fiche archivée ni fiche en attente dans les racines, POUR UN ADMINISTRATEUR", async () => {
+    // Même protocole que le parcours de la preuve n°10, et pour les mêmes raisons : taille
+    // de page large (la pagination par décalage est instable sous écriture concurrente),
+    // borne exprimée EN LIGNES et assertée avant la boucle, aucun comptage absolu.
+    const TAILLE = 200
+    const totalInitial = await compterRacinesIndependamment(clientAdminSession)
+    expect(
+      totalInitial,
+      "plus de 20 000 racines : ce parcours n'est plus tenable sur une base de production",
+    ).toBeLessThan(20_000)
+    const PAGES_MAX = Math.ceil(totalInitial / TAILLE) + 2
+
     const collectes: string[] = []
-    const TAILLE = 3
-    for (let page = 1; page <= 500; page += 1) {
+    let page = 1
+    for (; page <= PAGES_MAX; page += 1) {
       const resultat = await racinesParPage(clientAdminSession, { page, taillePage: TAILLE })
       collectes.push(...resultat.lignes.map((ligne) => ligne.id))
       if (page * TAILLE >= resultat.total) break
     }
+    expect(page, 'la boucle a atteint sa borne : le parcours ne progresse pas').toBeLessThanOrEqual(
+      PAGES_MAX,
+    )
+
+    /*
+      ═══ LA COLLECTE DOIT AVOIR EU LIEU AVANT QUE SES ABSENCES NE VEUILLENT DIRE QUELQUE
+      CHOSE — ET LA VÉRIFICATION EST DANS **CE** TEST, PAS DANS UN AUTRE ═══
+
+      `expect(collectes).not.toContain(...)` est satisfait TRIVIALEMENT par une collecte
+      VIDE : une requête en panne, une session expirée, une boucle qui sort au premier tour
+      rendraient ce test vert en ne prouvant rien du tout. Un contrôle positif écrit dans un
+      `it` VOISIN ne referme pas ce cas : les deux tests ne partagent pas cette collecte.
+
+      Les trois racines de cette suite sont ACTIVES et SANS faiseur de disciple : elles
+      DOIVENT figurer dans le parcours. Leur présence prouve que la collecte a réellement
+      balayé la liste, et c'est cela seul qui donne un sens aux deux absences ci-dessous.
+    */
+    for (const identifiant of idsRacinesAttendues) {
+      expect(
+        collectes,
+        'collecte vide ou incomplète : les absences vérifiées ensuite ne prouveraient rien',
+      ).toContain(identifiant)
+    }
+
     expect(collectes).not.toContain(idArchive)
     expect(collectes).not.toContain(idEnAttente)
   })
@@ -5621,11 +7564,147 @@ describe('un compte ordinaire et un administrateur voient le même arbre', () =>
 })
 
 // ───────────────────────────────────────────────────────────────────────────────
+// LES NOMS DU CHEMIN SONT FILTRÉS `etat = 'actif'` POUR TOUS LES RÔLES (D93)
+//
+// C'est le seul endroit de l'écran où l'exclusion aurait pu être déléguée à la RLS. Elle
+// ne l'est pas, et cette suite le mesure : la politique `membres_lecture` ouvre TOUTE
+// fiche à l'administrateur, donc une lecture sans filtre d'état lui NOMMERAIT un maillon
+// archivé ou en attente, là où un compte ordinaire lit « Fiche non consultable ». Les
+// deux ne verraient plus le même arbre, et l'écran — qui annonce que seuls les membres
+// actifs y figurent — mentirait à l'un des deux.
+//
+// AUCUNE AUTRE PREUVE DE CE PLAN N'EXERCE CE CHEMIN. `chargerChemin` est une Server Action
+// et ne peut pas tourner ici ; `cheminAvecLibelles` est pure et ne lit rien. C'est
+// `nomsMaillonsActifs` qui porte le filtre, et c'est donc elle qu'on éprouve — contre la
+// vraie base, depuis DEUX sessions réelles.
+// ───────────────────────────────────────────────────────────────────────────────
+
+describe('noms des maillons du chemin, filtrés etat = actif explicitement', () => {
+  it("n'expose NI la fiche archivée NI la fiche en attente, PAS MÊME À L'ADMINISTRATEUR", async () => {
+    // Un lot qui MÉLANGE les trois états. `idFaiseur` est actif : c'est le témoin qui
+    // rend la lecture non vide, sans quoi les deux absences seraient satisfaites par une
+    // requête en panne.
+    const lot = [idFaiseur, idArchive, idEnAttente]
+
+    const vuAdmin = await nomsMaillonsActifs(clientAdminSession, lot)
+    const vuSimple = await nomsMaillonsActifs(clientSimple, lot)
+
+    // LE MAILLON ACTIF EST BIEN LÀ, POUR LES DEUX. Sans cette assertion, tout ce qui suit
+    // serait satisfait par deux listes vides.
+    expect(vuAdmin.map((m) => m.id)).toEqual([idFaiseur])
+    expect(vuSimple.map((m) => m.id)).toEqual([idFaiseur])
+
+    // ET LES DEUX AUTRES SONT ABSENTS DES DEUX CÔTÉS. C'est l'égalité qui compte : elle dit
+    // que l'exclusion vient de la RÈGLE ÉNONCÉE, et non du lecteur.
+    expect(vuSimple.map((m) => m.id)).toEqual(vuAdmin.map((m) => m.id))
+  })
+
+  // CONTRÔLE POSITIF, ET IL N'EST PAS INERTE : une absence dont on n'a pas prouvé que la
+  // fiche EXISTE et est LISIBLE par ailleurs ne prouve rien. Cet administrateur ouvre bien
+  // les deux fiches par lien direct — c'est donc bien le FILTRE, et non la RLS, qui les a
+  // écartées du chemin.
+  it('mais ce même administrateur lit les deux fiches par lien direct', async () => {
+    for (const identifiant of [idArchive, idEnAttente]) {
+      const { data, error } = await clientAdminSession
+        .from('membres')
+        .select('id')
+        .eq('id', identifiant)
+        .maybeSingle()
+      expect(error).toBeNull()
+      expect(data?.id).toBe(identifiant)
+    }
+  })
+
+  it('rend une liste vide sur une liste d’identifiants vide, sans interroger la base', async () => {
+    expect(await nomsMaillonsActifs(clientSimple, [])).toEqual([])
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────────
+// L'INVARIANT D'ARBRE, MESURÉ SUR LA BASE RÉELLE (D99)
+// ───────────────────────────────────────────────────────────────────────────────
+
+describe("aucun membre actif n'a de faiseur qui ne soit pas actif", () => {
+  it('le vérifie sur toutes les fiches, et DIT sur quoi la mesure a porté', async () => {
+    const { data, error } = await admin.from('membres').select('id, nom, etat, faiseur_de_disciple_id')
+    if (error) throw new Error(`lecture des fiches impossible : ${error.message}`)
+    const fiches = data ?? []
+    const parId = new Map(fiches.map((m) => [m.id as string, m]))
+
+    const fautifs = fiches.filter((m) => {
+      if (m.etat !== 'actif' || !m.faiseur_de_disciple_id) return false
+      const parent = parId.get(m.faiseur_de_disciple_id as string)
+      // `parent === undefined` est impossible (clé étrangère), mais on ne conclut pas d'un
+      // raisonnement : on ne compte comme fautif que ce qu'on a pu constater.
+      return parent !== undefined && parent.etat !== 'actif'
+    })
+    expect(
+      fautifs.map((m) => m.nom),
+      "un membre actif a un faiseur non actif : sa branche est un trou dans l'arborescence",
+    ).toEqual([])
+
+    /*
+      ═══ CETTE MESURE PEUT ÊTRE VRAIE **À VIDE**, ET IL FAUT LE DIRE ═══
+
+      Si la base ne contient AUCUNE fiche `archive` ni `en_attente`, l'assertion ci-dessus
+      est vraie sans avoir rien éprouvé : elle ne dit alors pas « l'invariant tient », elle
+      dit « le cas ne s'est pas présenté ». Au moment où ce plan a été écrit, la base
+      comptait 8 fiches, TOUTES actives, et 2 racines réelles — la mesure y était donc
+      VACUELLEMENT vraie.
+
+      Les deux comptes rendus ci-dessous ne sont pas des assertions décoratives : le
+      premier garantit que le balayage a porté sur quelque chose, le second ÉCRIT dans le
+      rapport de test le nombre de fiches non actives réellement examinées. Un lecteur qui
+      voit `0` sait que ce test n'a rien prouvé ce jour-là, et ne prendra pas cette mesure
+      pour une preuve.
+
+      Les preuves qui, elles, ÉPROUVENT vraiment les gardes construisent leurs propres
+      fiches non actives : elles vivent dans `tests/rls/creation-enrichie.test.ts`.
+    */
+    expect(fiches.length, 'aucune fiche en base : ce balayage n’a porté sur rien').toBeGreaterThan(0)
+    const nonActives = fiches.filter((m) => m.etat !== 'actif').length
+    console.info(
+      `invariant d'arbre : ${fiches.length} fiche(s) examinée(s), dont ${nonActives} non active(s). ` +
+        (nonActives === 0
+          ? 'AUCUNE fiche non active en base : cette mesure est VACUELLEMENT vraie et ne prouve rien.'
+          : 'la mesure a réellement porté sur des fiches non actives.'),
+    )
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────────
 // PREUVE N°16 — LE VOLET 2 N'ÉCRIT RIEN (D92). LA PREUVE D'UN VIDE EST UN BALAYAGE.
 // ───────────────────────────────────────────────────────────────────────────────
 
 describe("aucun chemin d'écriture dans src/app/arborescence/", () => {
+  /*
+    ═══ SI CE TEST EST ROUGE, LA RÉPONSE N'EST **JAMAIS** D'ÉLARGIR NI D'ASSOUPLIR
+        `MOTIFS_ECRITURE`. ═══
+
+    Ce motif est la barrière D92 elle-même. Le voir échouer sur un module qui n'écrit rien
+    donne envie de le rétrécir — ou de supprimer le commentaire qui l'a fait échouer. Dans
+    les deux cas, la barrière sortirait DÉGRADÉE DE SA PROPRE PREUVE, et plus personne ne
+    remarquerait la première vraie écriture ajoutée ensuite.
+
+    RÈGLE : si `fautifs` n'est pas vide, on OUVRE le fichier cité. Si c'est du CODE, on
+    retire le code. Si c'est un COMMENTAIRE que `sansCommentaires` n'a pas su écarter, on
+    corrige `sansCommentaires`. Le motif, lui, ne bouge pas.
+  */
   const MOTIFS_ECRITURE = /clientAdmin|\.insert\(|\.update\(|\.delete\(|\.upsert\(|\.rpc\(/
+
+  /**
+   * Retire les commentaires avant balayage.
+   *
+   * `src/app/arborescence/actions.ts` **PARLE** de la clé de service — il explique en
+   * commentaire pourquoi il ne l'emploie pas, et où vit la frontière — **sans jamais
+   * l'appeler**. Un balayage qui confond les deux ne prouve rien de plus qu'une
+   * INTERDICTION DE VOCABULAIRE, et il rendrait rouge un fichier parfaitement correct : le
+   * motif serait alors affaibli, ou le commentaire supprimé, et la barrière serait perdue
+   * dans les deux cas.
+   */
+  function sansCommentaires(source: string): string {
+    return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  }
 
   function fichiersDe(dossier: string): string[] {
     return readdirSync(dossier, { withFileTypes: true }).flatMap((entree) => {
@@ -5634,20 +7713,44 @@ describe("aucun chemin d'écriture dans src/app/arborescence/", () => {
     })
   }
 
-  it('ne contient aucun clientAdmin, insert, update, delete, upsert ni rpc', () => {
+  it('ne contient aucun clientAdmin, insert, update, delete, upsert ni rpc HORS COMMENTAIRES', () => {
     const fichiers = fichiersDe('src/app/arborescence')
     // Le balayage doit porter sur quelque chose : un dossier vide le rendrait vert pour
     // rien.
     expect(fichiers.length).toBeGreaterThanOrEqual(4)
-    const fautifs = fichiers.filter((chemin) => MOTIFS_ECRITURE.test(readFileSync(chemin, 'utf8')))
-    expect(fautifs).toEqual([])
+    const fautifs = fichiers.filter((chemin) =>
+      MOTIFS_ECRITURE.test(sansCommentaires(readFileSync(chemin, 'utf8'))),
+    )
+    expect(
+      fautifs,
+      "chemin d'écriture dans /arborescence : lire le fichier cité, retirer le CODE — jamais élargir le motif",
+    ).toEqual([])
   })
 
-  // CONTRÔLE POSITIF DU BALAYAGE LUI-MÊME : sans lui, une expression régulière cassée
-  // rendrait « aucun fautif » pour toujours, y compris sur un dossier truffé d'écritures.
-  it('le même balayage TROUVE bien les écritures là où il y en a', () => {
+  // CONTRÔLE POSITIF DU BALAYAGE LUI-MÊME, PAR LE MÊME FILTRE : sans lui, une expression
+  // régulière cassée — ou un `sansCommentaires` qui effacerait tout — rendrait « aucun
+  // fautif » pour toujours, y compris sur un dossier truffé d'écritures. Il passe par
+  // `sansCommentaires` parce qu'un contrôle positif qui ne franchirait pas le filtre ne
+  // prouverait pas que le filtre laisse passer le code.
+  it('le même balayage, à travers le MÊME filtre, TROUVE les écritures là où il y en a', () => {
     const contenu = readFileSync('src/app/membres/actions.ts', 'utf8')
-    expect(MOTIFS_ECRITURE.test(contenu)).toBe(true)
+    expect(MOTIFS_ECRITURE.test(sansCommentaires(contenu))).toBe(true)
+  })
+
+  // CONTRÔLE DU FILTRE LUI-MÊME : `sansCommentaires` doit retirer les commentaires, et
+  // RIEN D'AUTRE. Sans ce test, une expression trop gourmande — qui effacerait le fichier
+  // entier — rendrait le balayage vert pour toujours, et le contrôle positif ci-dessus le
+  // serait resté aussi longtemps qu'un `clientAdmin` traîne hors commentaire ailleurs.
+  it('sansCommentaires retire les commentaires et conserve le code', () => {
+    const source = [
+      '/** clientAdmin() cité dans un bloc */',
+      '// clientAdmin() cité dans une ligne',
+      'const x = clientAdmin()',
+    ].join('\n')
+    const nettoye = sansCommentaires(source)
+    expect(nettoye).toContain('const x = clientAdmin()')
+    expect(nettoye).not.toContain('cité dans un bloc')
+    expect(nettoye).not.toContain('cité dans une ligne')
   })
 })
 ```
@@ -5663,9 +7766,19 @@ git add tests/rls/arborescence.test.ts
 git commit -m "test: pagination a tri total, filtre actif explicite et vide d'ecriture de l'arborescence (preuves 9, 10, 12, 13, 16)"
 ```
 
-**Preuve produite :** la sortie de `test:rls`, et en particulier le **nombre de pages
-réellement parcourues** pour les racines — s'il approche 500, le protocole de la preuve
-n°10 doit être revu, et le test le dit lui-même.
+**Preuves produites :** la sortie de `test:rls`, et en particulier **la ligne
+`console.info` de la mesure d'invariant** — elle dit combien de fiches ont été examinées et
+**combien d'entre elles n'étaient pas actives**. **Reporter ce nombre tel quel** : s'il vaut
+zéro, cette mesure est **vacuellement vraie** et ne prouve rien ce jour-là, et le rapport de
+tâche doit l'écrire ainsi plutôt que de compter la ligne verte comme une preuve. Au moment
+de la rédaction de ce plan, la base comptait **8 fiches, toutes actives, et 2 racines
+réelles** : la mesure y aurait été vide de sens. Ce sont les preuves de
+`tests/rls/creation-enrichie.test.ts`, qui **construisent** leurs fiches non actives, qui
+éprouvent réellement les gardes.
+
+Consigner aussi le **nombre de pages réellement parcourues** pour les racines : les deux
+parcours bornent en LIGNES et non en pages, et le test lève de lui-même au-delà de 20 000
+racines — si cette borne approche, le protocole doit être revu, pas relevé.
 
 ---
 
@@ -5707,6 +7820,10 @@ Créer `tests/e2e/arborescence.spec.ts` :
 import { createClient } from '@supabase/supabase-js'
 import { expect, request as requestPlaywright, test, type Page } from '@playwright/test'
 import { identifiantVersEmail } from '../../src/lib/domaine/identifiant'
+// La CONSTANTE de production, jamais un 25 recopié : le jour où la taille de page change,
+// ce test doit franchir la NOUVELLE frontière, pas l'ancienne. `arbre-lots.ts` n'est pas
+// `server-only` — c'est exactement pour cela qu'il existe.
+import { TAILLE_PAGE_DISCIPLES } from '../../src/lib/donnees/arbre-lots'
 
 test.describe.configure({ mode: 'serial' })
 
@@ -5729,9 +7846,33 @@ const NOM_PETIT = `${PREFIXE}-petit`
 const NOM_FEUILLE = `${PREFIXE}-feuille`
 const NOM_ARCHIVE = `${PREFIXE}-archive`
 
+/*
+  ═══ LA GRANDE FRATRIE : LE CAS QUE LA RECHERCHE DOIT FRANCHIR ═══
+
+  `NOM_FRATRIE` porte `TAILLE_PAGE_DISCIPLES + 1` disciples, et la personne cherchée est le
+  DERNIER dans l'ordre `(nom, prenom, id)` — donc SEULE SUR LA PAGE 2.
+
+  SANS LE CALCUL DE PAGE, LA RECHERCHE CHARGERAIT LA PAGE 1 DE CHAQUE MAILLON, la cible ne
+  serait JAMAIS rendue dans l'arbre, rien ne la mettrait en évidence, et le fil d'Ariane
+  afficherait pourtant son chemin complet. Un arbre à deux disciples ne peut pas voir ce
+  défaut : il n'a qu'une page. C'est pour cela que ce cas est CONSTRUIT, et non supposé —
+  sans lui, retirer le calcul de page ne ferait tomber aucune preuve.
+
+  `-frere-zz-cible` trie après `-frere-00` … `-frere-NN` : « z » > un chiffre.
+
+  LES NOMS SONT CHOISIS POUR NE PAS SE CONTENIR L'UN L'AUTRE. Les locateurs de cette suite
+  sont des expressions régulières sur le nom du bouton : si le nom du parent était un
+  PRÉFIXE de celui de ses enfants, `new RegExp(NOM_FRATRIE)` en trouverait vingt-sept et
+  violerait le mode strict de Playwright. D'où `-fratrie` pour le parent et `-frere-…` pour
+  les enfants — deux familles disjointes.
+*/
+const NOM_FRATRIE = `${PREFIXE}-fratrie`
+const NOM_CIBLE_PAGE_2 = `${PREFIXE}-frere-zz-cible`
+
 let idRacine: string
 let idDisciple: string
 let idFeuille: string
+let idFratrie: string
 
 async function supprimerCompte(identifiant: string) {
   const { data } = await admin.from('profils').select('id').eq('identifiant', identifiant).maybeSingle()
@@ -5797,6 +7938,24 @@ test.beforeAll(async () => {
   // Une fiche archivée SANS faiseur de disciple : elle ne doit apparaître nulle part dans
   // l'arbre, pour personne.
   await creerMembre(NOM_ARCHIVE, null, 'archive')
+
+  // La GRANDE FRATRIE : `TAILLE_PAGE_DISCIPLES` frères qui remplissent la page 1, plus la
+  // cible, qui trie après eux et se retrouve donc SEULE SUR LA PAGE 2.
+  idFratrie = await creerMembre(NOM_FRATRIE, idRacine)
+  const freres = Array.from({ length: TAILLE_PAGE_DISCIPLES }, (_, indice) => ({
+    // Indice sur DEUX chiffres : sans le zéro de tête, « 10 » trierait avant « 2 ». Le
+    // rang de la cible ne changerait pas — elle trie de toute façon après tous les
+    // chiffres —, mais l'ordre écrit ici ne serait plus l'ordre réel, et la prochaine
+    // personne à lire ce test partirait sur une fausse idée.
+    nom: `${PREFIXE}-frere-${String(indice).padStart(2, '0')}`,
+    prenom: 'Test',
+    faiseur_de_disciple_id: idFratrie,
+  }))
+  const { error: erreurFreres } = await admin.from('membres').insert(freres)
+  // Toute préparation vérifie son erreur et LÈVE : une fratrie incomplète ramènerait la
+  // cible en page 1 et rendrait ce test vert sans qu'il ait rien franchi.
+  if (erreurFreres) throw new Error(`création de la fratrie impossible : ${erreurFreres.message}`)
+  await creerMembre(NOM_CIBLE_PAGE_2, idFratrie)
 })
 
 test.afterAll(async () => {
@@ -5837,8 +7996,11 @@ test('un compte ORDINAIRE parcourt l’arbre : il déplie, voit le total, et att
   // Déplier la racine.
   await page.getByRole('button', { name: new RegExp(NOM_RACINE) }).click()
 
-  // D101 : le nœud annonce SON total, pas la longueur de la page. Deux disciples.
-  await expect(page.getByText('2 disciples')).toBeVisible()
+  // D101 : le nœud annonce SON total, pas la longueur de la page. La racine porte TROIS
+  // disciples — `-disciple`, `-feuille` et `-fratrie` —, et les trois tiennent sur une
+  // page. Ce nombre suit la préparation : si un descendant direct est ajouté au `beforeAll`
+  // sans reprendre cette ligne, c'est ICI que la suite tombera, et c'est voulu.
+  await expect(page.getByText('3 disciples')).toBeVisible()
   await expect(page.getByRole('button', { name: new RegExp(NOM_DISCIPLE) })).toBeVisible()
   await expect(page.getByRole('button', { name: new RegExp(NOM_FEUILLE) })).toBeVisible()
 
@@ -5875,6 +8037,53 @@ test('la recherche mène au chemin déplié d’une personne, avec son fil d’A
   // Et l'on peut revenir.
   await page.getByRole('button', { name: 'Revenir aux membres sans faiseur de disciple' }).click()
   await expect(page.getByRole('heading', { name: 'Membres sans faiseur de disciple' })).toBeVisible()
+})
+
+/**
+ * LA RECHERCHE ATTEINT UNE PERSONNE SITUÉE AU-DELÀ DE LA PREMIÈRE PAGE DE SON FAISEUR.
+ *
+ * ═══ CE TEST EST LA RAISON D'ÊTRE DE LA GRANDE FRATRIE ═══
+ * Le rendu d'un nœud ne montre que les disciples de la page CHARGÉE. Une recherche qui
+ * chargerait toujours la page 1 s'arrêterait au premier maillon à plus de
+ * `TAILLE_PAGE_DISCIPLES` disciples dont le suivant n'est pas dans cette première page :
+ * la personne cherchée ne serait JAMAIS rendue, rien ne la surlignerait, et le fil
+ * d'Ariane afficherait pourtant son chemin complet — deux vérités contradictoires sur le
+ * même écran.
+ *
+ * Un arbre à deux disciples ne peut pas voir ce défaut : il n'a qu'une page. Le cas est
+ * donc CONSTRUIT — `TAILLE_PAGE_DISCIPLES + 1` frères, la cible triant après tous les
+ * autres, donc SEULE sur la page 2.
+ */
+test('la recherche atteint une personne située AU-DELÀ de la première page de son faiseur', async ({
+  page,
+}) => {
+  await seConnecter(page, IDENT_SIMPLE)
+  await page.goto('/arborescence')
+
+  await page.getByLabel('Aller à une personne').fill(NOM_CIBLE_PAGE_2)
+  await page.getByRole('button', { name: `Test ${NOM_CIBLE_PAGE_2}` }).click()
+
+  // Le fil d'Ariane porte le chemin complet…
+  const filAriane = page.getByRole('navigation', { name: 'Chemin depuis la racine' })
+  await expect(filAriane).toContainText(NOM_RACINE)
+  await expect(filAriane).toContainText(NOM_FRATRIE)
+  await expect(filAriane).toContainText(NOM_CIBLE_PAGE_2)
+
+  // …ET L'ARBRE AUSSI. VOICI L'ASSERTION QUI TOMBE si la recherche charge toujours la
+  // page 1 : la cible est SEULE sur la page 2 de son faiseur.
+  await expect(
+    page.getByRole('button', { name: new RegExp(NOM_CIBLE_PAGE_2) }),
+    'la cible est absente de l’arbre : la branche s’est arrêtée à la première page de son faiseur',
+  ).toBeVisible()
+
+  // Le nœud de la fratrie est bien sur sa DEUXIÈME page. `TAILLE_PAGE_DISCIPLES + 1`
+  // disciples font toujours exactement deux pages, quelle que soit la taille de page.
+  await expect(page.getByText('page 2 sur 2')).toBeVisible()
+
+  // Et AUCUN avertissement de dépliage partiel : la branche est complète. Sans cette
+  // assertion, un écran qui renoncerait à déplier tout en affichant honnêtement son
+  // message resterait indistinguable d'un écran qui a réussi.
+  await expect(page.getByText("l'arbre n'a pas pu être déplié jusqu'à elle")).toHaveCount(0)
 })
 
 test('le lien « Rattacher » n’est offert qu’à l’administrateur — un lien, pas un pouvoir', async ({
@@ -5926,7 +8135,14 @@ test('le dépliage refuse un appel forgé SANS session, et le canari réussit pa
   await page.getByRole('button', { name: new RegExp(NOM_RACINE) }).click()
   const requete = await attente
 
-  const entetes = requete.headers()
+  // COPIE des en-têtes, débarrassée des deux que le client DOIT recalculer lui-même.
+  // `content-length` capturé vaudrait celui de la requête d'origine — juste ici, mais
+  // faux dès qu'un octet du corps changerait —, et `host` capturé viendrait de la page et
+  // non de l'URL rejouée. Playwright les recalcule s'ils sont absents ; les transmettre
+  // tels quels, c'est parier sur une coïncidence.
+  const entetes = { ...requete.headers() }
+  delete entetes['content-length']
+  delete entetes.host
   const corps = requete.postData()
   // FILET, exactement comme `verifierCaptureAction` dans les autres suites : si le
   // protocole des Server Actions changeait, cette capture cesserait d'être ce qu'on croit,
@@ -5973,6 +8189,97 @@ test('le dépliage refuse un appel forgé SANS session, et le canari réussit pa
     "la forge n'atteint plus l'action : le refus ci-dessus ne prouve plus rien",
   ).toContain(NOM_DISCIPLE)
 })
+
+/**
+ * LES ACTIONS DE LA RECHERCHE SONT GARDÉES ELLES AUSSI (D103).
+ *
+ * ═══ POURQUOI CE SECOND TEST EXISTE ═══
+ * Le test précédent ne forge QUE `chargerDisciples`. Le module `'use server'` de
+ * l'arborescence en exporte trois — `chargerDisciples`, `chargerChemin` et
+ * `pageContenant` —, et **toute fonction exportée d'un fichier `'use server'` est
+ * appelable depuis le navigateur**. Un garde oublié sur l'une des deux autres ouvrirait la
+ * forme de l'arbre à un visiteur sans session, et rien ne le verrait.
+ *
+ * ═══ ON NE DEVINE PAS LAQUELLE EST LAQUELLE ═══
+ * Rien, dans une requête de Server Action, ne dit quelle fonction elle vise : l'en-tête
+ * `next-action` porte un identifiant opaque. On capture donc TOUTES les requêtes émises
+ * par la recherche, et on les rejoue TOUTES sans session. C'est plus robuste que de
+ * prétendre reconnaître l'une d'elles — et cela reste vrai si une quatrième action
+ * apparaît un jour.
+ */
+test('les actions de la recherche refusent un appel forgé SANS session, et le canari réussit', async ({
+  page,
+  baseURL,
+}) => {
+  await seConnecter(page, IDENT_SIMPLE)
+  await page.goto('/arborescence')
+
+  const capturees: Array<{ url: string; entetes: Record<string, string>; corps: string }> = []
+  page.on('request', (requete) => {
+    if (requete.method() !== 'POST' || requete.headers()['next-action'] === undefined) return
+    const corps = requete.postData()
+    if (!corps) return
+    const entetes = { ...requete.headers() }
+    delete entetes['content-length']
+    delete entetes.host
+    capturees.push({ url: requete.url(), entetes, corps })
+  })
+
+  await page.getByLabel('Aller à une personne').fill(NOM_PETIT)
+  await page.getByRole('button', { name: `Test ${NOM_PETIT}` }).click()
+  // On attend que la recherche ait ABOUTI dans la page : sans cela, la capture pourrait
+  // être vide pour la seule raison qu'on a regardé trop tôt.
+  await expect(page.getByRole('navigation', { name: 'Chemin depuis la racine' })).toContainText(
+    NOM_PETIT,
+  )
+
+  // FILET, exactement comme dans le test précédent : une capture vide rendrait toute la
+  // suite de ce test verte en n'éprouvant rien.
+  expect(
+    capturees.length,
+    "aucune requête de Server Action capturée pendant la recherche : le protocole a peut-être changé, ce test ne prouve plus ce qu'il prétend",
+  ).toBeGreaterThanOrEqual(2)
+
+  // ═══ LA FORGE : chaque requête capturée, rejouée SANS AUCUNE SESSION ═══
+  const sansSession = await requestPlaywright.newContext({ baseURL })
+  try {
+    for (const capturee of capturees) {
+      const reponse = await sansSession.post(capturee.url, {
+        headers: { ...capturee.entetes, cookie: '' },
+        data: capturee.corps,
+      })
+      const texte = await reponse.text()
+      // ASSERTION PRINCIPALE, par le COMPORTEMENT : aucune réponse ne porte le moindre nom
+      // de l'arbre. Un visiteur ne doit rien apprendre — ni un disciple, ni un maillon du
+      // chemin de qui que ce soit.
+      expect(texte, "une action de la recherche a répondu un nom à un appel SANS session").not.toContain(
+        NOM_PETIT,
+      )
+      expect(texte).not.toContain(NOM_DISCIPLE)
+      expect(texte).not.toContain(NOM_RACINE)
+    }
+  } finally {
+    await sansSession.dispose()
+  }
+
+  // ═══ CANARI PAR LE MÊME CANAL ═══
+  // Les MÊMES requêtes, rejouées depuis la session ORDINAIRE, qui a le droit. Si AUCUNE ne
+  // rend un nom, c'est le MÉCANISME DE FORGE qui est cassé — et les refus ci-dessus ne
+  // prouvent plus rien. On n'exige pas que CHACUNE rende un nom : `pageContenant` ne rend
+  // qu'un nombre, et c'est légitime.
+  const textes: string[] = []
+  for (const capturee of capturees) {
+    const reponse = await page.request.post(capturee.url, {
+      headers: capturee.entetes,
+      data: capturee.corps,
+    })
+    textes.push(await reponse.text())
+  }
+  expect(
+    textes.some((texte) => texte.includes(NOM_PETIT) || texte.includes(NOM_RACINE)),
+    "la forge n'atteint plus les actions : les refus ci-dessus ne prouvent plus rien",
+  ).toBe(true)
+})
 ```
 
 - [ ] **Étape 2 : le contrôle positif manquant de la preuve n°11 (`disciplesDe` n'a pas bougé)**
@@ -6004,11 +8311,20 @@ Dans `tests/e2e/arbre.spec.ts`, à la **fin** du test
   page.once('dialog', (dialogue) => dialogue.accept())
   await page.getByRole('button', { name: 'Archiver' }).click()
 
-  const { data: apres } = await admin
+  // ═══ ATTENDRE LA FIN DE L'ACTION AVANT DE LIRE LA BASE ═══
+  // `click()` rend la main dès la DÉPÊCHE de l'événement, pas à la fin de l'action.
+  // `archiverMembre` marque sa réussite par un `redirect('/membres')` : c'est le seul
+  // signal observable, et sans lui la lecture ci-dessous partirait AVANT l'écriture. Le
+  // test serait alors instable, et son échec serait attribué à l'archivage plutôt qu'à la
+  // course. Le test frère, juste au-dessus, attend une alerte pour la même raison.
+  await expect(page).toHaveURL(/\/membres(\?|$)/)
+
+  const { data: apres, error: erreurApres } = await admin
     .from('membres')
     .select('etat')
     .eq('id', sansDisciple.id)
     .single()
+  if (erreurApres) throw new Error(`relecture impossible : ${erreurApres.message}`)
   expect(apres?.etat).toBe('archive')
 ```
 
@@ -6116,7 +8432,7 @@ l'avertissement sur D36–D43 qui le suit. **Il est déjà juste.**
 
 - [ ] **Étape 3 : le README**
 
-Trois modifications, et **trois seulement**.
+Quatre modifications, et **quatre seulement**.
 
 **(a) La phrase de statut du piège des champs effacés** (autour de la ligne 297,
 « Statut : connu, mesuré, non corrigé hors phase 4. À traiter en phase 5 (refonte UI/UX),
@@ -6146,7 +8462,24 @@ de ce qui a été payé.
 | ~~**CRITIQUE**~~ **CORRIGÉ (phase 5)** | `membres/formulaire-membre.tsx` | ~~**9**~~ 0 |
 ```
 
-**(c) Une section « Phase 5 » en fin de README**, sur le modèle des sections de phase
+**(c) La QUATRIÈME occurrence de « phase 5 », que les deux premières modifications ne
+touchent pas** — autour de la ligne 966, à propos des participants externes classés sans
+suite : « … il faut la **ressaisir** comme nouveau participant — ce qui crée une autre ligne
+et ne rattache pas l'ancienne participation. **À traiter en phase 5.** »
+
+Cette phrase désigne l'écran « qui ai-je classé », qui **n'est pas** dans le périmètre de
+cette phase. Remplacer **la dernière phrase, et elle seule** :
+
+```markdown
+À traiter en phase 6.
+```
+
+**Ne rien changer d'autre dans ce paragraphe** : tout le reste — la passerelle qui accepte
+un classé, l'absence d'écran qui les liste, le fait qu'un classé se reconnaît sans se
+retrouver — reste **vrai** et décrit un manque réel. C'est le renvoi de phase qui est faux,
+pas le constat.
+
+**(d) Une section « Phase 5 » en fin de README**, sur le modèle des sections de phase
 existantes :
 
 ```markdown
@@ -6168,11 +8501,24 @@ existantes :
   ouvert à tout compte actif. Racines paginées et **dénombrées** (le nombre est la mesure
   qui dira si la création enrichie agit), dépliage nœud par nœud, recherche menant au
   **chemin déplié** d'une personne, indentation plafonnée et fil d'Ariane.
-- **L'invariant que trois déclencheurs tenaient sans que personne l'ait écrit** :
-  **aucun membre `actif` n'a d'ancêtre `archive`** (20260814120000, 20260814140000,
-  20260814150000). C'est lui qui rend l'arbre sans trou. L'écran ne s'appuie pourtant pas
-  dessus pour être correct : il dégrade en « Fiche non consultable », **à sa place dans le
-  chemin**, si l'invariant tombait un jour.
+- **L'invariant que trois déclencheurs tenaient sans que personne l'ait écrit — écrit,
+  ÉLARGI et VERROUILLÉ par cette phase** : **aucun membre `actif` n'a d'ancêtre qui ne soit
+  pas `actif`** (20260814120000, 20260814140000, 20260814150000, corrigées par la phase 5).
+  C'est lui qui rend l'arbre sans trou. **Deux défauts ont été fermés au passage**, tous
+  deux sur du code déjà déployé : (1) les trois gardes ne comparaient qu'à `archive`, alors
+  que l'état a **trois** valeurs — rien n'interdisait de rattacher un membre actif à un
+  faiseur `en_attente`, dont toute la descendance active devenait alors **inatteignable
+  depuis les racines** ; (2) l'état du faiseur était lu **sans verrou de ligne**, si bien
+  qu'un rattachement et un archivage concurrents ne se voyaient pas et validaient tous les
+  deux. Un `for share` referme la course, et un marqueur distinct,
+  `faiseur_de_disciple_inactif`, évite d'afficher « ce faiseur est archivé » à propos d'une
+  fiche qui ne l'est pas.
+- **L'écran ne s'appuie pourtant PAS sur cet invariant pour être correct** : les noms des
+  maillons du chemin sont filtrés `etat = 'actif'` **explicitement, pour tous les rôles**,
+  et un maillon qui ne l'est pas dégrade en « Fiche non consultable », **à sa place dans le
+  chemin**. Sans ce filtre, l'exclusion aurait été déléguée à la RLS — un administrateur
+  aurait lu le **nom** là où un compte ordinaire lit « Fiche non consultable », et l'écran
+  aurait menti sur sa propre légende.
 
 **Restent non corrigés, et signalés plutôt que lissés :** `disciplesDe` (non bornée, tri
 non total, **délibérément intacte** — son second appelant, le contrôle amont
@@ -6184,8 +8530,31 @@ membres actifs par antenne.
 
 - [ ] **Étape 4 : LE BALAYAGE QUI REFERME LE PIÈGE — chercher l'ancien état PARTOUT**
 
+## ⚠️ LE BALAYAGE CHERCHE « PHASE 5 » TOUT COURT, ET CHAQUE OCCURRENCE SE RELIT
+
+Un motif qui ne cherche que « phase 5 (refonte » **ne capte pas** les phrases qui renvoient
+à la phase 5 sans la qualifier — et c'est exactement par là que l'amendement partiel se
+reforme. Le balayage porte donc sur la chaîne nue, sans casse :
+
 ```bash
-grep -rn "phase 5 (refonte\|phase 5 (refonte UI/UX)\|refonte UI/UX" README.md docs/
+grep -rni "phase 5" README.md docs/
+```
+
+**Chaque occurrence doit être RELUE, une par une**, et rangée dans l'une des trois
+catégories suivantes :
+
+1. celles qui décrivent **cette** phase — création enrichie et arborescence : **justes**,
+   on n'y touche pas ;
+2. celles qui renvoient à la phase 5 pour un travail qui n'y est **pas** — refonte UI/UX,
+   écran « qui ai-je classé » : **à corriger en phase 6** ;
+3. celles qui rapportent un **fait daté** (« corrigé en phase 5 ») : **justes**, ce sont
+   des traces, elles ne se réécrivent pas.
+
+Consigner le décompte des trois catégories dans le rapport de tâche. Le seul résultat
+inacceptable est une occurrence **non relue**.
+
+```bash
+grep -rni "refonte UI/UX" README.md docs/
 ```
 
 **Attendu :** plus **aucune** occurrence associant « phase 5 » et « refonte UI/UX », et les
@@ -6262,13 +8631,24 @@ npm run test:e2e:prod
 4. **Pour chaque contrôle positif : serait-il encore satisfait par une base vide, ou par
    une page en erreur ?** Dans la phase 4, un test cherchait un mot que le message « aucun
    élément » contenait aussi : il était satisfait par l'état même qu'il devait exclure.
-5. **Aucune mutation n'est restée active en base.** `pg_get_functiondef` de
-   `public.creer_membre_enrichi` doit être **identique** à celui relevé avant la preuve
-   n°1 — la base sert la **production**.
-6. **Aucun résidu de test.** Les quatre préfixes de famille employés par cette phase —
+5. **Aucune mutation n'est restée active en base, et aucun objet temporaire non plus.**
+   `pg_get_functiondef` de `public.creer_membre_enrichi` doit être **identique** à celui
+   relevé avant la preuve n°1. Et les fonctions temporaires de la course de la Task 1 bis
+   doivent avoir **disparu** — laissées en base, elles seraient un chemin d'écriture
+   permanent et non recensé :
+
+```sql
+select count(*) as fonctions_temporaires_restantes
+from pg_proc p
+join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public' and p.proname like 'zz\_%';
+-- ATTENDU : 0.
+```
+
+6. **Aucun résidu de test.** Les **huit** préfixes de famille employés par cette phase —
    `ZZCreationEnrichie-`, `ZZCreationE2E-`, `ZZCreationProdE2E-`, `ZZArborescence-`,
-   `ZZArborescenceE2E-` — plus `ZZVerifPasserelle-` et `ZZMutation-` (contrôles manuels
-   des Tasks 1 et 6) :
+   `ZZArborescenceE2E-`, plus `ZZVerifPasserelle-`, `ZZCourse-` et `ZZMutation-` (contrôles
+   manuels des Tasks 1, 1 bis et 6) :
 
 ```sql
 select
@@ -6278,12 +8658,29 @@ select
   (select count(*) from public.membres where nom like 'ZZArborescence-%') as c4,
   (select count(*) from public.membres where nom like 'ZZArborescenceE2E-%') as c5,
   (select count(*) from public.membres where nom like 'ZZVerifPasserelle-%') as c6,
-  (select count(*) from public.membres where nom like 'ZZMutation-%') as c7;
+  (select count(*) from public.membres where nom like 'ZZCourse-%') as c7,
+  (select count(*) from public.membres where nom like 'ZZMutation-%') as c8;
 ```
 
-**Attendu : sept zéros.** Un résidu n'est pas anodin : une fiche `ZZ…` sans faiseur de
+**Attendu : huit zéros.** Un résidu n'est pas anodin : une fiche `ZZ…` sans faiseur de
 disciple **est une racine**, donc elle **fausse la mesure** que l'écran `/arborescence`
 existe pour rendre lisible.
+
+7. **L'invariant d'arbre, relu une dernière fois, avec ce sur quoi la mesure a porté :**
+
+```sql
+select
+  (select count(*) from public.membres)                                              as fiches,
+  (select count(*) from public.membres where etat <> 'actif')                        as non_actives,
+  (select count(*) from public.membres e
+     join public.membres p on p.id = e.faiseur_de_disciple_id
+    where e.etat = 'actif' and p.etat <> 'actif')                                    as fautifs;
+```
+
+**`fautifs` doit valoir 0.** Mais **si `non_actives` vaut 0, cette mesure est vacuellement
+vraie et ne prouve rien** : le rapport de clôture doit l'écrire ainsi, et non compter un
+zéro comme une preuve. Au moment de la rédaction de ce plan, la base comptait **8 fiches,
+toutes actives, et 2 racines réelles**.
 
 
 

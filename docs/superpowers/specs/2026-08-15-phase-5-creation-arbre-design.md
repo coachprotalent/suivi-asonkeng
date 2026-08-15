@@ -83,7 +83,7 @@ précisent pas.
 |---|---|---|
 | D81 | La création enrichie est **une passerelle SQL unique**, `public.creer_membre_enrichi(...)`, `security definer`, `execute` réservé à `service_role`. Les trois écritures — fiche, arbre, statuts — vivent dans le corps d'**une seule** fonction PL/pgSQL : l'atomicité est tenue **par construction** | Les trois écritures sont **toutes du SQL, sur la même base** : une transaction les couvre. D27 a choisi la compensation parce qu'aucune transaction n'était **possible** — la création du compte est un appel HTTP à Supabase Auth, le marquage du token une écriture SQL. Ce motif ne se transpose pas : préférer ici la compensation, ce serait choisir la garantie faible alors que la forte est disponible. Et la compensation coûterait cher : elle devrait **supprimer une fiche `actif`**, dont la cascade emporte `journal_statuts` — que 20260813170000 désigne comme la seule voie d'effacement complet d'une personne. Voir §5 pour l'arbitrage complet entre les trois formes |
 | D82 | La passerelle **compose** les passerelles existantes — elle appelle `public.definir_arbre` et `public.attribuer_statut` — et n'en **duplique ni n'en contourne** aucune vérification | C'est la réponse à la seule objection sérieuse contre D81. Les gardes des trois écritures ne sont pas dans l'application : elles sont **dans le SQL**, donc appelables depuis une autre fonction SQL. Composer coûte deux `perform` ; recopier coûterait deux copies destinées à diverger. Conséquence directe et voulue : **aucun marqueur d'erreur nouveau** pour l'arbre ni pour les statuts — `membre_inconnu`, `faiseur_inconnu`, `dirigeant_inconnu`, `faiseur_de_disciple_archive`, `cycle_faiseur_de_disciple` et le code `23514` gardent leur sens, et l'application les discrimine avec le code qu'elle a déjà écrit |
-| D83 | La passerelle **ne prend aucun verrou consultatif propre** : celui de l'arbre (`pg_advisory_xact_lock(20260814, 1)`) est pris par l'appel imbriqué à `definir_arbre`, en première instruction de celle-ci, et cela suffit | Entre l'insertion de la fiche et l'écriture de l'arbre il n'y a **aucune fenêtre** : c'est la même transaction. Et une ligne qui n'existe pas encore n'a aucun descendant, donc l'insertion seule ne peut fermer aucun cycle. Un second `pg_advisory_xact_lock` sur la même clé serait ré-entrant, donc inoffensif — et **trompeur** : il laisserait croire que celui de `definir_arbre` ne suffit pas. D67 (phase 4) exige le verrou dès qu'un `faiseur_de_disciple_id` est posé ; il l'est ici, par la passerelle qui le pose |
+| D83 | La passerelle **ne prend aucun verrou consultatif propre** : celui de l'arbre (`pg_advisory_xact_lock(20260814, 1)`) est pris par l'appel imbriqué à `definir_arbre`, en première instruction de celle-ci, et cela suffit | Entre l'insertion de la fiche et l'écriture de l'arbre il n'y a **aucune fenêtre** : c'est la même transaction. Et une ligne qui n'existe pas encore n'a aucun descendant, donc l'insertion seule ne peut fermer aucun cycle. Un second `pg_advisory_xact_lock` sur la même clé serait ré-entrant, donc inoffensif — et **trompeur** : il laisserait croire que celui de `definir_arbre` ne suffit pas. D67 (phase 4) exige le verrou dès qu'un `faiseur_de_disciple_id` est posé ; il l'est ici, par la passerelle qui le pose. **Amendement du 2026-08-15 :** cet argument est juste **pour les cycles**, et il le reste. Il ne dit en revanche rien de l'**archivage concurrent**, qui n'emprunte pas `definir_arbre` — d'où le `for share` ajouté sur la lecture de l'état du faiseur (§6.4). Le verrou consultatif sérialise les écritures d'arbre entre elles ; le verrou de **ligne** est ce qui les sérialise avec les changements d'**état** |
 | D84 | Deux statuts d'un **même groupe exclusif** soumis dans la même création sont **refusés, deux fois** : par une fonction pure en amont, qui nomme les deux statuts, et par la passerelle elle-même, avec le marqueur `statuts_exclusifs_incompatibles`. Ils ne sont **jamais** laissés à l'éviction de `prive.attribuer_statut` | L'éviction est conçue pour une attribution **ultérieure** qui remplace une attribution **antérieure** : elle supprime, journalise un `retrait` motivé, et c'est juste. À la création, les deux statuts arrivent dans le **même geste** : l'éviction ferait disparaître le premier en silence et inscrirait au journal le retrait d'un statut que la personne n'a jamais porté plus d'une transaction. Le journal mentirait sur ce qui s'est passé — exactement ce que le `if v_nouveau` d'`attribuer_statut` protège par ailleurs. Deux barrières, doctrine du projet depuis la 1b : **le contrôle amont explique, la passerelle protège**. Elle protège en particulier contre une lecture de catalogue tronquée (§13, point 6) : la passerelle relit les groupes en base, elle ne fait confiance à aucune liste venue de l'écran |
 | D85 | **Tous les champs du formulaire de création enrichie sont contrôlés** (`value` + `onChange`), sans exception, y compris ceux qui l'étaient déjà et ceux que cette phase ajoute | `membres/formulaire-membre.tsx` est aujourd'hui le **deuxième pire cas** du dépôt — 9 champs libres sur les 14 composants recensés au README —, et cette phase lui ajoute les statuts, le faiseur de disciple et le dirigeant. React réinitialise les champs non contrôlés à **toute complétion** d'une action liée à `<form action>`, **y compris sur un refus retourné**. Couplé à D81, ce serait le pire assemblage possible : la transaction est annulée **et** la saisie disparaît. Réciproquement, l'atomicité ne coûte rien **parce que** les champs sont contrôlés — les deux décisions se tiennent mutuellement debout, et aucune des deux n'est bonne seule |
 | D86 | Les trois enrichissements sont facultatifs **et indépendants les uns des autres** ; une création sans aucun enrichissement produit **exactement** ce que `creerMembre` produit aujourd'hui | C'est la condition pour que le remplacement de D87 soit sans risque, et c'est une **preuve** (§11, n°4), pas une intention. Indépendants : un dirigeant sans faiseur de disciple est légitime (le §4.2 le prévoit, `dirigeantPropose` rend `null` et l'administrateur force une valeur), des statuts sans place dans l'arbre aussi |
@@ -93,13 +93,13 @@ précisent pas.
 | D90 | Le garde de l'écran et de l'action reste **`exigerAdministrateur`**, en première instruction, et ne descend **pas** à `exigerAutoriteSur` malgré la présence d'écritures de statuts | La création d'une fiche est réservée à l'administrateur (§5.2), et un administrateur a autorité **partout** — `peutModifier` court-circuite sur `estAdmin` avant toute remontée d'arbre. Les deux gardes **coïncident sur cet écran** : rien n'est affaibli. Écrit ici **et dans le `comment on function`** parce que la propriété est vraie par coïncidence et non par construction : un futur appelant non-administrateur de `creer_membre_enrichi` élargirait en silence qui peut écrire un statut, et doit être reconnu comme une régression, pas comme une réutilisation (§12, piège n°10) |
 | D91 | L'arbre parcourable vit à **`/arborescence`** (nouveau, à la racine), et **non** sous `/membres/[id]/arbre`, qui reste l'écran de **rattachement d'un membre** | Deux écrans dont les noms diffèrent d'un mot et dont les droits diffèrent entièrement — consultation par tout compte actif d'un côté, édition par l'administrateur seul de l'autre — c'est ainsi qu'un garde finit par être confondu. Le vocabulaire existe déjà et il est distinct : la spécification appelle **arborescence** la structure (§4.2, titre de la 1c) et **rattachement** le geste (`/membres/[id]/arbre`, titre « Rattachement de … »). L'ancienne route n'est pas renommée : elle est déployée et liée depuis la fiche (§13, point 13) |
 | D92 | **Consultation seule** : la phase 5, volet 2, n'ajoute **aucune** Server Action d'écriture, aucune passerelle, aucun marqueur, aucune politique RLS, aucun déclencheur | Décision utilisateur, enregistrée pour une raison précise : elle rend le recensement des chemins d'écriture du §10.2 **vide pour ce volet**, et ce vide devient lui-même une assertion à vérifier en revue. Un écran d'arbre qui rattache serait le quatrième chemin d'écriture vers `faiseur_de_disciple_id`, sur un écran où l'on navigue vite et où l'on clique par erreur |
-| D93 | L'arbre affiché est celui des membres **`actif`**, filtré **explicitement** (`etat = 'actif'`) et jamais laissé au seul filtrage de la RLS | Exactement le raisonnement de `listerMembres`, et il est écrit dans son commentaire : un filtre explicite est une **règle énoncée**, un trou creusé par la RLS est un **mensonge**. La phase 4 l'a formulé dans l'autre sens (§8.1 : « une lecture vidée par la RLS ne doit jamais être affichée comme un résultat »). Conséquence directe, et c'est la réponse à « que voit un compte ordinaire ? » : **un compte ordinaire et un administrateur voient le même arbre**, parce que toute fiche `actif` est lisible de tout compte actif (D2, D20) et que ce qui est exclu l'est pour tout le monde |
+| D93 | L'arbre affiché est celui des membres **`actif`**, filtré **explicitement** (`etat = 'actif'`) et jamais laissé au seul filtrage de la RLS | Exactement le raisonnement de `listerMembres`, et il est écrit dans son commentaire : un filtre explicite est une **règle énoncée**, un trou creusé par la RLS est un **mensonge**. La phase 4 l'a formulé dans l'autre sens (§8.1 : « une lecture vidée par la RLS ne doit jamais être affichée comme un résultat »). Conséquence directe, et c'est la réponse à « que voit un compte ordinaire ? » : **un compte ordinaire et un administrateur voient le même arbre**, parce que toute fiche `actif` est lisible de tout compte actif (D2, D20) et que ce qui est exclu l'est pour tout le monde. **Amendement du 2026-08-15 : le filtre porte sur TROIS lectures, pas deux.** Les disciples d'un nœud, les racines, **et les noms des maillons du chemin**. Cette troisième était le seul endroit où l'exclusion aurait été déléguée à la RLS : `membresBrefsParIds` ne porte aucun filtre d'état, et `prive.peut_lire_membre` ouvre toute fiche à l'administrateur — un administrateur aurait donc lu le **nom** d'un maillon archivé ou en attente là où un compte ordinaire lit « Fiche non consultable », et la légende de l'écran (« seuls les membres actifs y figurent ») aurait menti à l'un des deux. D'où une fonction distincte, `nomsMaillonsActifs`, plutôt qu'une modification de `membresBrefsParIds`, qui a cinq autres appelants — même raison qui protège `disciplesDe` en D94 |
 | D94 | Les disciples d'un nœud sont lus par une fonction **neuve et paginée**, `disciplesPage(membreId, page)`, avec `count: 'exact'`, tri **total** (`nom`, `prenom`, puis `id`), `range()`, les helpers de `pagination.ts` et le traitement de `PGRST103`. **`disciplesDe` n'est ni réutilisée ni modifiée** | `disciplesDe` n'a **aucune borne** et son tri **n'est pas total** : à l'échelle de D18, une lecture non bornée est tronquée en silence au-delà de `max_rows = 1000`, et deux homonymes exacts à cheval sur une frontière de page peuvent être rendus deux fois ou **jamais**. Elle n'est pas corrigée parce qu'elle a un second appelant porteur : le contrôle amont d'`archiverMembre`, qui doit rester **complet** et dont la sémantique ne doit pas changer sous une pagination (§13, point 5). Deux besoins différents, deux fonctions — et le second reste à l'identique, donc reste éprouvé par ses tests existants |
 | D95 | Les **racines** sont paginées de la même façon, leur **nombre est affiché**, et l'écran les nomme « **Membres sans faiseur de disciple** », « racines de l'arbre » n'étant qu'une glose | Le §6 de la spécification maîtresse suppose les racines peu nombreuses — « les tout premiers sans faiseur de disciple, ce sont les racines de l'arbre ». **Rien ne le garantit**, et le code dit le contraire : `creerMembre` n'a jamais écrit de `faiseur_de_disciple_id`, donc toute fiche est une racine tant que personne n'ouvre l'écran de rattachement. Appeler « racine » une fiche simplement jamais rattachée serait prêter une intention à un oubli. Le nombre est affiché parce que c'est **la mesure** qui dira si le remède de D96 agit |
 | D96 | Le volet 1 est livré **avant** le volet 2 | L'arbre parcourable rend visible l'ampleur du problème que la création enrichie referme. Livré en premier, il serait jugé cassé — « il commence par mille racines » — alors qu'il dirait la vérité. Livré en second, il mesure un problème déjà en voie de réduction. Ce n'est pas de l'ordonnancement de confort : c'est la seule séquence où la première mesure prise par l'écran est interprétable |
-| D97 | La recherche mène à **un membre**, et l'écran affiche alors **son chemin depuis la racine, déplié**, le membre mis en évidence, **et la première page de ses disciples** | Montrer la seule personne perdrait le « où dans l'arbre », qui est toute la raison d'être de l'écran — on l'a déjà sur `/membres/[id]`. Montrer les seuls ancêtres ne répondrait pas à « qui suit-il ? ». C'est le **seul** état de l'écran qui répond aux deux questions à la fois, et il ne coûte qu'une lecture de plus |
+| D97 | La recherche mène à **un membre**, et l'écran affiche alors **son chemin depuis la racine, déplié**, le membre mis en évidence, **et la première page de ses disciples** | Montrer la seule personne perdrait le « où dans l'arbre », qui est toute la raison d'être de l'écran — on l'a déjà sur `/membres/[id]`. Montrer les seuls ancêtres ne répondrait pas à « qui suit-il ? ». C'est le **seul** état de l'écran qui répond aux deux questions à la fois. **Amendement du 2026-08-15 : « déplié » impose de charger, pour CHAQUE maillon, la page de disciples qui contient le maillon SUIVANT — pas la page 1.** Le rendu d'un nœud ne montre que les disciples de la page chargée : au premier maillon à plus de `TAILLE_PAGE_DISCIPLES` disciples dont le suivant n'est pas en première page, la branche s'arrêterait, la personne cherchée ne serait jamais rendue, et le fil d'Ariane afficherait pourtant son chemin complet — deux vérités contradictoires sur le même écran, à l'échelle même que D18 vise. Le calcul de page ne garantit rien quand le maillon visé est devenu illisible : l'écran **vérifie** alors que le maillon suivant figure bien dans la page obtenue, et **le dit** sinon. Il coûte donc une lecture de plus par maillon, et non une seule au total |
 | D98 | **La forme du chemin est lue affranchie de la RLS** (identifiants seuls, `public.ancetres_membre`, D19) ; **les noms sont lus sous RLS**. Un maillon que l'appelant ne peut pas lire est rendu « **Fiche non consultable** », **à sa place dans le chemin**, jamais effacé ni sauté | C'est la réponse à « une branche dont un maillon intermédiaire est invisible devient-elle un trou ? » — **non**. L'effacer ferait mentir l'écran sur la profondeur et pourrait détacher toute la descendance ; la 1c a déjà tranché exactement cela sur la fiche (`libelleFiliation`, `/membres/[id]`), la phase 3 sur l'intervenant d'une séance, la phase 4 sur un participant. Même réponse, troisième fois. **Aucun nom lu affranchi n'atteint jamais l'écran** : la Server Action qui appelle `ancetres_membre` ne rend que des identifiants, et les noms sont relus par `membresBrefsParIds`, sous RLS, comme partout ailleurs |
-| D99 | Ce cas est, **par construction, inatteignable pour un membre actif** : trois déclencheurs de la 1c maintiennent l'invariant « **aucun membre `actif` n'a d'ancêtre `archive`** ». D98 est donc une **défense**, pas un chemin normal — et l'invariant est **écrit ici** parce qu'il n'est écrit nulle part | `membres_archivage_faiseur_de_disciple` (20260814120000) refuse d'archiver qui a des disciples actifs ; `membres_desarchivage_faiseur_archive` (20260814140000) est `before update of etat` et couvre **toute** transition vers `actif` — y compris `en_attente → actif`, donc la validation d'une demande ; `membres_faiseur_de_disciple_archive` (20260814150000) refuse de rattacher à un faiseur archivé, à l'`insert` comme à l'`update`. Trois déclencheurs tiennent chacun un côté d'un invariant que **personne n'a jamais énoncé**. L'écrire est le seul moyen qu'une modification future sache ce qu'elle casserait — et l'écran ne s'appuie pas dessus pour être correct : il dégrade proprement si l'invariant tombait |
+| D99 | Trois déclencheurs maintiennent l'invariant « **aucun membre `actif` n'a d'ancêtre qui ne soit pas `actif`** ». **La phase 5 les ÉLARGIT à `en_attente` et VERROUILLE leur lecture** (deux migrations additives, §6.4). D98 reste une **défense** et non un chemin normal — mais l'écran ne s'appuie **pas** sur cet invariant pour être correct | `membres_archivage_faiseur_de_disciple` (20260814120000) refuse de faire quitter l'état `actif` à qui a des disciples actifs ; `membres_desarchivage_faiseur_archive` (20260814140000) est `before update of etat` et couvre **toute** transition vers `actif` — y compris `en_attente → actif`, donc la validation d'une demande ; `membres_faiseur_de_disciple_archive` (20260814150000) refuse de rattacher à un faiseur non actif, à l'`insert` comme à l'`update`. **Les trois comparaient littéralement à `'archive'` alors que l'état a TROIS valeurs**, et rien n'interdisait donc un faiseur `en_attente`, dont toute la descendance active devenait inatteignable depuis les racines ; et **l'état du faiseur était lu sans verrou de ligne**, si bien qu'un rattachement et un archivage concurrents validaient tous les deux — la classe de défaut que la 1c a jugée inacceptable. Les deux sont fermés en phase 5 (§6.4), avec le marqueur nouveau `faiseur_de_disciple_inactif`. Et l'écran reste correct **que l'invariant tienne ou non**, parce que D93 filtre `etat = 'actif'` explicitement, y compris sur les noms du chemin |
 | D100 | La règle d'affichage « identifiant présent, fiche illisible → *Fiche non consultable* » est **extraite** de `/membres/[id]/page.tsx` en une **fonction pure partagée**, appelée par la fiche **et** par l'arbre | Exactement l'argument de D72, appliqué à une règle d'affichage plutôt qu'à une politique : recopier l'expression dans le second écran la ferait **diverger en silence** le jour où l'un des deux changerait. Bénéfice second, non négligeable : la règle devient testable au Vitest, donc D98 se prouve **sans toucher la base** (§11, n°14) |
 | D101 | **Aucun indicateur « ce nœud a des disciples » n'est calculé d'avance.** Tout membre actif est dépliable ; déplier une feuille affiche « Aucun disciple actif rattaché. » | Un indicateur par enfant, c'est **une requête par enfant** — N+1 sur chaque page dépliée — et PostgREST ne sait pas agréger (`group by`). L'alternative serait une vue d'agrégation : un objet permanent en base, avec sa RLS à écrire et à prouver, **pour un chevron**. On préfère un aller-retour de trop, à la demande de l'utilisateur, à N requêtes systématiques que personne n'a demandées |
 | D102 | **Aucun index nouveau**, et l'index qui serait la réponse est **nommé** dans ce document : `create index membres_arbre_idx on public.membres (faiseur_de_disciple_id, nom, prenom, id) where etat = 'actif';` | Même arbitrage que la 1c, §6.2 : on pagine, et l'index attendra d'être justifié **par une mesure, pas par une intuition**. `membres_faiseur_de_disciple_id_idx` existe déjà (20260812120000) et sert le filtre ; le tri porte alors sur une poignée de lignes par nœud. Seule la liste des racines trie un ensemble large, et l'annuaire fait déjà exactement cela à la même échelle sans index de tri. L'index candidat est écrit ici — partiel, et couvrant `is null`, un B-tree indexant les NULL — pour que la personne qui prendra la mesure n'ait pas à le redécouvrir |
@@ -286,7 +286,9 @@ de position.
 
 1. **Refus du couple exclusif** (D84), avant toute écriture. Les groupes sont relus **en base**
    depuis `p_statuts`, jamais pris d'une liste venue de l'écran. Marqueur
-   `statuts_exclusifs_incompatibles`, le **seul marqueur nouveau de la phase**.
+   `statuts_exclusifs_incompatibles`, **seul marqueur nouveau posé par cette fonction** (l'autre
+   marqueur nouveau de la phase, `faiseur_de_disciple_inactif`, est posé par
+   `public.definir_arbre` et par les déclencheurs d'état — voir §6.4).
 2. `insert into public.membres (...) values (...) returning id into v_membre`. `etat` n'est pas
    fourni : le défaut de la colonne (`'actif'`) s'applique, comme aujourd'hui dans `creerMembre`.
    `cree_par = p_par`.
@@ -327,21 +329,60 @@ une mesure le demandera ; il est nommé ici pour qu'on n'ait pas à le recherche
 
 ### 6.4 L'invariant que trois déclencheurs tiennent et que personne n'a écrit
 
-> **Aucun membre à l'état `actif` n'a d'ancêtre à l'état `archive`.**
+> **Aucun membre à l'état `actif` n'a d'ancêtre qui ne soit pas `actif`.**
 
-Maintenu par trois barrières livrées en 1c et en correctif post-1c, chacune fermant une porte
-différente :
+*Amendement du 2026-08-15 (revue pré-vol). Cet énoncé disait « pas d'ancêtre `archive` », et les
+trois barrières comparaient littéralement à `'archive'`. Deux défauts en découlaient, tous deux
+vérifiés dans les migrations et non dans leur description ; la phase 5 les ferme par deux
+migrations additives, et l'énoncé est élargi en conséquence.*
+
+**Défaut 1 — l'état a TROIS valeurs, les gardes n'en connaissaient qu'une.**
+`public.etat_membre` vaut `en_attente`, `actif` ou `archive` (20260812120000). Rien n'interdisait
+donc de rattacher un membre `actif` à un faiseur `en_attente`, ni de faire passer à `en_attente`
+un membre ayant des disciples actifs. Or l'arborescence exclut `en_attente` **exactement** comme
+`archive` (`.eq('etat','actif')` sur ses trois lectures) : un maillon `en_attente` produisait le
+même trou qu'un maillon `archive`, avec une conséquence que le cas `archive` n'a pas — **toute la
+descendance active d'un faiseur `en_attente` devenait inatteignable depuis la liste des racines**,
+ces fiches ayant un faiseur, donc n'étant pas racines, et leur parent n'étant jamais rendu.
+
+**Défaut 2 — l'état du faiseur était lu sans verrou de ligne.** Le verrou consultatif
+`pg_advisory_xact_lock(20260814, 1)` sérialise les écritures d'**arbre** entre elles ; il ne dit
+rien de l'**archivage**, qui passe par un `update` PostgREST direct (`archiverMembre`) et ne peut
+pas prendre de verrou consultatif sans créer un chemin d'écriture de plus. En `read committed`,
+un rattachement et un archivage concurrents ne se voyaient donc pas — le rattachement lisait
+`actif`, l'archivage comptait zéro disciple actif — et **les deux validaient**. C'est la classe
+de défaut que la 1c a jugée inacceptable. Le remède est un `for share` sur la ligne du faiseur,
+posé dans `public.definir_arbre` **et** dans les deux déclencheurs qui lisent cet état — le
+second parce que les `insert` directs (chemin 2 de `convertir_participant_externe`) ne passent
+pas par la passerelle.
+
+Les trois barrières, après correction :
 
 | Transition | Barrière | Migration |
 |---|---|---|
-| Archiver un membre qui a des disciples actifs | `membres_archivage_faiseur_de_disciple` | 20260814120000 |
-| Rendre un membre `actif` alors que son faiseur est archivé — **toute** transition vers `actif`, y compris `en_attente → actif` | `membres_desarchivage_faiseur_archive` | 20260814140000 |
-| Rattacher à un faiseur archivé, à l'`insert` comme à l'`update` | `membres_faiseur_de_disciple_archive` | 20260814150000 |
+| Faire **quitter l'état `actif`** à un membre qui a des disciples actifs — vers `archive` **comme** vers `en_attente` | `membres_archivage_faiseur_de_disciple` | 20260814120000, élargie en phase 5 |
+| Rendre un membre `actif` alors que son faiseur **n'est pas actif** — **toute** transition vers `actif`, y compris `en_attente → actif` | `membres_desarchivage_faiseur_archive` | 20260814140000, élargie et verrouillée en phase 5 |
+| Rattacher à un faiseur **qui n'est pas actif**, à l'`insert` comme à l'`update` | `membres_faiseur_de_disciple_archive` | 20260814150000, élargie et verrouillée en phase 5 |
 
-Conséquence pour cette phase, et c'est elle qui rend l'arbre sans trou : **un membre archivé ne
-peut jamais être un maillon intermédiaire entre une racine et un membre actif.** L'écran ne
-s'appuie pourtant pas dessus pour être correct (D98) : il dégrade en « Fiche non consultable » si
-l'invariant tombait un jour, plutôt que de mentir sur la profondeur.
+**Marqueurs.** `disciples_a_reaffecter` et `faiseur_de_disciple_archive` gardent leur texte et
+leur sens : les branches applicatives qui les discriminent continuent de recevoir exactement ce
+qu'elles recevaient. Le cas nouveau — faiseur ni actif ni archivé — reçoit un marqueur
+**distinct**, `faiseur_de_disciple_inactif`, parce que le message commandé par le premier dit
+« est archivé » et mentirait ici.
+
+Conséquence pour cette phase, et c'est elle qui rend l'arbre sans trou : **un membre qui n'est pas
+actif ne peut jamais être un maillon intermédiaire entre une racine et un membre actif.** L'écran
+ne s'appuie pourtant **pas** dessus pour être correct (D98) : les noms des maillons du chemin sont
+filtrés `etat = 'actif'` **explicitement, pour tous les rôles** (D93), et un maillon qui ne l'est
+pas dégrade en « Fiche non consultable », à sa place dans le chemin. C'est la seule parade qui ne
+dépende pas d'une propriété maintenue ailleurs — et la RLS, elle, ne connaît de toute façon pas
+cet invariant.
+
+**Une mesure de cet invariant peut être vraie À VIDE.** Si la base ne contient aucune fiche
+`archive` ni `en_attente`, un balayage « aucun actif n'a d'ancêtre non actif » est vacuellement
+vrai et ne prouve rien. Au 2026-08-15, la base comptait **8 fiches, toutes actives, et 2 racines
+réelles** : la mesure y était sans valeur probante. Toute preuve de cet invariant doit donc
+**construire** ses fiches non actives, ou **dire** sur quoi elle a porté.
 
 ---
 
@@ -626,6 +667,33 @@ base** quand une barrière tombe — jamais un simple refus.
     `journal_statuts` partant en cascade avec la fiche. Le comptage de contrôle est
     **indépendant** du balayage, jamais déduit de son absence d'erreur.
 
+> **Ajout du 2026-08-15 (revue pré-vol) — quatre preuves que cette liste n'exigeait pas, et dont
+> l'absence laissait un trou.** Elles ne remplacent aucune des dix-sept ci-dessus.
+>
+> 18. **Les noms du chemin sont filtrés `etat = 'actif'` pour TOUS les rôles (D93).** Les preuves
+>     n°12 et n°13 ne portaient que sur les listes paginées ; le chemin, lui, n'était couvert par
+>     rien — et c'était précisément le seul endroit où l'exclusion aurait été déléguée à la RLS.
+>     Deux sessions réelles, un lot mêlant `actif`, `archive` et `en_attente` : la même liste
+>     rendue des deux côtés, et le maillon actif présent (sans quoi l'égalité serait celle de deux
+>     résultats vides). Contrôle positif : l'administrateur ouvre bien les deux fiches exclues par
+>     lien direct — c'est donc le **filtre**, et non la RLS, qui les a écartées.
+> 19. **La recherche atteint une personne au-delà de la première page de son faiseur (D97).** Un
+>     maillon portant `TAILLE_PAGE_DISCIPLES + 1` disciples, la cible triant en dernier — donc
+>     seule sur la page 2. Sans ce cas **construit**, une recherche qui chargerait toujours la
+>     page 1 resterait verte : un arbre à deux disciples n'a qu'une page.
+> 20. **L'invariant d'arbre couvre les trois états, et la course est reproduite (D99, D83).** Deux
+>     jeux distincts : (a) des refus **déterministes** — faiseur `en_attente` refusé par la
+>     passerelle **et** par un `insert` direct, sortie de l'état `actif` refusée à qui a des
+>     disciples actifs, avec leurs contrôles positifs ; (b) une **course réellement reproduite**,
+>     avant puis après correction, dans les deux sens et sur les deux gestes concernés. Une preuve
+>     probabiliste rapportée comme certaine serait pire que pas de preuve : le protocole exige de
+>     consigner le nombre d'essais et de **dire** tout scénario non reproduit.
+> 21. **La mesure de l'invariant DIT sur quoi elle a porté.** Un balayage « aucun actif n'a
+>     d'ancêtre non actif » est **vacuellement vrai** sur une base sans aucune fiche non active —
+>     ce qui était le cas au 2026-08-15 (8 fiches, toutes actives, 2 racines réelles). La preuve
+>     rapporte donc le nombre de fiches non actives examinées, pour que personne ne prenne un zéro
+>     pour une garantie.
+
 **Aucun nouveau parcours Playwright canonique.** Le §8 de la spécification maîtresse fixe
 **quatre** parcours pour tout le projet, et aucun ne concerne la création d'un membre ni
 l'arborescence. Cette phase n'en ajoute pas d'office ; elle ajoute deux specs dédiées qui ne
@@ -662,12 +730,20 @@ peuvent pas se faire autrement — la survie de la saisie (n°6) et la visibilit
    `/arborescence`. La classification de l'erreur `rpc` se fait **avant** toute redirection, et
    la redirection est la dernière instruction.
 4. **Ne jamais discriminer une erreur Postgres sur son texte français.** Uniquement `error.code`
-   ou le marqueur posé dans `error.details`. Cette phase ajoute **un seul** marqueur nouveau,
-   `statuts_exclusifs_incompatibles`, et **réutilise** tous les autres avec leur sens
-   existant — conséquence directe de D82 : `membre_inconnu`, `statut_inconnu`, `faiseur_inconnu`,
-   `dirigeant_inconnu`, `faiseur_de_disciple_archive`, `cycle_faiseur_de_disciple`, et le code
-   `23514` de l'invariant d'exclusivité. Aucun marqueur existant n'est réemployé pour un sens
-   différent.
+   ou le marqueur posé dans `error.details`. Cette phase ajoute **deux** marqueurs nouveaux, et
+   deux seulement : `statuts_exclusifs_incompatibles` (couple exclusif refusé à la création, D84)
+   et `faiseur_de_disciple_inactif` (le faiseur visé existe mais n'est **ni actif ni archivé**,
+   D99 — voir §6.4). Elle **réutilise** tous les autres avec leur sens existant — conséquence
+   directe de D82 : `membre_inconnu`, `statut_inconnu`, `faiseur_inconnu`, `dirigeant_inconnu`,
+   `faiseur_de_disciple_archive`, `cycle_faiseur_de_disciple`, et le code `23514` de l'invariant
+   d'exclusivité. Aucun marqueur existant n'est réemployé pour un sens différent — et c'est
+   précisément pourquoi le second marqueur est **nouveau** plutôt que réemployé : le message que
+   commande `faiseur_de_disciple_archive` dit « est archivé », et le rendre pour un faiseur
+   `en_attente` afficherait une phrase que le code ne tient pas.
+
+   *Amendement du 2026-08-15 (revue pré-vol) : ce point disait « un seul » marqueur. La correction
+   de l'invariant §6.4 en ajoute un second, et l'écrire ici est moins coûteux que de laisser une
+   règle globale devenir fausse.*
 5. **Aucune politique RLS d'écriture, sur aucune table.** Toute mutation passe par une Server
    Action gardée **en première instruction**. Cette phase ne fait pas exception, et n'a pas
    besoin du cas dérogatoire des actions de statuts, où le garde suit la lecture de l'identifiant
