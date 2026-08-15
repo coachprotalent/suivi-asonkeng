@@ -26,10 +26,20 @@ export const MESSAGE_STATUTS_EXCLUSIFS_PASSERELLE =
  * ne tient pas. Le marqueur est distinct EXACTEMENT pour cette raison ; le message doit
  * l'être aussi, sans quoi la distinction faite en base serait perdue à l'écran.
  *
- * Ce message est ici, dans `src/app/membres/messages.ts`, et NON dans
- * `src/app/membres/[id]/arbre/messages.ts` : ce dossier appartient à un écran que cette
- * phase laisse rigoureusement inchangé, et un balayage de la phase vérifie que son diff
- * est vide.
+ * Ce message vit ici, dans `src/app/membres/messages.ts`, parce que c'est ici qu'il est né
+ * — avec `creerMembreEnrichi`, premier chemin à discriminer le marqueur. IL EST IMPORTÉ,
+ * jamais recopié, par les DEUX autres chemins qui peuvent recevoir ce même marqueur du même
+ * `public.definir_arbre` (`src/app/membres/[id]/arbre/actions.ts` et
+ * `src/app/demandes/actions.ts`) : un fait unique en base ne doit pas produire trois vérités
+ * différentes sur trois écrans.
+ *
+ * RECTIFICATIF (revue finale de la phase 5). La rédaction précédente justifiait ce
+ * placement par « ce dossier appartient à un écran que cette phase laisse rigoureusement
+ * inchangé, et un balayage de la phase vérifie que son diff est vide ». LES DEUX MOITIÉS
+ * ÉTAIENT FAUSSES, mesurées : la phase a modifié `src/app/membres/[id]/arbre/` deux fois
+ * (`065555a`, `4f52d3e`), et aucun balayage de ce genre n'a jamais existé dans le dépôt. Un
+ * renvoi à une preuve inexistante ferme les yeux mieux qu'une absence de preuve : il n'y a
+ * donc ici AUCUNE promesse de vérification, seulement la raison réelle du placement.
  */
 export const MESSAGE_FAISEUR_NON_ACTIF =
   "Le faiseur de disciple choisi n'est pas un membre actif : ce rattachement n'est pas autorisé."

@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
+import { MESSAGE_FAISEUR_NON_ACTIF } from '@/app/membres/messages'
 import { dirigeantPropose } from '@/lib/domaine/arbre'
 import { cheminArbre, maillonArbre } from '@/lib/donnees/arbre'
 import { membreBrefParId, type MembreBref } from '@/lib/donnees/membres'
@@ -27,8 +28,16 @@ const DETAIL_FAISEUR_INCONNU = 'faiseur_inconnu'
 const DETAIL_DIRIGEANT_INCONNU = 'dirigeant_inconnu'
 const DETAIL_FAISEUR_ARCHIVE = 'faiseur_de_disciple_archive'
 // `definir_arbre` (migration 20260819100000) pose aussi ce marqueur pour un faiseur
-// ni actif ni archivé ; cet écran ne le discrimine pas (voir le commentaire de tête de
-// cette migration), mais il reste un marqueur APPLICATIF connu, sans danger à journaliser.
+// ni actif ni archivé.
+//
+// CET ÉCRAN LE DISCRIMINE DÉSORMAIS, et le commentaire de tête de la migration
+// 20260819100000 est PÉRIMÉ SUR CE POINT : il annonce que cet écran « ne connaît pas le
+// marqueur nouveau » et « retombe sur son message générique ». C'était vrai quand elle a
+// été écrite — le message nommé n'existait pas encore. Il existe maintenant
+// (`MESSAGE_FAISEUR_NON_ACTIF`), il est importable, et le seul motif écrit pour ne pas le
+// brancher ici était une phrase de `src/app/membres/messages.ts` dont la revue finale a
+// mesuré qu'elle était fausse. La migration, elle, n'est pas retouchée : on ne réécrit pas
+// du SQL déjà déployé pour corriger un commentaire.
 const DETAIL_FAISEUR_INACTIF = 'faiseur_de_disciple_inactif'
 
 // LISTE FERMÉE DES MARQUEURS APPLICATIFS QUE `definir_arbre` PEUT POSER — employée
@@ -134,6 +143,13 @@ export async function definirArbre(
     }
     if (error.details === DETAIL_FAISEUR_ARCHIVE) {
       return { erreur: MESSAGE_FAISEUR_ARCHIVE }
+    }
+    // Faiseur qui existe mais n'est NI actif NI archivé. Message DISTINCT du précédent, et
+    // IMPORTÉ de `src/app/membres/messages.ts` — jamais recopié : le même marqueur, posé par
+    // le même `definir_arbre`, ne doit pas produire deux phrases différentes sur deux écrans
+    // jumeaux.
+    if (error.details === DETAIL_FAISEUR_INACTIF) {
+      return { erreur: MESSAGE_FAISEUR_NON_ACTIF }
     }
     if (error.details === DETAIL_DIRIGEANT_INCONNU) {
       return { erreur: MESSAGE_DIRIGEANT_INCONNU }

@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { MESSAGE_FAISEUR_NON_ACTIF } from '@/app/membres/messages'
 import { exigerAdministrateur, exigerProfilActif } from '@/lib/securite/garde'
 import { clientAdmin } from '@/lib/supabase/admin'
 import {
@@ -293,11 +294,23 @@ export async function validerDemandeNouvellePersonne(donnees: FormData): Promise
             : undefined,
         message: erreurArbre.message,
       })
-      // Refus RETOURNÉ, jamais levé : voir le commentaire de tête de ce fichier. Aucun
-      // marqueur n'est discriminé ici — `membre_inconnu`, `faiseur_inconnu`,
-      // `dirigeant_inconnu` et `faiseur_de_disciple_archive` appellent tous le même geste
-      // de la part de l'administrateur (recharger la liste et recommencer), et le marqueur
-      // reste JOURNALISÉ ci-dessus, là où il sert : au diagnostic.
+      // UN SEUL marqueur est discriminé ici : `faiseur_de_disciple_inactif`. Les autres —
+      // `membre_inconnu`, `faiseur_inconnu`, `dirigeant_inconnu`,
+      // `faiseur_de_disciple_archive` — appellent tous le même geste de la part de
+      // l'administrateur (recharger la liste et recommencer) ; ils restent JOURNALISÉS
+      // ci-dessus, là où ils servent : au diagnostic.
+      //
+      // ═══ POURQUOI CELUI-LÀ, ET AVEC LE MESSAGE DE `membres/messages.ts` ═══
+      // Le faiseur de disciple posé sur ce chemin est LA FICHE DU DEMANDEUR
+      // (`profilDemandeur.membre_id`), et non un membre pris dans un sélecteur : le geste
+      // correctif n'est donc PAS « recharger la liste », c'est « activer, ou valider,
+      // la fiche du demandeur ». Un message générique cacherait cette cause, alors que le
+      // même fait, remonté du même `public.definir_arbre`, est déjà NOMMÉ sur
+      // `creerMembreEnrichi`. Le message est IMPORTÉ, jamais recopié : trois copies du
+      // même texte en feraient trois vérités.
+      if (erreurArbre.details === DETAIL_FAISEUR_INACTIF) {
+        return { erreur: MESSAGE_FAISEUR_NON_ACTIF }
+      }
       return { erreur: MESSAGE_ECHEC_VALIDATION }
     }
   }
