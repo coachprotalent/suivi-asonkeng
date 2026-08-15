@@ -365,16 +365,45 @@ describe('membresDesAntennes : correction de la troncature silencieuse (max_rows
     // avec PGRST103 quand le décalage égale le total ») s'est révélée FAUSSE à l'épreuve
     // contre cette base réelle : vérifié ici via le client, et confirmé en HTTP brut
     // (`Range: 4-5` sur 4 lignes → `206 Partial Content`, `Content-Range: */4`, corps
-    // `[]` — jamais `416`). `PGRST103` EST un code réel produit par cette version de
-    // PostgREST, mais seulement pour une plage STRUCTURELLEMENT invalide, début postérieur
-    // à fin (`range(5, 2)` → `416`, message « Limit should be greater than or equal to
-    // zero », vérifié de la même façon) — jamais le cas d'un décalage simplement épuisé.
+    // `[]` — jamais `416`).
+    //
+    // ═══ CE QUE CETTE MESURE ÉTABLIT, ET RIEN DE PLUS (rectifié à la revue finale de la
+    // phase 5) ═══
+    //
+    // La rédaction précédente généralisait : « `PGRST103` … seulement pour une plage
+    // structurellement invalide, début postérieur à fin … jamais le cas d'un décalage
+    // simplement épuisé ». C'EST FAUX, et cela a suffi à faire classer à tort une preuve
+    // de la phase 5 comme inerte. Mesuré en HTTP brut contre cette base
+    // (`public.membres`, 8 lignes, en-tête `Range` brut, `Prefer: count=exact`) :
+    //
+    //   `7-9`                       → `206`, `Content-Range: 7-7/8`, 1 ligne
+    //   `8-10` (décalage = total)   → `206`, `Content-Range: */8`, corps `[]`
+    //   `9-11` (décalage > total)   → `416` / `PGRST103`, « An offset of 9 was requested,
+    //                                 but there are only 8 rows. »
+    //   `299997-299999`             → `416` / `PGRST103`, même phrase, autre décalage
+    //   `5-2`  (début > fin)        → `416` / `PGRST103`, message DIFFÉRENT (« The lower
+    //                                 boundary must be lower than or equal to the upper
+    //                                 boundary in the Range header. »)
+    //
+    // LA MESURE NE PORTE DONC QUE SUR LE CAS FRONTIÈRE `décalage == total` : c'est celui-là,
+    // et lui seul, qui rend `206` avec un corps vide. Dès que le décalage DÉPASSE le total,
+    // PostgREST rend bien `416` / `PGRST103` — comme pour une plage structurellement
+    // invalide, avec un message distinct.
+    //
+    // La conclusion de CE test-ci n'en est pas changée, et c'est justement parce qu'il est
+    // sur la frontière : 4 fiches, `tailleLot = 2`, la page 3 démarre à l'indice 4 — décalage
+    // ÉGAL au total. Le parcours de `membres-lots.ts` ne peut d'ailleurs jamais dépasser
+    // cette frontière : il s'arrête dès qu'une page rend moins de `tailleLot` lignes, donc
+    // tout décalage visité est ≤ total. La branche `error.code === 'PGRST103'` y reste morte
+    // en pratique — mais elle N'EST PAS morte partout : `racinesParPage`
+    // (`src/lib/donnees/arbre-lots.ts`) accepte un numéro de page venu de l'URL et l'atteint
+    // pour de bon, ce que `tests/rls/arborescence.test.ts` éprouve avec `page: 100000`.
+    //
     // Cette assertion établit donc, dans les DEUX sens et sans supposition, que c'est
-    // `lot.length < tailleLot` (membres-lots.ts) — PAS la branche `error.code ===
-    // 'PGRST103'`, qui reste mort en pratique tant que `tailleLot` reste validé ≥ 1 — qui
-    // termine réellement le parcours à cette frontière. Sans cette assertion, la seule
-    // ligne ci-dessus resterait tout aussi verte même si PostgREST changeait un jour de
-    // comportement, sans que rien ne le signale.
+    // `lot.length < tailleLot` (membres-lots.ts) — PAS la branche `PGRST103` — qui termine
+    // réellement le parcours à cette frontière. Sans elle, la seule ligne ci-dessus resterait
+    // tout aussi verte si PostgREST changeait un jour de comportement, sans que rien ne le
+    // signale.
     const { error: erreurPremisse, data: dataPremisse } = await clientSimple
       .from('membres')
       .select('id')
