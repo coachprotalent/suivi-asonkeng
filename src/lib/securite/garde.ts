@@ -99,7 +99,7 @@ export async function aAutoriteSur(membreId: string): Promise<boolean> {
  * C'est la SEULE protection des écritures de STATUTS : `attribuerStatut` et
  * `retirerStatut` (src/app/membres/[id]/statuts/actions.ts) sont les deux seuls
  * appelants, et ces écritures passent par la clé de service, qui contourne la RLS.
- * Les autres écritures concernant un membre — `creerMembre`, `modifierMembre`,
+ * Les autres écritures concernant un membre — `creerMembreEnrichi`, `modifierMembre`,
  * `archiverMembre`, `desarchiverMembre`, `definirArbre` — ne passent PAS par ici :
  * elles restent réservées aux administrateurs par leur propre garde,
  * `exigerAdministrateur`.

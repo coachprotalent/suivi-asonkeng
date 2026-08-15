@@ -114,7 +114,15 @@ test('un administrateur crée une fiche et la retrouve dans l’annuaire', async
   await page.getByLabel('Ville').fill('St. Etienne')
   await page.getByRole('button', { name: 'Créer la fiche' }).click()
 
-  await expect(page).toHaveURL(/\/membres/)
+  // La création REDIRIGE désormais vers la FICHE (phase 5) et non vers l'annuaire : on
+  // vient d'enrichir cette personne, c'est son écran qui montre ce qui a été écrit.
+  // L'assertion porte sur le TITRE de la fiche — un `getByText` du seul nom serait aussi
+  // satisfait par une ligne d'annuaire, et ne distinguerait donc pas les deux écrans.
+  await expect(page).toHaveURL(/\/membres\/[0-9a-f-]{36}$/)
+  await expect(page.getByRole('heading', { name: `Jérôme ${NOM_MEMBRE}` })).toBeVisible()
+
+  // Puis l'annuaire, pour la suite du test : c'est lui qui porte la recherche.
+  await page.goto('/membres')
   await expect(page.getByText(`Jérôme ${NOM_MEMBRE}`)).toBeVisible()
 
   // La recherche doit retrouver la fiche par sa ville, y compris quand le terme

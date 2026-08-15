@@ -464,6 +464,11 @@ test("une antenne forgée est refusée AVANT que le token soit consommé", async
     option.textContent = 'Antenne forgée'
     select.append(option)
     select.value = valeur
+    // Le champ est CONTRÔLÉ depuis la phase 5 : écrire `select.value` ne met pas à jour
+    // l'état React, et la première passe de rendu le restaurerait à ''. On dépêche donc
+    // l'événement que React écoute, pour que la forge passe par le MÊME chemin qu'une
+    // sélection humaine — ce que ce test prétend éprouver.
+    select.dispatchEvent(new Event('change', { bubbles: true }))
   }, idInexistant)
 
   await page.getByRole('button', { name: "S'inscrire" }).click()

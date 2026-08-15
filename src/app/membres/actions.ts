@@ -8,12 +8,31 @@ import {
   ficheMembreVersColonnes,
   type EtatMembre,
 } from '@/lib/domaine/membre'
-import { disciplesDe } from '@/lib/donnees/arbre'
+import {
+  StatutInvalideError,
+  lignesStatutsDepuisFormData,
+  statutsIncompatibles,
+  type LigneStatutSaisie,
+} from '@/lib/domaine/statut'
+import { cheminArbre, disciplesDe } from '@/lib/donnees/arbre'
 import { compteLieEstDernierAdministrateurActif } from '@/lib/donnees/comptes'
 import { membreParId } from '@/lib/donnees/membres'
+import { listerCatalogue } from '@/lib/donnees/statuts'
 import { exigerAdministrateur } from '@/lib/securite/garde'
 import { clientAdmin } from '@/lib/supabase/admin'
-import { MESSAGE_ECHEC_ENREGISTREMENT } from './messages'
+import {
+  MESSAGE_DIRIGEANT_INCONNU,
+  MESSAGE_FAISEUR_ARCHIVE,
+  MESSAGE_FAISEUR_INCONNU,
+  messageCycle,
+} from './[id]/arbre/messages'
+import { MESSAGE_STATUT_INCONNU } from './[id]/statuts/messages'
+import {
+  MESSAGE_ECHEC_ENREGISTREMENT,
+  MESSAGE_FAISEUR_NON_ACTIF,
+  MESSAGE_STATUTS_EXCLUSIFS_PASSERELLE,
+  messageStatutsIncompatibles,
+} from './messages'
 
 const DETAIL_DISCIPLES_A_REAFFECTER = 'disciples_a_reaffecter'
 const DETAIL_FAISEUR_DE_DISCIPLE_ARCHIVE = 'faiseur_de_disciple_archive'
@@ -22,33 +41,289 @@ const DETAIL_FAISEUR_DE_DISCIPLE_ARCHIVE = 'faiseur_de_disciple_archive'
 // subsisterait — découvert par une autre porte (D24, migration 20260814160000).
 const DETAIL_DERNIER_ADMINISTRATEUR = 'dernier_administrateur'
 
+// Marqueurs RÉUTILISÉS, jamais réinventés — conséquence directe de D82 : la passerelle
+// `creer_membre_enrichi` COMPOSE `public.definir_arbre` et `public.attribuer_statut`, donc
+// elle rend LEURS marqueurs, avec LEUR sens. La phase 5 n'ajoute que DEUX marqueurs :
+// `statuts_exclusifs_incompatibles` (posé par la passerelle elle-même) et
+// `faiseur_de_disciple_inactif` (posé par `public.definir_arbre` et par le déclencheur
+// `membres_faiseur_de_disciple_archive` quand le faiseur visé existe mais n'est ni actif
+// ni archivé). Tous les autres sont préexistants.
+const DETAIL_STATUTS_EXCLUSIFS_INCOMPATIBLES = 'statuts_exclusifs_incompatibles'
+const DETAIL_MEMBRE_INCONNU = 'membre_inconnu'
+const DETAIL_STATUT_INCONNU = 'statut_inconnu'
+const DETAIL_FAISEUR_INCONNU = 'faiseur_inconnu'
+// `DETAIL_FAISEUR_DE_DISCIPLE_ARCHIVE` existe DÉJÀ, juste au-dessus, et vaut
+// 'faiseur_de_disciple_archive' : on la réutilise, on n'en déclare pas une seconde sous un
+// autre nom. Celle-ci est son voisin, et le voisinage est le point : deux marqueurs, deux
+// faits DIFFÉRENTS, deux messages différents — « archivé » et « pas actif » ne se
+// remplacent pas l'un l'autre. Les confondre afficherait « ce faiseur est archivé » à
+// propos d'une fiche en attente de validation.
+const DETAIL_FAISEUR_NON_ACTIF = 'faiseur_de_disciple_inactif'
+const DETAIL_DIRIGEANT_INCONNU = 'dirigeant_inconnu'
+const DETAIL_CYCLE = 'cycle_faiseur_de_disciple'
+
+// LISTE FERMÉE DES MARQUEURS APPLICATIFS QUE CE MODULE SAIT INTERPRÉTER — employée
+// UNIQUEMENT pour décider ce qui a le droit d'atteindre le journal serveur (voir plus bas).
+// `error.details` n'est PAS toujours un marqueur : sur une violation de contrainte `check`
+// (23514, code Postgres `invalid_text_representation` mis à part), Postgres y écrit
+// « Failing row contains (…) » — LA LIGNE ENTIÈRE. `public.membres` porte SIX contraintes
+// `check` (voir plus bas) qu'aucune vérification amont ne couvre toutes, et la ligne
+// entière, c'est aussi le téléphone, l'adresse de contact, la ville, le pays et le domaine
+// d'étude de la personne saisie — MESURÉ, pas supposé, contre la base de ce projet.
+const MARQUEURS_CONNUS: ReadonlySet<string> = new Set([
+  DETAIL_STATUTS_EXCLUSIFS_INCOMPATIBLES,
+  DETAIL_MEMBRE_INCONNU,
+  DETAIL_STATUT_INCONNU,
+  DETAIL_FAISEUR_INCONNU,
+  DETAIL_FAISEUR_DE_DISCIPLE_ARCHIVE,
+  DETAIL_FAISEUR_NON_ACTIF,
+  DETAIL_DIRIGEANT_INCONNU,
+  DETAIL_CYCLE,
+])
+
+function champOuNull(donnees: FormData, champ: string): string | null {
+  const valeur = donnees.get(champ)
+  return typeof valeur === 'string' && valeur.length > 0 ? valeur : null
+}
+
 export type EtatFormulaireMembre = { erreur: string | null }
 
-export async function creerMembre(
+/**
+ * Crée une fiche membre, la place dans l'arbre et lui attribue ses statuts — EN UNE SEULE
+ * TRANSACTION (D81).
+ *
+ * REMPLACE `creerMembre` (D87) : un seul chemin d'écriture pour la création d'une fiche
+ * par un administrateur. Deux chemins pour un même geste, c'est l'un des deux qui cesse
+ * d'être exercé et qui dérive.
+ *
+ * ═══ LA GARANTIE TIENT TANT QUE L'APPEL RESTE UN UNIQUE `rpc`. ═══
+ * Scinder un jour cet appel en deux ferait disparaître l'atomicité EN SILENCE : deux
+ * transactions séparées, chacune capable de réussir sans l'autre, et rien dans le code ne
+ * l'empêcherait mécaniquement. Même discipline que D65 (conversion d'un participant) et
+ * que le §7.2 de la 2b.
+ *
+ * ═══ LE DIAGNOSTIC SE JOURNALISE ICI, ET NULLE PART AILLEURS. ═══
+ * Postgres n'a pas de transaction autonome : AUCUNE trace écrite depuis l'intérieur de
+ * `creer_membre_enrichi` ne survivrait à son échec. Le projet l'a déjà payé (D43, 2b) —
+ * `consommer_token_inscription` insérait une tentative puis levait, l'exception annulait
+ * toute la transaction, l'insertion comprise, et le plafond anti-force-brute était
+ * ENTIÈREMENT INOPÉRANT. D'où le `console.error` systématique ci-dessous, avec `code`,
+ * `details` et `message`.
+ *
+ * LES TROIS ENRICHISSEMENTS SONT FACULTATIFS ET INDÉPENDANTS (D86). Une création sans
+ * aucun enrichissement produit EXACTEMENT ce que `creerMembre` produisait : fiche `actif`,
+ * arbre nul, aucun statut, aucune ligne de journal. Un dirigeant sans faiseur de disciple
+ * est légitime (§4.2 le prévoit) ; des statuts sans place dans l'arbre aussi.
+ *
+ * LE GARDE EST `exigerAdministrateur`, EN PREMIÈRE INSTRUCTION, ET IL NE DESCEND PAS À
+ * `exigerAutoriteSur` MALGRÉ LES ÉCRITURES DE STATUTS (D90). La création est réservée à
+ * l'administrateur (§5.2) et un administrateur a autorité partout : les deux gardes
+ * coïncident ici. C'EST UNE COÏNCIDENCE, PAS UNE CONSTRUCTION — voir le
+ * `comment on function` de la passerelle.
+ */
+export async function creerMembreEnrichi(
   _etat: EtatFormulaireMembre,
   donnees: FormData,
 ): Promise<EtatFormulaireMembre> {
   const profil = await exigerAdministrateur()
 
-  let colonnes
+  let fiche
+  let lignesStatuts: LigneStatutSaisie[]
   try {
-    colonnes = ficheMembreVersColonnes(ficheMembreDepuisFormData(donnees))
+    fiche = ficheMembreDepuisFormData(donnees)
+    lignesStatuts = lignesStatutsDepuisFormData(donnees)
   } catch (erreur) {
-    return {
-      erreur:
-        erreur instanceof FicheMembreInvalideError ? erreur.message : MESSAGE_ECHEC_ENREGISTREMENT,
+    if (erreur instanceof FicheMembreInvalideError || erreur instanceof StatutInvalideError) {
+      // Les deux portent déjà un message précis et actionnable : on le relaie tel quel.
+      return { erreur: erreur.message }
+    }
+    console.error('creerMembreEnrichi : échec inattendu de la lecture du formulaire', { erreur })
+    return { erreur: MESSAGE_ECHEC_ENREGISTREMENT }
+  }
+
+  // CONTRÔLE AMONT DU COUPLE EXCLUSIF (D84) : il EXPLIQUE, en nommant les deux statuts.
+  // La passerelle PROTÈGE, en relisant les groupes EN BASE. Les deux existent, et aucun
+  // ne remplace l'autre : `listerCatalogue` est non bornée, donc ce contrôle-ci peut être
+  // trompé par une troncature — c'est précisément pourquoi `statutsIncompatibles` ÉCHOUE
+  // FERMÉ sur un identifiant absent du catalogue qu'on lui donne, au lieu de conclure
+  // « aucun conflit ».
+  if (lignesStatuts.length > 0) {
+    let catalogue
+    try {
+      // `listerCatalogue(true)` — INACTIFS COMPRIS, et ce n'est pas un détail.
+      // `listerCatalogue()` filtre `actif === true`. Un statut RÉEL mais DÉSACTIVÉ,
+      // soumis par un onglet resté ouvert ou par un appel forgé, serait alors absent du
+      // catalogue passé à `statutsIncompatibles`, qui échoue fermé : l'utilisateur lirait
+      // « un statut sélectionné est introuvable dans le catalogue » là où la vérité est
+      // « ce statut a été désactivé ». La passerelle, elle, ne filtre pas sur `st.actif`
+      // et laisse `attribuer_statut` refuser avec `statut_inconnu`, dont le message dit
+      // « inconnu OU désactivé ». On donne donc ici le catalogue COMPLET, pour que le
+      // contrôle amont ne s'arroge pas un refus qui appartient à la passerelle.
+      catalogue = await listerCatalogue(true)
+    } catch (erreur) {
+      console.error('creerMembreEnrichi : lecture du catalogue impossible', { erreur })
+      return { erreur: MESSAGE_ECHEC_ENREGISTREMENT }
+    }
+    try {
+      const couple = statutsIncompatibles(
+        lignesStatuts.map((ligne) => ligne.statutId),
+        catalogue,
+      )
+      if (couple) {
+        return { erreur: messageStatutsIncompatibles(couple) }
+      }
+    } catch (erreur) {
+      if (erreur instanceof StatutInvalideError) {
+        return { erreur: erreur.message }
+      }
+      console.error("creerMembreEnrichi : échec inattendu du contrôle d'exclusivité", { erreur })
+      return { erreur: MESSAGE_ECHEC_ENREGISTREMENT }
     }
   }
 
-  const { error } = await clientAdmin()
-    .from('membres')
-    .insert({ ...colonnes, cree_par: profil.id })
+  const faiseurId = champOuNull(donnees, 'faiseurDeDiscipleId')
+  const dirigeantId = champOuNull(donnees, 'dirigeantId')
+  const dirigeantForce = donnees.get('dirigeantForce') === '1'
+
+  // UN SEUL `rpc`, ET TOUS LES ARGUMENTS SONT NOMMÉS — jamais positionnels : une
+  // permutation silencieuse entre deux paramètres de même type (`p_ville` et `p_pays`,
+  // par exemple) est indétectable autrement.
+  const { data, error } = await clientAdmin().rpc('creer_membre_enrichi', {
+    p_nom: fiche.nom,
+    p_prenom: fiche.prenom,
+    p_telephone: fiche.telephone,
+    p_email_contact: fiche.emailContact,
+    p_ville: fiche.ville,
+    p_pays: fiche.pays,
+    p_antenne_id: fiche.antenneId,
+    p_situation: fiche.situation,
+    p_domaine_etude: fiche.domaineEtude,
+    p_report_initial_ael: fiche.reportInitialAel,
+    p_faiseur_de_disciple: faiseurId,
+    p_dirigeant: dirigeantId,
+    p_dirigeant_force: dirigeantForce,
+    p_statuts: lignesStatuts.map((ligne) => ({
+      statut_id: ligne.statutId,
+      date_acquisition: ligne.dateAcquisition,
+      note: ligne.note,
+    })),
+    p_par: profil.id,
+  })
+
   if (error) {
+    // Trace serveur SYSTÉMATIQUE, y compris pour les cas classifiés ci-dessous : c'est la
+    // SEULE trace qui subsistera, la transaction ayant tout annulé côté base.
+    //
+    // ═══ `details` N'EST JAMAIS JOURNALISÉ TEL QUEL — CE QUI SERT AU DIAGNOSTIC, JAMAIS LE
+    // CONTENU DE LA LIGNE. ═══ Ce motif est copié de l'écran des statuts
+    // (`/membres/[id]/statuts`), qui journalise `error.details` sans filtrage — sûr LÀ-BAS
+    // parce que cet écran n'écrit jamais dans `public.membres`. Ce chemin-ci le fait, et
+    // `public.membres` porte SIX contraintes `check`
+    // (`membres_nom_non_vide`, `membres_prenom_non_vide`, `membres_report_positif`,
+    // `membres_domaine_reserve_etudiant`, `membres_pas_son_propre_fdd`,
+    // `membres_pas_son_propre_dirigeant`) dont la violation (23514) fait porter à
+    // `error.details` la valeur `Failing row contains (…)` — LA FICHE ENTIÈRE : téléphone,
+    // adresse de contact, ville, pays, domaine d'étude. Différence non vue au moment où le
+    // motif a été copié ; corrigée ici. On ne journalise `details` QUE lorsqu'il correspond
+    // à l'un des marqueurs applicatifs CONNUS ci-dessus — jamais la valeur brute renvoyée
+    // par Postgres.
+    console.error('creerMembreEnrichi : échec RPC creer_membre_enrichi', {
+      profilId: profil.id,
+      faiseurId,
+      dirigeantId,
+      dirigeantForce,
+      nombreStatuts: lignesStatuts.length,
+      code: error.code,
+      details: error.details && MARQUEURS_CONNUS.has(error.details) ? error.details : undefined,
+      message: error.message,
+    })
+
+    // On discrimine sur `error.details` et `error.code`, JAMAIS sur la prose française.
+    if (error.details === DETAIL_STATUTS_EXCLUSIFS_INCOMPATIBLES) {
+      return { erreur: MESSAGE_STATUTS_EXCLUSIFS_PASSERELLE }
+    }
+    if (error.details === DETAIL_FAISEUR_INCONNU) {
+      return { erreur: MESSAGE_FAISEUR_INCONNU }
+    }
+    // Le nom exact de la constante existante est `DETAIL_FAISEUR_DE_DISCIPLE_ARCHIVE`
+    // (déclarée plus haut dans ce même fichier depuis la 1c) : il n'y a PAS de
+    // `DETAIL_FAISEUR_ARCHIVE` dans ce module, et l'écrire ainsi ne compilerait pas.
+    if (error.details === DETAIL_FAISEUR_DE_DISCIPLE_ARCHIVE) {
+      return { erreur: MESSAGE_FAISEUR_ARCHIVE }
+    }
+    // Faiseur de disciple qui existe mais n'est NI actif NI archivé. Message DISTINCT du
+    // précédent : dire « est archivé » d'une fiche en attente de validation serait une
+    // phrase que le code ne tient pas.
+    if (error.details === DETAIL_FAISEUR_NON_ACTIF) {
+      return { erreur: MESSAGE_FAISEUR_NON_ACTIF }
+    }
+    if (error.details === DETAIL_DIRIGEANT_INCONNU) {
+      return { erreur: MESSAGE_DIRIGEANT_INCONNU }
+    }
+    if (error.details === DETAIL_STATUT_INCONNU) {
+      return { erreur: MESSAGE_STATUT_INCONNU }
+    }
+    // ═══ AUCUNE BRANCHE SUR LE CODE 23514 ICI, ET C'EST DÉLIBÉRÉ ═══
+    // Une telle branche afficherait « ce membre porte déjà un statut du groupe exclusif ».
+    // Pour cette cause, elle est MORTE : la passerelle refuse le couple exclusif avant
+    // toute écriture, et la fiche vient de naître sans aucun statut — le déclencheur
+    // `membre_statuts_exclusivite` ne peut pas lever. Pour une AUTRE cause, elle est bien
+    // vivante et NUISIBLE : contrairement à `/membres/[id]/statuts`, ce chemin écrit aussi
+    // `public.membres`, porteuse de SIX contraintes `check` (`membres_nom_non_vide`,
+    // `membres_prenom_non_vide`, `membres_report_positif`,
+    // `membres_domaine_reserve_etudiant`, `membres_pas_son_propre_fdd`,
+    // `membres_pas_son_propre_dirigeant`), toutes en 23514. L'utilisateur lirait un message
+    // sur les statuts pour un problème de colonne de fiche. On retombe donc sur
+    // MESSAGE_ECHEC_ENREGISTREMENT, et le code réel reste JOURNALISÉ ci-dessus, là où il
+    // sert au diagnostic.
+    if (error.details === DETAIL_CYCLE) {
+      // INATTEIGNABLE PAR CONSTRUCTION sur ce chemin : la fiche vient d'être insérée dans
+      // la même transaction, elle n'a aucun descendant, aucun cycle ne peut se refermer
+      // sur elle. Traité quand même — et c'est la bonne direction : ce qui « ne peut pas
+      // arriver » et arrive doit produire un message juste, pas un message générique.
+      //
+      // `cheminArbre` LÈVE sur un échec de lecture (elle ne rend jamais `[]` en silence).
+      // On l'enveloppe donc : sur cette branche déjà anormale, laisser une seconde panne
+      // remonter en exception ferait perdre le refus MÉTIER qu'on est en train de rendre —
+      // or une action RETOURNE son refus, elle ne le lève pas. `messageCycle([])` a déjà
+      // son texte de repli, sans le chemin. Aucun `redirect()` dans ce `try` : il n'y en a
+      // pas dans cette fonction avant sa dernière instruction.
+      let chemin: Awaited<ReturnType<typeof cheminArbre>> = []
+      if (faiseurId) {
+        try {
+          chemin = await cheminArbre(faiseurId)
+        } catch (erreurChemin) {
+          console.error('creerMembreEnrichi : lecture du chemin fautif impossible', {
+            faiseurId,
+            erreur: erreurChemin,
+          })
+        }
+      }
+      return { erreur: messageCycle(chemin) }
+    }
+    if (error.details === DETAIL_MEMBRE_INCONNU) {
+      // Même remarque : `definir_arbre` ne peut pas ne pas trouver la fiche que la même
+      // transaction vient d'insérer. Rangé avec l'inattendu, sans message propre.
+      return { erreur: MESSAGE_ECHEC_ENREGISTREMENT }
+    }
+    return { erreur: MESSAGE_ECHEC_ENREGISTREMENT }
+  }
+
+  // `returns uuid` : supabase-js rend la valeur scalaire directement. Contrôle de forme et
+  // non décoration — `rpc()` rend `any` faute de types `Database` générés, et un jour où
+  // la signature changerait, `redirect(`/membres/undefined`)` mènerait à une page 404 en
+  // annonçant un succès.
+  const identifiant = typeof data === 'string' && data.length > 0 ? data : null
+  if (!identifiant) {
+    console.error('creerMembreEnrichi : identifiant absent de la réponse', { data })
     return { erreur: MESSAGE_ECHEC_ENREGISTREMENT }
   }
 
   revalidatePath('/membres')
-  redirect('/membres')
+  // PAS dans un `try` : `redirect()` lève une exception de contrôle Next.js, et c'est la
+  // DERNIÈRE instruction. Vers la FICHE et non vers l'annuaire : on vient d'enrichir cette
+  // personne, c'est son écran qui montre ce qui a été écrit.
+  redirect(`/membres/${identifiant}`)
 }
 
 export async function modifierMembre(

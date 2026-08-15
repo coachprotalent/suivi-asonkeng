@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { dirigeantPropose, peutModifier } from './arbre'
+import { LIBELLE_FICHE_NON_CONSULTABLE } from './membre'
+import { cheminAvecLibelles, dirigeantPropose, peutModifier } from './arbre'
 
 describe('dirigeantPropose', () => {
   it("ne propose rien quand le membre n'a pas de faiseur de disciple", () => {
@@ -107,5 +108,40 @@ describe('peutModifier', () => {
         { membreId: 'cible', ancetres: [], dirigeantId: 'cible' },
       ),
     ).toBe(false)
+  })
+})
+
+describe('cheminAvecLibelles', () => {
+  const brefs = [
+    { id: 'racine', prenom: 'Anne', nom: 'Racine' },
+    { id: 'petit', prenom: 'Zoé', nom: 'Feuille' },
+  ]
+
+  it("nomme chaque maillon lisible, dans l'ordre reçu", () => {
+    expect(cheminAvecLibelles(['racine', 'petit'], brefs)).toEqual([
+      { id: 'racine', libelle: 'Anne Racine' },
+      { id: 'petit', libelle: 'Zoé Feuille' },
+    ])
+  })
+
+  // PREUVE N°14, seconde moitié : un maillon ILLISIBLE conserve SA PLACE, et ne fait
+  // disparaître aucun descendant.
+  it("conserve la profondeur d'un maillon illisible, et garde ses descendants", () => {
+    const chemin = cheminAvecLibelles(['racine', 'intermediaire', 'petit'], brefs)
+    expect(chemin).toHaveLength(3)
+    expect(chemin[1]).toEqual({ id: 'intermediaire', libelle: LIBELLE_FICHE_NON_CONSULTABLE })
+    // Le descendant est TOUJOURS LÀ, et toujours nommé : c'est ce que « ne détache pas la
+    // descendance » veut dire concrètement.
+    expect(chemin[2]).toEqual({ id: 'petit', libelle: 'Zoé Feuille' })
+  })
+
+  it('ne saute ni ne réordonne quand TOUS les maillons sont illisibles', () => {
+    const chemin = cheminAvecLibelles(['a', 'b', 'c'], [])
+    expect(chemin.map((maillon) => maillon.id)).toEqual(['a', 'b', 'c'])
+    expect(chemin.every((maillon) => maillon.libelle === LIBELLE_FICHE_NON_CONSULTABLE)).toBe(true)
+  })
+
+  it('rend un chemin vide pour une liste vide', () => {
+    expect(cheminAvecLibelles([], brefs)).toEqual([])
   })
 })

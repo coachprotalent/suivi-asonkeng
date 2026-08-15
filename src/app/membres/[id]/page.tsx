@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { compteurAelMembre } from '@/lib/donnees/ael'
+import { libelleFiche } from '@/lib/domaine/membre'
 import { disciplesDe } from '@/lib/donnees/arbre'
 import { etatCompteLie } from '@/lib/donnees/comptes'
 import { seminairesAssistes } from '@/lib/donnees/evenements'
@@ -79,22 +80,8 @@ export default async function PageFicheMembre({
     ['Compteur AEL', compteurAel !== null ? String(compteurAel) : '—'],
   ]
 
-  const nomOuTiret = (bref: { prenom: string; nom: string } | null) =>
-    bref ? `${bref.prenom} ${bref.nom}` : null
-
-  // `membreBrefParId` passe sous RLS : si l'identifiant existe mais que la lecture
-  // rend `null`, ce n'est pas « personne » — c'est une fiche que la politique cache à
-  // ce compte (typiquement archivée, vue par un compte ordinaire). Confondre les deux
-  // cas afficherait « — » là où un administrateur voit un nom sur la même fiche,
-  // exactement l'inverse de D20 (la filiation est visible de tout compte actif).
-  // Le `—` du tableau reste réservé au cas où l'identifiant lui-même est `null`.
-  const libelleFiliation = (id: string | null, bref: { prenom: string; nom: string } | null) => {
-    if (!id) return null
-    return nomOuTiret(bref) ?? 'Fiche non consultable'
-  }
-
-  lignes.push(['Faiseur de disciple', libelleFiliation(membre.faiseurDeDiscipleId, faiseur)])
-  const nomDirigeant = libelleFiliation(membre.dirigeantId, dirigeant)
+  lignes.push(['Faiseur de disciple', libelleFiche(membre.faiseurDeDiscipleId, faiseur)])
+  const nomDirigeant = libelleFiche(membre.dirigeantId, dirigeant)
   lignes.push([
     'Dirigeant',
     // `dirigeant_force` atteste seulement que la valeur n'a pas été saisie à la main —
@@ -283,14 +270,19 @@ export default async function PageFicheMembre({
       <section className="mt-8">
         <div className="mb-3 flex items-baseline justify-between gap-4">
           <h2 className="text-lg font-medium">Disciples actifs</h2>
-          {estAdmin ? (
-            <Link
-              href={`/membres/${membre.id}/arbre`}
-              className="text-sm underline underline-offset-4"
-            >
-              Rattacher
+          <div className="flex items-center gap-4">
+            <Link href="/arborescence" className="text-sm underline underline-offset-4">
+              Arborescence
             </Link>
-          ) : null}
+            {estAdmin ? (
+              <Link
+                href={`/membres/${membre.id}/arbre`}
+                className="text-sm underline underline-offset-4"
+              >
+                Rattacher
+              </Link>
+            ) : null}
+          </div>
         </div>
         {/*
           `disciplesDe` ne rend que les disciples encore ACTIFS (voir arbre.ts) : un

@@ -38,6 +38,26 @@ const DETAIL_MOTIF_VIDE = 'motif_classement_vide'
 // depuis le chemin 2 : la passerelle ne duplique pas cette règle, elle la laisse remonter.
 const DETAIL_FAISEUR_ARCHIVE = 'faiseur_de_disciple_archive'
 
+// LISTE FERMÉE DES MARQUEURS QUE `convertir_participant_externe` PEUT POSER — employée
+// UNIQUEMENT pour décider ce qui a le droit d'atteindre le journal serveur, dans
+// `convertirParticipant` plus bas. Même défaut, même remède qu'ailleurs (commit d48db7d,
+// et sa reprise sur `definir_arbre`) : cette passerelle écrit dans `public.membres`
+// (`insert into public.membres (nom, prenom, telephone, email_contact, ville, pays, …)`,
+// migration 20260818220000, chemins `fiche_en_attente` ET `fiche_active`) sur une fiche
+// NEUVE porteuse de coordonnées. Une violation de contrainte `check` ferait porter à
+// `error.details` la ligne ENTIÈRE — nom, prénom, téléphone, adresse de contact, ville,
+// pays — au lieu d'un marqueur applicatif. `classer_participant_externe`
+// (`classerParticipant`, plus bas) n'écrit PAS dans `public.membres` et ne porte donc pas
+// ce risque ; son `details` reste journalisé tel quel.
+const MARQUEURS_CONNUS_CONVERSION: ReadonlySet<string> = new Set([
+  DETAIL_PARTICIPANT_INCONNU,
+  DETAIL_PARTICIPANT_DEJA_CONVERTI,
+  DETAIL_MEMBRE_CIBLE_INCONNU,
+  DETAIL_MEMBRE_CIBLE_NON_ACTIF,
+  DETAIL_CHEMIN_INCONNU,
+  DETAIL_FAISEUR_ARCHIVE,
+])
+
 function champOuNull(donnees: FormData, champ: string): string | null {
   const valeur = donnees.get(champ)
   return typeof valeur === 'string' && valeur.trim().length > 0 ? valeur.trim() : null
@@ -128,11 +148,16 @@ export async function convertirParticipant(
   })
 
   if (error) {
+    // `details` N'EST JAMAIS JOURNALISÉ TEL QUEL — voir `MARQUEURS_CONNUS_CONVERSION` plus
+    // haut : cette passerelle écrit dans `public.membres`, et une violation de contrainte
+    // `check` peut faire porter à `details` la ligne entière (fuite vie privée, même défaut
+    // que sur `creerMembreEnrichi` et `definir_arbre`).
     console.error('convertirParticipant : échec RPC convertir_participant_externe', {
       participantId,
       chemin,
       code: error.code,
-      details: error.details,
+      details:
+        error.details && MARQUEURS_CONNUS_CONVERSION.has(error.details) ? error.details : undefined,
       message: error.message,
     })
     // Chaque marqueur reçoit son PROPRE message, distinct des autres : un texte générique

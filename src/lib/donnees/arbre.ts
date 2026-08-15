@@ -2,7 +2,15 @@ import 'server-only'
 import type { CibleAutorite, MaillonArbre } from '@/lib/domaine/arbre'
 import { clientAdmin } from '@/lib/supabase/admin'
 import { clientServeur } from '@/lib/supabase/serveur'
+import {
+  disciplesParPage,
+  nomsMaillonsActifs,
+  pageContenantDisciple,
+  racinesParPage,
+  TAILLE_PAGE_DISCIPLES,
+} from './arbre-lots'
 import type { MembreBref } from './membres'
+import type { PageLue } from './pagination'
 
 /**
  * Ancêtres d'un membre, du plus proche au plus lointain.
@@ -121,4 +129,53 @@ export async function maillonArbre(membreId: string): Promise<MaillonArbre | nul
     return null
   }
   return { id: data.id as string, faiseurDeDiscipleId: data.faiseur_de_disciple_id as string | null }
+}
+
+/**
+ * Une page de disciples actifs, pour l'écran `/arborescence` (D94).
+ *
+ * DISTINCTE de `disciplesDe`, juste au-dessus, qui n'est NI appelée NI modifiée : celle-ci
+ * n'a aucune borne et son tri n'est pas total, mais elle a un second appelant PORTEUR — le
+ * contrôle amont d'`archiverMembre`, qui doit rester COMPLET et dont la sémantique ne doit
+ * pas changer sous une pagination. Deux besoins différents, deux fonctions.
+ */
+export async function disciplesPage(membreId: string, page: number): Promise<PageLue<MembreBref>> {
+  const supabase = await clientServeur()
+  return disciplesParPage(supabase, membreId, { page })
+}
+
+/** Une page de membres actifs SANS faiseur de disciple (D95). Voir `racinesParPage`
+ *  pour pourquoi l'écran ne les appelle pas « racines » sans nuance. */
+export async function racinesPage(page: number): Promise<PageLue<MembreBref>> {
+  const supabase = await clientServeur()
+  return racinesParPage(supabase, { page })
+}
+
+/**
+ * Noms des maillons d'un chemin, filtrés `etat = 'actif'` EXPLICITEMENT (D93).
+ *
+ * DISTINCTE de `membresBrefsParIds` (`src/lib/donnees/membres.ts`), qui n'a AUCUN filtre
+ * d'état et qu'on ne modifie PAS : elle a cinq autres appelants, dont plusieurs doivent au
+ * contraire nommer des fiches non actives. Sans ce filtre explicite, l'exclusion des
+ * fiches `archive` et `en_attente` du chemin serait entièrement déléguée à la RLS — un
+ * administrateur verrait le NOM là où un compte ordinaire lit « Fiche non consultable »,
+ * et l'écran mentirait sur sa propre légende.
+ */
+export async function nomsMaillonsChemin(ids: readonly string[]): Promise<MembreBref[]> {
+  const supabase = await clientServeur()
+  return nomsMaillonsActifs(supabase, ids)
+}
+
+/**
+ * Numéro de la page de disciples de `parentId` qui CONTIENT `discipleId`, à la taille de
+ * page réelle de l'écran.
+ *
+ * Sans elle, la recherche de `/arborescence` chargerait toujours la page 1 de chaque
+ * maillon, et la branche s'arrêterait au premier maillon à plus de
+ * `TAILLE_PAGE_DISCIPLES` disciples — la personne cherchée disparaîtrait de son propre
+ * chemin, SANS AUCUN SIGNAL.
+ */
+export async function pageDuDisciple(parentId: string, discipleId: string): Promise<number> {
+  const supabase = await clientServeur()
+  return pageContenantDisciple(supabase, parentId, discipleId, TAILLE_PAGE_DISCIPLES)
 }

@@ -1,6 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { MESSAGE_FAISEUR_NON_ACTIF } from '@/app/membres/messages'
 import { exigerAdministrateur, exigerProfilActif } from '@/lib/securite/garde'
 import { clientAdmin } from '@/lib/supabase/admin'
 import {
@@ -19,6 +20,29 @@ const DETAIL_MEMBRE_INCONNU = 'membre_inconnu'
 const DETAIL_DEMANDE_NON_VALIDABLE = 'demande_non_validable'
 const DETAIL_RATTACHEMENT_VERS_FICHE_JETABLE = 'rattachement_vers_fiche_jetable'
 const DETAIL_MEMBRE_DEJA_RATTACHE = 'membre_deja_rattache'
+// Marqueurs posés par `public.definir_arbre` (`src/app/membres/[id]/arbre/actions.ts`
+// les nomme aussi), appelée plus bas depuis `validerDemandeNouvellePersonne`.
+const DETAIL_FAISEUR_INCONNU = 'faiseur_inconnu'
+const DETAIL_DIRIGEANT_INCONNU = 'dirigeant_inconnu'
+const DETAIL_FAISEUR_ARCHIVE = 'faiseur_de_disciple_archive'
+const DETAIL_FAISEUR_INACTIF = 'faiseur_de_disciple_inactif'
+const DETAIL_CYCLE = 'cycle_faiseur_de_disciple'
+
+// LISTE FERMÉE DES MARQUEURS QUE `definir_arbre` PEUT POSER — employée UNIQUEMENT pour
+// décider ce qui a le droit d'atteindre le journal serveur, dans le bloc `erreurArbre`
+// plus bas. Même défaut, même remède qu'ailleurs (commit d48db7d) :
+// `definir_arbre` écrit dans `public.membres`, dont deux contraintes `check`
+// (`membres_pas_son_propre_fdd`, `membres_pas_son_propre_dirigeant`) peuvent faire porter
+// à `error.details` la ligne ENTIÈRE — téléphone, adresse de contact, ville, pays — au
+// lieu d'un marqueur applicatif. On ne journalise `details` que lorsqu'il figure ici.
+const MARQUEURS_CONNUS_ARBRE: ReadonlySet<string> = new Set([
+  DETAIL_MEMBRE_INCONNU,
+  DETAIL_FAISEUR_INCONNU,
+  DETAIL_DIRIGEANT_INCONNU,
+  DETAIL_FAISEUR_ARCHIVE,
+  DETAIL_FAISEUR_INACTIF,
+  DETAIL_CYCLE,
+])
 
 /**
  * Un refus MÉTIER est RETOURNÉ, jamais LEVÉ (correction post-Task-17, constat
@@ -257,18 +281,36 @@ export async function validerDemandeNouvellePersonne(donnees: FormData): Promise
       p_dirigeant_force: donnees.get('dirigeantForce') === '1',
     })
     if (erreurArbre) {
+      // `details` N'EST JAMAIS JOURNALISÉ TEL QUEL — voir `MARQUEURS_CONNUS_ARBRE` plus
+      // haut : `definir_arbre` écrit dans `public.membres`, et deux de ses contraintes
+      // `check` peuvent faire porter à `details` la ligne entière.
       console.error('validerDemandeNouvellePersonne : échec RPC definir_arbre', {
         demandeId,
         membreId,
         code: erreurArbre.code,
-        details: erreurArbre.details,
+        details:
+          erreurArbre.details && MARQUEURS_CONNUS_ARBRE.has(erreurArbre.details)
+            ? erreurArbre.details
+            : undefined,
         message: erreurArbre.message,
       })
-      // Refus RETOURNÉ, jamais levé : voir le commentaire de tête de ce fichier. Aucun
-      // marqueur n'est discriminé ici — `membre_inconnu`, `faiseur_inconnu`,
-      // `dirigeant_inconnu` et `faiseur_de_disciple_archive` appellent tous le même geste
-      // de la part de l'administrateur (recharger la liste et recommencer), et le marqueur
-      // reste JOURNALISÉ ci-dessus, là où il sert : au diagnostic.
+      // UN SEUL marqueur est discriminé ici : `faiseur_de_disciple_inactif`. Les autres —
+      // `membre_inconnu`, `faiseur_inconnu`, `dirigeant_inconnu`,
+      // `faiseur_de_disciple_archive` — appellent tous le même geste de la part de
+      // l'administrateur (recharger la liste et recommencer) ; ils restent JOURNALISÉS
+      // ci-dessus, là où ils servent : au diagnostic.
+      //
+      // ═══ POURQUOI CELUI-LÀ, ET AVEC LE MESSAGE DE `membres/messages.ts` ═══
+      // Le faiseur de disciple posé sur ce chemin est LA FICHE DU DEMANDEUR
+      // (`profilDemandeur.membre_id`), et non un membre pris dans un sélecteur : le geste
+      // correctif n'est donc PAS « recharger la liste », c'est « activer, ou valider,
+      // la fiche du demandeur ». Un message générique cacherait cette cause, alors que le
+      // même fait, remonté du même `public.definir_arbre`, est déjà NOMMÉ sur
+      // `creerMembreEnrichi`. Le message est IMPORTÉ, jamais recopié : trois copies du
+      // même texte en feraient trois vérités.
+      if (erreurArbre.details === DETAIL_FAISEUR_INACTIF) {
+        return { erreur: MESSAGE_FAISEUR_NON_ACTIF }
+      }
       return { erreur: MESSAGE_ECHEC_VALIDATION }
     }
   }
