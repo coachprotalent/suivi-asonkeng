@@ -32,6 +32,17 @@ const etatInitial: EtatInscription = { erreur: null }
  * Rien de nouveau n'est exposé — ni journalisé, ni envoyé ailleurs qu'à l'action. Le
  * perdre à chaque refus obligeait au contraire à le retaper, ce qui pousse aux mots de
  * passe courts.
+ *
+ * ═══ `onReset` SUR LE `<form>`, CORRECTIF DÉCOUVERT EN ÉCRIVANT LA PREUVE DE LA TASK 8
+ * ═══ Un `<select>` contrôlé (`value` + `onChange`) n'est PAS protégé de la remise à zéro
+ * automatique que React déclenche après toute complétion d'action, contrairement à un
+ * `<input>` ou un `<textarea>` : le navigateur applique nativement un vrai événement DOM
+ * `reset` sur le `<form>`, et React ne resynchronise pas systématiquement l'option
+ * sélectionnée après coup — mesuré empiriquement (développement ET production) sur le
+ * `<select>` « Antenne » de cet écran, qui repartait vide sur un refus alors que les sept
+ * autres champs survivaient. `onReset={(e) => e.preventDefault()}` empêche le navigateur
+ * d'exécuter cette remise à zéro native, sans danger ici puisque AUCUN champ de ce
+ * formulaire n'est non contrôlé.
  */
 export function FormulaireInscription({ antennes }: { antennes: Antenne[] }) {
   const [etat, envoyer, enCours] = useActionState(sInscrire, etatInitial)
@@ -75,7 +86,11 @@ export function FormulaireInscription({ antennes }: { antennes: Antenne[] }) {
   }, [enCours, etat])
 
   return (
-    <form action={envoyer} className="flex flex-col gap-4">
+    <form
+      action={envoyer}
+      onReset={(evenement) => evenement.preventDefault()}
+      className="flex flex-col gap-4"
+    >
       <div className="flex flex-col gap-1.5">
         <label htmlFor={idCode} className="text-sm font-medium">
           Code d&apos;inscription

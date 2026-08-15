@@ -46,6 +46,19 @@ export function FormulaireMembre({
 
     Un état par champ, et non un objet unique : c'est la forme employée par les cinq
     formulaires corrigés en phase 4, et elle évite qu'une frappe recrée l'objet entier.
+
+    ═══ CORRECTIF DÉCOUVERT EN ÉCRIVANT LA PREUVE DE LA TASK 8 ═══ Être « contrôlé »
+    (`value` + `onChange`) protège un `<input>` ou un `<textarea>` de cette remise à
+    zéro, mais PAS un `<select>` : la remise à zéro automatique que React déclenche après
+    TOUTE complétion d'action passe par un VRAI événement DOM `reset` sur le `<form>`, que
+    le navigateur applique nativement à ses éléments AVANT que React ne resynchronise
+    l'option sélectionnée — et cette resynchronisation ne s'est pas produite ici, mesuré
+    empiriquement (build de développement ET de production) : les deux `<select>` de ce
+    formulaire (« Antenne », « Situation ») repartaient à vide sur un refus, alors que les
+    champs texte survivaient. `onReset={(e) => e.preventDefault()}`, posé sur le `<form>`
+    ci-dessous, empêche le navigateur d'exécuter sa remise à zéro native : sans danger ici
+    puisque AUCUN champ de ce formulaire n'est non contrôlé — il n'y a donc rien que cette
+    remise à zéro devait légitimement effacer.
   */
   const [prenom, setPrenom] = useState(membre?.prenom ?? '')
   const [nom, setNom] = useState(membre?.nom ?? '')
@@ -112,7 +125,11 @@ export function FormulaireMembre({
   }
 
   return (
-    <form action={envoyer} className="flex flex-col gap-4">
+    <form
+      action={envoyer}
+      onReset={(evenement) => evenement.preventDefault()}
+      className="flex flex-col gap-4"
+    >
       {membre ? <input type="hidden" name="id" value={membre.id} /> : null}
 
       <div className="grid gap-4 sm:grid-cols-2">
