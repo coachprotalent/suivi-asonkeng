@@ -307,21 +307,43 @@ amendement du 2026-08-15).
 refus, et vérifie que **chacun porte encore sa valeur** — contre un build de production
 réel. Les douze restants n'en ont toujours aucune.
 
-**Découverte de la phase 5, qui ÉLARGIT le défaut ci-dessus : les `<select>` contrôlés ne
-survivent PAS à la même remise à zéro, contrairement aux `<input>` et aux `<textarea>`.**
-Un `<select value={…} onChange={…}>` est pourtant, en apparence, aussi contrôlé qu'un champ
-de saisie — mais React lui applique un traitement différent à la remise à zéro native du
-formulaire (`HTMLFormElement.reset()`, déclenchée par la même remontée « complétion normale
-sans lever » que ci-dessus) : la valeur sélectionnée revient à la première option, alors que
-la valeur JavaScript de l'état, elle, ne bouge pas — écran et état divergent. **Reproduit en
-développement ET en production.** Le remède « rendre les champs contrôlés », appliqué
-partout depuis la phase 4, est donc **incomplet pour les sélecteurs** : la cartographie des
-quatorze composants ci-dessus n'en porte qu'un seul axe. Remède propre à ce cas :
-`onReset={(evenement) => evenement.preventDefault()}` sur le `<form>`, qui empêche le
-navigateur d'exécuter sa remise à zéro native — c'est ce que `membres/formulaire-membre.tsx`
-et `inscription/formulaire-inscription.tsx` posent tous les deux, chacun sur son `<form>`,
-depuis la phase 5. **À porter à la phase 6 comme second axe de balayage**, sur les douze
-composants qui restent atteints par le défaut d'origine.
+**Découverte de la phase 5, qui ÉLARGIT le défaut ci-dessus, MAIS SUR UN AXE INDÉPENDANT :
+les `<select>` CONTRÔLÉS ne survivent PAS à la même remise à zéro, contrairement aux
+`<input>` et aux `<textarea>` contrôlés.** Un `<select value={…} onChange={…}>` est
+pourtant, en apparence, aussi contrôlé qu'un champ de saisie — mais React lui applique un
+traitement différent à la remise à zéro native du formulaire (`HTMLFormElement.reset()`,
+déclenchée par la même remontée « complétion normale sans lever » que ci-dessus) : la
+valeur sélectionnée revient à la première option, alors que la valeur JavaScript de
+l'état, elle, ne bouge pas — écran et état divergent. **Reproduit en développement ET en
+production.**
+
+**Ce second axe NE SE CHERCHE PAS dans le tableau des quatorze composants ci-dessus, et
+c'est un piège en soi.** Ce tableau recense les composants à champs **NON contrôlés** — la
+définition même qui **exclut par construction** tout composant dont le `<select>` est
+contrôlé, y compris celui qui porte CE défaut-ci. Une première rédaction de cette section
+avait justement commis cette erreur, en ordonnant de balayer « les composants qui restent »
+de ce tableau — ce qui ne pouvait, par construction, jamais désigner le bon fichier. **Le
+critère qui rend le bon résultat est distinct et se cherche à part** : un `<form action>`
+qui contient un `<select>` **contrôlé** (`value=` + `onChange=`, jamais `defaultValue=`),
+dont l'action peut **retourner** un refus métier, et dont le `<form>` ne porte **pas**
+`onReset`. Appliqué à tout le dépôt, ce critère rend **exactement un** fichier :
+`src/app/evenements/formulaire-evenement.tsx` — le `<form>` en `:81`, son unique `<select
+name="typeId">` en `:99` — qui sert **deux écrans** (création et édition d'un évènement,
+`src/app/evenements/page.tsx` et `src/app/evenements/[id]/page.tsx`). Corrigé en clôture de
+phase 5, même remède que les deux formulaires ci-dessus :
+`onReset={(evenement) => evenement.preventDefault()}` sur le `<form>`, sans danger puisque
+tous ses champs sont déjà contrôlés. `membres/formulaire-membre.tsx` et
+`inscription/formulaire-inscription.tsx` le portaient déjà depuis leur correction initiale
+en phase 5 ; les trois seuls formulaires du dépôt à combiner `<select>` contrôlé et
+`<form action>` le portent désormais tous.
+
+**Rien — ni `lint` ni `test` — ne signalerait un `<form>` neuf qui ajoute un `<select>`
+contrôlé sans `onReset` : aucune règle ESLint, aucun test unitaire ne vérifie cette
+combinaison.** La diffusion de ce remède repose ENTIÈREMENT sur le critère écrit ici, relu
+et rejoué à la main à chaque nouveau formulaire — pas sur un outil qui l'appliquerait pour
+soi. **À porter à la phase 6 comme second axe de balayage, indépendant du premier**, sur
+les douze composants restants du tableau ci-dessus ET sur tout `<select>` contrôlé qui
+apparaîtrait ailleurs.
 
 **`admin.auth.admin.listUsers()` n'est paginé que dans DEUX fichiers du dépôt.**
 Vingt-six fichiers de test l'appellent, pour retrouver un compte de test par
@@ -1033,9 +1055,25 @@ autre ligne et ne rattache pas l'ancienne participation. À traiter en phase 6.
   pays. **Le critère qui tranche si un site est concerné n'est pas un décompte — un
   décompte se recopie sans se rejouer, et un relevé transmis comme acquis pendant cette
   phase s'est révélé faux, sur la foi d'un motif de recherche trop étroit** : la fonction
-  appelée **écrit-elle dans `public.membres` ?** Le site le plus grave n'était pas celui
+  appelée écrit-elle dans `public.membres` ? Le site le plus grave n'était pas celui
   qu'une première carte désignait : `evenements/a-traiter/actions.ts`, dont la fonction
   **insère** une fiche neuve porteuse de toutes les coordonnées.
+  **Ce premier critère était lui-même trop étroit, corrigé en clôture de phase** :
+  `public.participants_externes` porte les **six mêmes colonnes de coordonnées** que
+  `membres` (`nom`, `prenom`, `telephone`, `email`, `ville`, `pays`) et **trois**
+  contraintes `check` (`participants_externes_nom_non_vide`,
+  `participants_externes_classement_coherent`, `participants_externes_conversion_coherente`,
+  `20260818140000_participants_externes.sql`), donc le même risque de `Failing row
+  contains (…)`. **Le critère juste est donc : la fonction appelée écrit-elle dans une
+  table qui porte des coordonnées personnelles — `public.membres` ET
+  `public.participants_externes` — et une contrainte `check` y est-elle atteignable ?**
+  Sur ce dossier précis, la couverture tenait déjà, mais **pour une raison indépendante du
+  critère écrit à l'époque, pas grâce à lui** : `classer_participant_externe` garde
+  `length(trim(p_motif)) = 0` en amont (`20260818230000:35-38`) et
+  `ajouterParticipantExterne` ne journalise pas `details`. Le résultat était donc bon, le
+  raisonnement qui l'expliquait était faux — et **rien, ni lint ni test, ne le
+  vérifie** : la diffusion de ce critère repose entièrement sur le fait qu'il est écrit
+  ici.
 - **Les deux trous de couverture signalés à l'issue des tâches précédentes sont comblés par
   la Task 14** : `pageContenantDisciple` (`arbre-lots.ts`) n'était exercée par aucun test
   permanent — elle l'est désormais de bout en bout par
