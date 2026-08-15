@@ -75,6 +75,7 @@ pendant l'implémentation sans validation.
 > | D30 à D43 | `2026-08-13-phase-2b-design.md` (D43 au §7.1, hors table) |
 > | D36 à D53 | `2026-08-13-phase-3-ael-design.md` |
 > | D54 à D80 | `2026-08-14-phase-4-evenements-design.md` |
+> | D81 à D105 | `2026-08-15-phase-5-creation-arbre-design.md` |
 >
 > **⚠️ D36 à D43 apparaissent DEUX FOIS dans ce tableau, et ce n'est pas une coquille.**
 > Ces huit numéros sont **attribués deux fois**, avec des contenus **différents** : le
@@ -584,9 +585,32 @@ Chaque phase est livrable et utilisable en l'état.
 | **2 — Comptes** | Tokens (deux modes), création et liaison de comptes, rôles, réinitialisation de mot de passe, demandes de suivi, notifications | Ouvrir l'application à l'équipe |
 | **3 — AEL** | Calendrier récurrent par antenne, génération des séances, tenue et pointage, compteurs | Remplacer le suivi de présence actuel |
 | **4 — Événements** | Types, événements, participants externes, trois désirs, liste à traiter, conversion en membre | Exploiter les séminaires comme canal d'entrée |
+| **5 — Création enrichie et arborescence** | Création d'un membre avec ses statuts, son faiseur de disciple et son dirigeant en une seule transaction ; arbre des faiseurs de disciple parcourable en consultation | Poser une personne dans l'arbre du premier coup, et voir l'arbre |
+| **6 — Refonte UI/UX** | Reprise de l'interface, et remédiation des douze formulaires à champs libres encore atteints par la réinitialisation de React | Rendre l'application agréable, et cesser d'effacer des saisies |
 
 Les phases 3 et 4 sont indépendantes : leur ordre est interchangeable selon la priorité du
 moment.
+
+> **Ajout du 2026-08-15 — les phases 5 et 6.** Ce tableau s'arrêtait à la phase 4 : le
+> périmètre de la phase 5 n'existait donc dans **aucun** document du projet, alors que sa
+> conception était écrite et ses décisions numérotées (D81 à D105). C'est exactement le
+> piège de « l'amendement qui ne vit que dans une partie des documents », déjà payé deux
+> fois sur le §4.4. Les deux lignes ci-dessus le referment.
+>
+> **La phase 5 est celle de la création enrichie et de l'arborescence**, et **non** la
+> refonte UI/UX : celle-ci devient la **phase 6**. Le README annonçait « la phase 5
+> (refonte UI/UX) » ; sa référence est corrigée par le même amendement.
+>
+> **L'ordre interne de la phase 5 est contraint**, et ce n'est pas de l'ordonnancement de
+> confort (D96) : la création enrichie est livrée **avant** l'arbre parcourable.
+> `creerMembre` n'ayant jamais écrit de `faiseur_de_disciple_id`, toute fiche créée depuis
+> la phase 1a est une racine tant que personne n'ouvre l'écran de rattachement — un arbre
+> livré d'abord serait jugé cassé alors qu'il dirait la vérité.
+>
+> **La phase 5 corrige DEUX des quatorze formulaires à champs libres** recensés dans le
+> README : `membres/formulaire-membre.tsx` (le deuxième pire cas, 9 champs) et
+> `inscription/formulaire-inscription.tsx` (le pire de tous — écran **public**, 8 champs,
+> aucun rattrapage, en production). **Les douze autres relèvent de la phase 6.**
 
 ---
 
