@@ -100,6 +100,11 @@ export function Arborescence({ racines, totalRacines, page, pages, estAdmin }: P
    *
    * `ancetres` porte les identifiants des nœuds AU-DESSUS de celui-ci dans la branche
    * RENDUE — pas dans l'arbre en base : c'est bien le cycle d'AFFICHAGE qu'on ferme.
+   *
+   * CE REFUS-CI NE FERME QUE LE CLIC, et il ne suffit pas : `allerA` écrit dans `deplies`
+   * sans passer par ici. La barrière qui BORNE RÉELLEMENT LA RÉCURSION est celle du rendu,
+   * dans `Noeud`. Celle-ci reste parce qu'elle est la seule à pouvoir DIRE quelque chose —
+   * une trace de console à l'instant du geste.
    */
   function basculer(membreId: string, ancetres: readonly string[]) {
     if (ancetres.includes(membreId)) {
@@ -177,8 +182,9 @@ export function Arborescence({ racines, totalRacines, page, pages, estAdmin }: P
       setCibleId(membre.id)
       // Déplier toute la branche : chaque maillon, plus la cible elle-même. Les maillons
       // sont distincts par construction (`ancetres_membre` remonte une chaîne), donc
-      // aucune boucle ici — mais `basculer` reste la seule porte du dépliage manuel, et
-      // c'est elle qui porte la barrière de D105.
+      // aucune boucle ici — mais ON NE S'APPUIE PAS SUR CE RAISONNEMENT : cette écriture ne
+      // passe PAS par `basculer`, et la barrière de D105 qui protège de la récursion est
+      // celle du RENDU (voir `Noeud`), pas celle du clic.
       setEtat((precedent) => ({
         ...precedent,
         deplies: Array.from(new Set([...precedent.deplies, ...maillons.map((m) => m.id)])),
@@ -395,7 +401,28 @@ function Noeud({
   basculer,
   changerPage,
 }: PropsNoeud) {
-  const deplie = etat.deplies.includes(membre.id)
+  /*
+    ═══ D105 — LA BARRIÈRE ANTI-CYCLE EST ICI, AU RENDU, ET PAS SEULEMENT SUR LE CLIC ═══
+
+    `basculer` la porte déjà, mais `basculer` n'est que le chemin MANUEL : `allerA` écrit
+    directement dans `deplies` sans passer par elle, et `deplies` est une liste GLOBALE, pas
+    une liste par branche. Sur une donnée porteuse d'un cycle A → B → A, les deux
+    identifiants seraient dépliés et `Noeud(A) → Noeud(B) → Noeud(A) → …` récurserait sans
+    borne : l'onglet se fige, et rien n'indique pourquoi. C'est LITTÉRALEMENT le scénario que
+    D105 nomme dans sa justification — « un dépliage automatique piloté par la recherche, sur
+    une donnée corrompue » —, et c'est le RENDU qu'elle vise.
+
+    `ancetres` porte les identifiants des nœuds AU-DESSUS de celui-ci dans la branche RENDUE.
+    La liste s'allonge d'un cran à chaque niveau : refuser de déplier un nœud qui s'y trouve
+    déjà BORNE la récursion au nombre de nœuds distincts chargés, quelle que soit la donnée.
+
+    SUR UNE DONNÉE SAINE, CETTE CONDITION NE CHANGE RIEN : dans un arbre sans cycle, aucun
+    nœud n'est son propre ancêtre. Le nœud répété reste AFFICHÉ — l'effacer cacherait le
+    cycle —, simplement replié, et le clic dessus retombe sur le refus explicite de
+    `basculer`, qui, lui, le journalise. On ne journalise pas ICI : un rendu peut se rejouer
+    autant de fois que React le décide.
+  */
+  const deplie = etat.deplies.includes(membre.id) && !ancetres.includes(membre.id)
   const chargement = etat.enCours.includes(membre.id)
   const page = etat.noeuds[membre.id]
   const erreur = etat.erreurs[membre.id]
