@@ -143,19 +143,45 @@ async function creerCompte(identifiant: string, mdp: string, membreId: string | 
  * LE CONTRÔLE DES COMPTES `auth` NE PASSE PAS PAR `profils` : un orphelin `auth` n'a par
  * définition AUCUNE ligne dans `profils`, et un contrôle qui l'y chercherait serait vrai à
  * vide pour le cas même qu'il prétend fermer.
+ *
+ * ═══ ET L'ORDRE EST INVERSÉ : LES FICHES D'ABORD, LES COMPTES ENSUITE ═══
+ *
+ * C'EST LA CAUSE RÉELLE DU RÉSIDU, mesurée, et ce n'était pas « une exécution concurrente
+ * d'une autre session ». L'ordre précédent — comptes d'abord — était justifié ainsi :
+ * « supprimer les fiches avant les comptes laisserait des profils à moitié nettoyés si la
+ * suppression des comptes échouait ensuite ». Le raisonnement ne tenait pas compte de la
+ * seule contrainte qui compte ici :
+ *
+ *   1. le premier test de cette suite attribue « Repenti » à `-petit-enfant` DEPUIS le
+ *      compte `IDENT_LIE`, et ne le retire jamais — la ligne `membre_statuts` porte donc
+ *      `attribue_par` = le profil de ce compte ;
+ *   2. cette clé étrangère N'EST NI `cascade` NI `set null` : tant que la ligne existe,
+ *      supprimer le profil est REFUSÉ ;
+ *   3. `deleteUser` échouait donc — MESURÉ : « Database error deleting user » —, l'erreur
+ *      était ignorée, et les fiches partaient juste après. La cascade emportait alors
+ *      `membre_statuts` et `journal_statuts`, et `profils.membre_id` passait à NULL
+ *      (`on delete set null`).
+ *
+ * D'où l'état constaté après chaque exécution : le profil ET son `auth.users` présents,
+ * `membre_id` à NULL, zéro rôle. Exactement ce qu'on observait, sans aucune concurrence.
+ *
+ * DANS L'AUTRE ORDRE, la suppression des fiches emporte d'abord `membre_statuts` et
+ * `journal_statuts` par cascade, et `deleteUser` PASSE — mesuré aussi, sur le résidu réel :
+ * `membre_statuts` bloquants 1 → 0, `journal_statuts` 2 → 0, puis `deleteUser` : RÉUSSITE.
+ * Le risque que l'ancien ordre voulait éviter — un demi-nettoyage muet — est fermé par les
+ * deux autres corrections : l'erreur de `deleteUser` LÈVE, et les comptages ci-dessous
+ * assertent.
  */
 async function nettoyer() {
-  for (const identifiant of [IDENT_LIE, IDENT_AUTRE, IDENT_SANS_FICHE]) {
-    await supprimerCompte(identifiant)
-  }
-  // Les comptes d'abord : `profils.membre_id` est en `on delete set null`, mais
-  // supprimer les fiches avant les comptes laisserait des profils à moitié nettoyés
-  // si la suppression des comptes échouait ensuite.
   const { error: erreurMembres } = await admin
     .from('membres')
     .delete()
     .like('nom', 'ZZAutorite-%')
   if (erreurMembres) throw new Error(`suppression des fiches impossible : ${erreurMembres.message}`)
+
+  for (const identifiant of [IDENT_LIE, IDENT_AUTRE, IDENT_SANS_FICHE]) {
+    await supprimerCompte(identifiant)
+  }
 
   const identifiants = [IDENT_LIE, IDENT_AUTRE, IDENT_SANS_FICHE]
   const { data: profilsResiduels, error: erreurProfils } = await admin
