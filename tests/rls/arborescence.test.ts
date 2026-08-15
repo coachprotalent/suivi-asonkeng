@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   disciplesParPage,
   nomsMaillonsActifs,
+  pageContenantDisciple,
   racinesParPage,
 } from '../../src/lib/donnees/arbre-lots'
 
@@ -46,6 +47,17 @@ let idsDisciplesAttendus: string[] = []
 let idsRacinesAttendues: string[] = []
 let idArchive: string
 let idEnAttente: string
+
+// ═══ POUR `pageContenantDisciple` : un faiseur DISTINCT, isolé des cinq disciples
+// ci-dessus, pour ne pas perturber leurs propres décomptes (D94, D95). ═══
+let idFaiseurCitation: string
+// Le DERNIER dans l'ordre (nom, prenom, id) — donc sur la PAGE 2 avec `TAILLE_CITATION`.
+// Son NOM PORTE les cinq caractères qu'une expression `or(...)` de PostgREST lit comme
+// syntaxe si on ne les cite pas : virgule, parenthèses, guillemet double, antislash.
+// `citerValeurPostgrest` (arbre-lots.ts) est le SEUL code de ce module qui les échappe —
+// et rien, avant cette suite, ne l'exerçait.
+const NOM_CITATION_CIBLE = `${PREFIXE}-cit-d, (parenthèses) "guillemets" \\antislash`
+let idCitationCible: string
 
 async function supprimerCompte(identifiant: string) {
   const { data } = await admin.from('profils').select('id').eq('identifiant', identifiant).maybeSingle()
@@ -165,6 +177,33 @@ beforeAll(async () => {
   if (erreurHors || !hors) throw new Error(`création des fiches hors état actif : ${erreurHors?.message}`)
   idArchive = hors.find((l) => l.etat === 'archive')!.id as string
   idEnAttente = hors.find((l) => l.etat === 'en_attente')!.id as string
+
+  // ═══ LE FAISEUR ET LES QUATRE FRÈRES DE LA PREUVE DE CITATION ═══
+  // Ordre RÉEL (nom, prenom, id) : `-cit-a` < `-cit-b` < `-cit-c` < NOM_CITATION_CIBLE
+  // (« d » > « c », et le reste du nom ne compte plus une fois le premier caractère
+  // départagé). La cible est donc en RANG 3 (zéro-indexé), DERNIÈRE des quatre.
+  const { data: faiseurCitation, error: erreurFaiseurCitation } = await admin
+    .from('membres')
+    .insert({ nom: `${PREFIXE}-citation-faiseur`, prenom: 'Test' })
+    .select('id')
+    .single()
+  if (erreurFaiseurCitation || !faiseurCitation) {
+    throw new Error(`création du faiseur de citation : ${erreurFaiseurCitation?.message}`)
+  }
+  idFaiseurCitation = faiseurCitation.id as string
+
+  const freresCitation = [
+    { nom: `${PREFIXE}-cit-a`, prenom: 'Test' },
+    { nom: `${PREFIXE}-cit-b`, prenom: 'Test' },
+    { nom: `${PREFIXE}-cit-c`, prenom: 'Test' },
+    { nom: NOM_CITATION_CIBLE, prenom: 'Test' },
+  ].map((ligne) => ({ ...ligne, faiseur_de_disciple_id: idFaiseurCitation }))
+  const { data: citation, error: erreurCitation } = await admin
+    .from('membres')
+    .insert(freresCitation)
+    .select('id, nom')
+  if (erreurCitation || !citation) throw new Error(`création des frères de citation : ${erreurCitation?.message}`)
+  idCitationCible = citation.find((l) => l.nom === NOM_CITATION_CIBLE)!.id as string
 })
 
 afterAll(async () => {
@@ -251,6 +290,89 @@ describe('disciplesParPage', () => {
     const resultat = await disciplesParPage(admin, idsRacinesAttendues[0], { taillePage: 2 })
     expect(resultat.total).toBe(0)
     expect(resultat.lignes).toEqual([])
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────────
+// `pageContenantDisciple` — TROU DE COUVERTURE COMBLÉ EN CLÔTURE DE PHASE.
+//
+// Signalé par l'implémenteur des Tasks 9-10 : cette fonction n'était exercée par AUCUN
+// test permanent, vérifiée seulement À LA MAIN puis le script supprimé. C'est pourtant le
+// code le plus fragile du lot (relevé par la revue des Tasks 8-13) : elle fabrique une
+// expression `or(...)` PostgREST À LA MAIN, avec une citation maison
+// (`citerValeurPostgrest`) que rien n'exerçait, et suppose que l'ordre `.order('nom')` de
+// PostgreSQL coïncide avec ce que `nom.lt.` compare textuellement.
+//
+// La preuve de bout en bout (`tests/e2e/arborescence.spec.ts`, « la recherche atteint une
+// personne située AU-DELÀ de la première page de son faiseur ») couvre déjà la FRONTIÈRE
+// DE PAGE avec la vraie constante de production (`TAILLE_PAGE_DISCIPLES`, 25 frères plus
+// la cible), mais avec des noms qui ne contiennent que lettres, chiffres et tirets. Elle
+// ne peut donc PAS exercer `citerValeurPostgrest` : c'est le rôle de ce bloc-ci, avec une
+// taille de page réduite (même motif que `disciplesParPage` plus haut) et des noms qui
+// portent les cinq caractères qu'une expression `or(...)` non citée lirait comme syntaxe.
+// ───────────────────────────────────────────────────────────────────────────────
+
+describe('pageContenantDisciple', () => {
+  // Quatre frères, taille de page 2 : page 1 = [-cit-a, -cit-b], page 2 = [-cit-c, CIBLE].
+  const TAILLE_CITATION = 2
+
+  it('cite correctement un nom porteur de virgule, parenthèses, guillemet et antislash — franchit la frontière de page', async () => {
+    const page = await pageContenantDisciple(admin, idFaiseurCitation, idCitationCible, TAILLE_CITATION)
+
+    // SANS LA CITATION : `nom.lt.${nom}` casserait la syntaxe `or(...)` sur la virgule et
+    // les parenthèses du nom de la cible, PostgREST refuserait la requête, et
+    // `pageContenantDisciple` NE PEUT PAS distinguer cette erreur d'un « je ne sais pas » —
+    // elle LÈVE (voir le code : seul un `maybeSingle()` vide rend `1`, pas une erreur de
+    // syntaxe sur le second aller-retour). Un `await` qui n'aurait pas levé ici, ET rendu
+    // la MAUVAISE page, serait donc le signe d'une citation qui a cessé de fonctionner.
+    expect(page).toBe(2)
+
+    // ═══ CONTRÔLE POSITIF : LA PAGE CALCULÉE CONTIENT RÉELLEMENT LA CIBLE ═══
+    // Sans lui, un calcul qui rendrait TOUJOURS 2 par accident (une constante figée, par
+    // exemple) satisferait l'assertion ci-dessus sans que la fonction ait rien calculé.
+    const pageCalculee = await disciplesParPage(admin, idFaiseurCitation, {
+      page,
+      taillePage: TAILLE_CITATION,
+    })
+    expect(pageCalculee.lignes.map((l) => l.id)).toContain(idCitationCible)
+
+    // ET ELLE EST ABSENTE DE LA PAGE 1 : sans cette absence, un calcul qui rendrait
+    // TOUJOURS 1 (le repli documenté pour « je ne sais pas ») passerait aussi le contrôle
+    // positif ci-dessus, puisque la page 1 contiendrait alors la totalité des quatre
+    // frères sur une taille de page mal appliquée. Ici, la page 1 a exactement DEUX
+    // frères, et la cible n'y est pas.
+    const page1 = await disciplesParPage(admin, idFaiseurCitation, { page: 1, taillePage: TAILLE_CITATION })
+    expect(page1.lignes.map((l) => l.id)).not.toContain(idCitationCible)
+    expect(page1.lignes).toHaveLength(TAILLE_CITATION)
+  })
+
+  it('rend 1 quand le disciple visé est introuvable — elle ne prétend pas savoir où il est', async () => {
+    const page = await pageContenantDisciple(
+      admin,
+      idFaiseurCitation,
+      '00000000-0000-0000-0000-000000000000',
+      TAILLE_CITATION,
+    )
+    expect(page).toBe(1)
+  })
+
+  it("rend 1 quand le disciple visé n'est plus actif, même s'il existe réellement", async () => {
+    // Fiche dédiée, ARCHIVÉE : distincte d'`idArchive` (sans faiseur, réservée aux preuves
+    // de racines) pour ne coupler aucune des deux mesures à l'autre.
+    const { data, error } = await admin
+      .from('membres')
+      .insert({
+        nom: `${PREFIXE}-cit-archive`,
+        prenom: 'Test',
+        faiseur_de_disciple_id: idFaiseurCitation,
+        etat: 'archive',
+      })
+      .select('id')
+      .single()
+    if (error || !data) throw new Error(`préparation impossible : ${error?.message}`)
+
+    const page = await pageContenantDisciple(admin, idFaiseurCitation, data.id as string, TAILLE_CITATION)
+    expect(page).toBe(1)
   })
 })
 
@@ -490,7 +612,7 @@ describe('noms des maillons du chemin, filtrés etat = actif explicitement', () 
     }
   })
 
-  it('rend une liste vide sur une liste d’identifiants vide, sans interroger la base', async () => {
+  it("rend une liste vide sur une liste d'identifiants vide, sans interroger la base", async () => {
     expect(await nomsMaillonsActifs(clientSimple, [])).toEqual([])
   })
 })
@@ -536,7 +658,7 @@ describe("aucun membre actif n'a de faiseur qui ne soit pas actif", () => {
       Les preuves qui, elles, ÉPROUVENT vraiment les gardes construisent leurs propres
       fiches non actives : elles vivent dans `tests/rls/creation-enrichie.test.ts`.
     */
-    expect(fiches.length, 'aucune fiche en base : ce balayage n’a porté sur rien').toBeGreaterThan(0)
+    expect(fiches.length, "aucune fiche en base : ce balayage n'a porté sur rien").toBeGreaterThan(0)
     const nonActives = fiches.filter((m) => m.etat !== 'actif').length
     console.info(
       `invariant d'arbre : ${fiches.length} fiche(s) examinée(s), dont ${nonActives} non active(s). ` +
