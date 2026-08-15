@@ -107,12 +107,22 @@ test('en production, éditer un évènement avec une période incohérente affic
   await page.getByText("Modifier l'évènement").click()
   const formulaire = page.locator('details').filter({ has: page.getByRole('button', { name: 'Enregistrer' }) })
 
+  // Valeur RÉELLE du sélecteur « Type », pré-rempli par l'édition — c'est elle qu'on doit
+  // retrouver après le refus, jamais recopiée.
+  const selecteurType = formulaire.getByLabel('Type')
+  const valeurType = await selecteurType.inputValue()
+
   await formulaire.getByLabel('Date de fin').fill('2026-01-01')
   await formulaire.getByRole('button', { name: 'Enregistrer' }).click()
 
   await expect(formulaire.locator('[role="alert"]:not(#__next-route-announcer__)')).toHaveText(
     MESSAGE_PERIODE_INCOHERENTE,
   )
+  // LE CHAMP MÊME DU DÉFAUT DÉCOUVERT EN PHASE 5 : un `<select>` contrôlé ne survit PAS à
+  // la remise à zéro native du formulaire après un refus, contrairement aux `<input>`,
+  // sauf `onReset={(e) => e.preventDefault()}` sur le `<form>`. Sans cette assertion, la
+  // régression du remède ne serait jamais vue.
+  await expect(selecteurType).toHaveValue(valeurType)
 
   const { data: verif } = await admin.from('evenements').select('date_fin').eq('id', evenement.id).single()
   expect(verif?.date_fin).toBeNull()

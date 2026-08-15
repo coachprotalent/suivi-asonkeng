@@ -68,6 +68,18 @@ export function FormulaireEvenement({
   // remise à zéro au succès n'est nécessaire ici, à la différence de
   // `FormulaireType` : la création REDIRIGE (le composant se démonte), et l'édition
   // reste volontairement sur les valeurs qui viennent d'être enregistrées.
+  //
+  // ═══ `onReset` SUR LE `<form>`, CORRECTIF DÉCOUVERT EN PHASE 5, APPLIQUÉ ICI EN
+  // CLÔTURE ═══ Être « contrôlé » (`value` + `onChange`) protège un `<input>` ou un
+  // `<textarea>` de la remise à zéro décrite ci-dessus, mais PAS un `<select>` : elle
+  // passe par un vrai événement DOM `reset` sur le `<form>`, que le navigateur applique
+  // nativement à ses éléments AVANT que React ne resynchronise l'option sélectionnée. Le
+  // `<select name="typeId">` ci-dessous repartait donc à vide sur un refus retourné,
+  // alors que les champs texte survivaient — même défaut, même remède que
+  // `membres/formulaire-membre.tsx` et `inscription/formulaire-inscription.tsx` (phase
+  // 5) : `onReset={(e) => e.preventDefault()}` empêche le navigateur d'exécuter sa
+  // remise à zéro native. Sans danger ici, puisqu'aucun champ de ce formulaire n'est non
+  // contrôlé — il n'y a donc rien que cette remise à zéro devait légitimement effacer.
   const [valeursCourantes, setValeursCourantes] = useState<ValeursEvenement>(valeurs)
 
   function definir<C extends keyof ValeursEvenement>(champ: C, valeur: string) {
@@ -78,7 +90,11 @@ export function FormulaireEvenement({
   const optionsType = typeDejaListe || !typeCourant ? types : [...types, { ...typeCourant, actif: false, ordre: 0 }]
 
   return (
-    <form action={envoyer} className="flex flex-col gap-4">
+    <form
+      action={envoyer}
+      onReset={(evenement) => evenement.preventDefault()}
+      className="flex flex-col gap-4"
+    >
       {Object.entries(champsCaches ?? {}).map(([nom, valeur]) => (
         <input key={nom} type="hidden" name={nom} value={valeur} />
       ))}

@@ -91,7 +91,11 @@ test('en production, une période incohérente affiche son message exact et cons
   const formulaire = page.locator('details').filter({ has: page.getByRole('button', { name: 'Créer' }) })
 
   await formulaire.getByLabel('Titre').fill(titre)
-  await formulaire.getByLabel('Type').selectOption({ index: 1 })
+  const selecteurType = formulaire.getByLabel('Type')
+  await selecteurType.selectOption({ index: 1 })
+  // Valeur RÉELLE sélectionnée, jamais recopiée : c'est elle qu'on doit retrouver après
+  // le refus, pas une supposition sur l'ordre des types en base.
+  const valeurType = await selecteurType.inputValue()
   await formulaire.getByLabel('Date de début').fill('2026-09-10')
   await formulaire.getByLabel('Date de fin').fill('2026-09-01')
   await formulaire.getByRole('button', { name: 'Créer' }).click()
@@ -100,6 +104,11 @@ test('en production, une période incohérente affiche son message exact et cons
     MESSAGE_PERIODE_INCOHERENTE,
   )
   await expect(formulaire.getByLabel('Titre')).toHaveValue(titre)
+  // LE CHAMP MÊME DU DÉFAUT DÉCOUVERT EN PHASE 5 : un `<select>` contrôlé ne survit PAS à
+  // la remise à zéro native du formulaire après un refus, contrairement aux `<input>`,
+  // sauf `onReset={(e) => e.preventDefault()}` sur le `<form>`. Sans cette assertion, la
+  // régression du remède ne serait jamais vue — seul le Titre était vérifié jusqu'ici.
+  await expect(selecteurType).toHaveValue(valeurType)
 
   const { data } = await admin.from('evenements').select('id').eq('titre', titre)
   expect(data ?? []).toHaveLength(0)
