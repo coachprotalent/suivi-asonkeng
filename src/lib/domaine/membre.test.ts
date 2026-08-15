@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { FicheMembreInvalideError, normaliserFicheMembre } from './membre'
+import {
+  FicheMembreInvalideError,
+  LIBELLE_FICHE_NON_CONSULTABLE,
+  libelleFiche,
+  normaliserFicheMembre,
+} from './membre'
 
 const minimal = { nom: 'Nguem', prenom: 'Jérôme', reportInitialAel: 0 }
 
@@ -134,5 +139,26 @@ describe('normaliserFicheMembre - valeurs telles que les rend un formulaire', ()
     expect(() => normaliserFicheMembre({ ...minimal, ville: 42 })).toThrow(
       FicheMembreInvalideError,
     )
+  })
+})
+
+describe('libelleFiche', () => {
+  it('rend null quand l’identifiant est nul — il n’y a personne à désigner', () => {
+    expect(libelleFiche(null, null)).toBeNull()
+    // Même sans identifiant, un `bref` fourni par erreur ne doit rien faire apparaître.
+    expect(libelleFiche(null, { prenom: 'Jean', nom: 'Dupont' })).toBeNull()
+  })
+
+  it('rend le nom complet quand la fiche a pu être lue', () => {
+    expect(libelleFiche('id-1', { prenom: 'Jean', nom: 'Dupont' })).toBe('Jean Dupont')
+  })
+
+  it("rend « Fiche non consultable » quand l'identifiant existe mais que la lecture RLS n'a rien rendu", () => {
+    expect(libelleFiche('id-1', null)).toBe(LIBELLE_FICHE_NON_CONSULTABLE)
+  })
+
+  // Le cœur de D98 : les deux « rien » ne sont PAS le même « rien ».
+  it('distingue « personne » de « fiche cachée »', () => {
+    expect(libelleFiche(null, null)).not.toBe(libelleFiche('id-1', null))
   })
 })

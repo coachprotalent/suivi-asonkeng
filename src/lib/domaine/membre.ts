@@ -116,3 +116,43 @@ export function ficheMembreVersColonnes(fiche: FicheMembre): Record<string, unkn
     report_initial_ael: fiche.reportInitialAel,
   }
 }
+
+/**
+ * Ce qu'on affiche à la place d'un nom qu'on n'a pas le droit de lire (D98, D100).
+ *
+ * Exporté : la preuve Vitest et les deux écrans doivent parler du MÊME texte. Recopier la
+ * chaîne à trois endroits en ferait trois vérités.
+ */
+export const LIBELLE_FICHE_NON_CONSULTABLE = 'Fiche non consultable'
+
+/**
+ * Libellé d'une fiche désignée par un identifiant et lue SOUS RLS (D100).
+ *
+ * - identifiant `null` → `null` : il n'y a personne à désigner. L'appelant affiche « — ».
+ * - fiche lue → le nom complet.
+ * - identifiant PRÉSENT mais fiche ABSENTE de la lecture RLS → `'Fiche non consultable'`.
+ *
+ * ═══ POURQUOI LE TROISIÈME CAS N'EST PAS « — » ═══
+ * Si l'identifiant existe mais que la lecture rend `null`, ce n'est PAS « personne » :
+ * c'est une fiche que la politique cache à ce compte (typiquement archivée, vue par un
+ * compte ordinaire). Confondre les deux afficherait « — » là où un administrateur voit un
+ * nom sur la même fiche — exactement l'inverse de D20, qui rend la filiation visible de
+ * tout compte actif. La 1c a tranché cela sur la fiche membre, la phase 3 sur
+ * l'intervenant d'une séance, la phase 4 sur un participant. Même réponse, quatrième fois,
+ * et désormais UN SEUL endroit.
+ *
+ * EXTRAITE de `/membres/[id]/page.tsx` (elle s'y appelait `libelleFiliation`) à
+ * comportement RIGOUREUSEMENT identique.
+ */
+export function libelleFiche(
+  identifiant: string | null,
+  bref: { prenom: string; nom: string } | null,
+): string | null {
+  if (!identifiant) {
+    return null
+  }
+  if (!bref) {
+    return LIBELLE_FICHE_NON_CONSULTABLE
+  }
+  return `${bref.prenom} ${bref.nom}`
+}
