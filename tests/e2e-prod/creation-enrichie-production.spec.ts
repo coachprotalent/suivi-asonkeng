@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import { expect, test, type Page } from '@playwright/test'
 import { identifiantVersEmail } from '../../src/lib/domaine/identifiant'
 import { MESSAGE_FAISEUR_ARCHIVE } from '../../src/app/membres/[id]/arbre/messages'
+import { MESSAGE_CODE_INVALIDE } from '../../src/app/inscription/messages'
 
 /**
  * PREUVES REJOUABLES CONTRE UN BUILD DE PRODUCTION (`next build` + `next start`, voir
@@ -282,7 +283,7 @@ test('en production, une création valide aboutit et redirige vers la fiche', as
  * son erreur. La saisie conservée est donc LA SEULE CHOSE qui lui reste pour réessayer.
  * Aucune session n'est nécessaire : cet écran s'affiche sans.
  */
-test('en production, un code d’inscription invalide laisse les HUIT champs remplis', async ({
+test("en production, un code d'inscription invalide laisse les HUIT champs remplis", async ({
   page,
 }) => {
   await page.goto('/inscription')
@@ -311,20 +312,28 @@ test('en production, un code d’inscription invalide laisse les HUIT champs rem
   await page.getByLabel('Téléphone').fill(valeurs.telephone)
   await page.getByLabel('Ville').fill(valeurs.ville)
 
-  // L'antenne : la première réellement proposée, s'il y en a une. Le `<select>` est le
-  // huitième champ, et son état doit survivre comme les autres.
+  // L'antenne : la première réellement proposée. Le `<select>` est le HUITIÈME champ —
+  // CELUI-LÀ MÊME du défaut de survie découvert en phase 5 (les `<select>` contrôlés ne
+  // survivent pas à la remise à zéro native, contrairement aux `<input>`) — et son état
+  // doit survivre comme les autres, INCONDITIONNELLEMENT : un catalogue d'antennes vide
+  // rendrait cette assertion vacuellement vraie pour toujours, exactement comme le
+  // catalogue de statuts ci-dessus (`valeurStatut`), d'où le même garde explicite.
   const antenne = page.getByLabel('Antenne')
   const valeurAntenne = await antenne.locator('option').nth(1).getAttribute('value')
-  if (valeurAntenne) {
-    await antenne.selectOption(valeurAntenne)
-  }
+  expect(valeurAntenne, "catalogue des antennes vide : cette preuve ne porterait pas sur le huitième champ").toBeTruthy()
+  await antenne.selectOption(valeurAntenne!)
 
   await page.getByRole('button', { name: "S'inscrire" }).click()
 
-  // Le refus indifférencié s'affiche… (sélecteur PORTÉ : Next.js pose son propre
+  // Le refus indifférencié s'affiche, AVEC SON TEXTE EXACT : `MESSAGE_CODE_INVALIDE`, seul
+  // message rendu par `messageErreurConsommation` pour les QUATRE causes de refus d'un
+  // token (D30 : inconnu, expiré, révoqué, déjà utilisé partagent le même statut
+  // `invalide` à la source). Une simple `toBeVisible()` serait satisfaite par N'IMPORTE
+  // QUEL texte dans l'alerte — y compris un message qui aurait cessé d'être indifférencié
+  // sans que ce test s'en aperçoive. (Sélecteur PORTÉ : Next.js pose son propre
   // `<div role="alert" id="__next-route-announcer__">` sur chaque page, et un
   // `getByRole('alert')` nu en trouverait deux — violation du mode strict.)
-  await expect(page.locator(ALERTE)).toBeVisible()
+  await expect(page.locator(ALERTE)).toHaveText(MESSAGE_CODE_INVALIDE)
   await expect(page.locator('body')).not.toContainText(FRAGMENT_DIGEST_REACT)
   // Et surtout PAS la limite d'erreur : `sInscrire` RETOURNE son refus, elle ne le lève
   // pas. C'est ce texte-là, et non le digest, qui apparaîtrait si elle levait.
@@ -338,9 +347,8 @@ test('en production, un code d’inscription invalide laisse les HUIT champs rem
   await expect(page.getByLabel('Nom', { exact: true })).toHaveValue(valeurs.nom)
   await expect(page.getByLabel('Téléphone')).toHaveValue(valeurs.telephone)
   await expect(page.getByLabel('Ville')).toHaveValue(valeurs.ville)
-  if (valeurAntenne) {
-    await expect(antenne).toHaveValue(valeurAntenne)
-  }
+  // LE HUITIÈME CHAMP, INCONDITIONNEL : c'est lui que le remède `onReset` protège.
+  await expect(antenne).toHaveValue(valeurAntenne!)
 
   // Et AUCUN compte n'a été créé : le code était invalide. `error` VÉRIFIÉ, et assertion
   // SANS `?? []` : sur échec de lecture, `data` vaut `null`, et `data ?? []` convertirait
