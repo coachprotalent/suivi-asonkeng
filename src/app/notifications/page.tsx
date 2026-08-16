@@ -1,4 +1,6 @@
 import Link from 'next/link'
+import { EnTetePage } from '@/composants/ui/en-tete-page'
+import { LigneListe, Liste } from '@/composants/ui/ligne-liste'
 import { mesNotifications } from '@/lib/donnees/notifications'
 import { exigerProfilActif } from '@/lib/securite/garde'
 import { FormulaireMarquage } from './formulaire-marquage'
@@ -9,37 +11,55 @@ export default async function PageNotifications() {
   const nonLues = notifications.filter((n) => !n.luLe)
 
   return (
-    <main className="mx-auto max-w-2xl px-6 py-10">
-      <Link href="/tableau-de-bord" className="text-sm underline underline-offset-4">
-        Retour au tableau de bord
-      </Link>
-      <h1 className="mt-4 mb-8 text-2xl font-semibold">Notifications</h1>
+    <main className="mx-auto max-w-2xl px-esp-6 py-esp-10">
+      <EnTetePage
+        retour={{ href: '/tableau-de-bord', libelle: 'Retour au tableau de bord' }}
+        titre="Notifications"
+      />
 
       {notifications.length === 0 ? (
-        <p className="text-sm text-neutral-500">Aucune notification.</p>
+        <p className="text-petit text-encre-attenuee">Aucune notification.</p>
       ) : (
-        <ul className="divide-y divide-neutral-200">
+        <Liste>
           {notifications.map((notification) => (
-            <li key={notification.id} className="py-4">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <span className={notification.luLe ? 'text-neutral-500' : 'font-medium'}>
-                  {notification.titre}
-                </span>
-                {!notification.luLe ? <FormulaireMarquage notificationId={notification.id} /> : null}
-              </div>
-              <p className="mt-1 text-sm text-neutral-600">{notification.corps}</p>
-              {notification.lien ? (
-                <Link href={notification.lien} className="mt-1 inline-block text-sm underline underline-offset-4">
-                  Voir
-                </Link>
-              ) : null}
-            </li>
+            <LigneListe
+              key={notification.id}
+              /*
+                ⚠️ HORS DU CHOIX FIXE DE `LigneListe` (D126) : `principal` porte deux
+                canaux — la couleur ET la graisse — pour distinguer lu de non lu, jamais
+                la couleur seule. `text-nom` (le style ambiant de `principal`) fixe déjà
+                une graisse marquée ; le `<span>` imbriqué la ramène à `font-normal` en
+                plus d'atténuer la couleur, exactement comme `font-medium` disparaissait
+                sans remplacement pour une notification lue avant cette migration.
+              */
+              principal={
+                notification.luLe ? (
+                  <span className="font-normal text-encre-attenuee">{notification.titre}</span>
+                ) : (
+                  notification.titre
+                )
+              }
+              actions={!notification.luLe ? <FormulaireMarquage notificationId={notification.id} /> : null}
+              complement={
+                <div className="flex flex-col gap-esp-1">
+                  <p className="text-petit text-encre-attenuee">{notification.corps}</p>
+                  {notification.lien ? (
+                    <Link
+                      href={notification.lien}
+                      className="cible-tactile self-start text-petit text-action underline underline-offset-4"
+                    >
+                      Voir
+                    </Link>
+                  ) : null}
+                </div>
+              }
+            />
           ))}
-        </ul>
+        </Liste>
       )}
 
       {nonLues.length === 0 && notifications.length > 0 ? (
-        <p className="mt-6 text-sm text-neutral-500">Tout est lu.</p>
+        <p className="mt-esp-6 text-petit text-encre-attenuee">Tout est lu.</p>
       ) : null}
     </main>
   )

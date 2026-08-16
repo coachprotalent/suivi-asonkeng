@@ -1,5 +1,7 @@
-import Link from 'next/link'
-import { redirect } from 'next/navigation'
+import { Carte } from '@/composants/ui/carte'
+import { EnTetePage } from '@/composants/ui/en-tete-page'
+import { Liste } from '@/composants/ui/ligne-liste'
+import { Pagination } from '@/composants/ui/pagination'
 import { dirigeantPropose } from '@/lib/domaine/arbre'
 import { maillonArbre } from '@/lib/donnees/arbre'
 import {
@@ -8,9 +10,10 @@ import {
   TAILLE_PAGE_DEMANDES,
   type DemandeListe,
 } from '@/lib/donnees/demandes'
-import { pageDemandee } from '@/lib/donnees/pagination'
 import { membreBrefParId, type MembreBref } from '@/lib/donnees/membres'
+import { nombreDePages, pageDemandee } from '@/lib/donnees/pagination'
 import { rolesDuProfil } from '@/lib/donnees/profils'
+import { bornerPage } from '@/lib/navigation/bornage'
 import { exigerProfilActif } from '@/lib/securite/garde'
 import { LigneDemandeAdmin } from './ligne-demande-admin'
 import { LigneDemandePersonnelle } from './ligne-demande-personnelle'
@@ -43,7 +46,6 @@ export default async function PageDemandes({
   const { lignes: mesPropositions, total: totalMiennes } = await mesDemandes(profil.id, {
     page: pageMiennes,
   })
-  const pagesMiennes = Math.max(1, Math.ceil(totalMiennes / TAILLE_PAGE_DEMANDES))
 
   let demandesEnAttente: DemandeListe[] = []
   let totalATraiter = 0
@@ -76,46 +78,61 @@ export default async function PageDemandes({
     )
     for (const [id, propose] of propositions) propositionsDirigeant[id] = propose
   }
-  const pagesATraiter = Math.max(1, Math.ceil(totalATraiter / TAILLE_PAGE_DEMANDES))
 
-  // BORNE HAUTE DES DEUX PAGINATIONS, calculée APRÈS coup depuis le `total` REÇU DES
-  // LECTURES ELLES-MÊMES — jamais par un aller-retour préalable (I1 de la ronde du
-  // 2026-08-14). Aucune boucle possible : `pages` vaut toujours au moins 1 et la cible est
-  // `pages` lui-même. HORS DE TOUT `try` (il n'y en a aucun dans ce fichier) — `redirect()`
-  // lève une exception de contrôle.
-  if (estAdmin && pageATraiter > pagesATraiter) {
-    redirect(`/demandes?page=${pagesATraiter}&pageMiennes=${pageMiennes}`)
+  /*
+    ⚠️ DEUX BORNAGES (D121), et `/demandes` est le SEUL écran du dépôt dans ce cas. Chacun
+    construit sa redirection avec la valeur BRUTE, NON CORRIGÉE, de l'AUTRE paramètre de
+    page — `lienATraiter` referme sur `pageMiennes`, `lienMiennes` referme sur
+    `pageATraiter`, et ni l'une ni l'autre n'est jamais réassignée : c'est exactement le
+    comportement d'avant cette migration (`redirect` construit à la main aux lignes 86-91
+    de l'ancien fichier). Y substituer la valeur CORRIGÉE (`pagesMiennes`/`pagesATraiter`)
+    changerait la convergence des deux pages sans que rien ne le signale — préservé tel
+    quel, sur consigne explicite du brief.
+
+    La condition `estAdmin` RESTE AU SITE D'APPEL (D121, commentaire de tête de
+    `bornage.ts`) : `bornerPage` ne décide d'aucun accès, elle ne fait que corriger une
+    page hors bornes pour une section qui a déjà le droit de la voir.
+  */
+  function lienATraiter(numero: number): string {
+    return `/demandes?page=${numero}&pageMiennes=${pageMiennes}`
   }
-  if (pageMiennes > pagesMiennes) {
-    redirect(`/demandes?page=${pageATraiter}&pageMiennes=${pagesMiennes}`)
+  function lienMiennes(numero: number): string {
+    return `/demandes?page=${pageATraiter}&pageMiennes=${numero}`
   }
+
+  const pagesATraiter = estAdmin
+    ? bornerPage(pageATraiter, totalATraiter, TAILLE_PAGE_DEMANDES, lienATraiter)
+    : nombreDePages(totalATraiter, TAILLE_PAGE_DEMANDES)
+  const pagesMiennes = bornerPage(pageMiennes, totalMiennes, TAILLE_PAGE_DEMANDES, lienMiennes)
 
   return (
-    <main className="mx-auto max-w-4xl px-6 py-10">
-      <Link href="/tableau-de-bord" className="text-sm underline underline-offset-4">
-        Retour au tableau de bord
-      </Link>
-      <h1 className="mt-4 mb-8 text-2xl font-semibold">Demandes</h1>
+    // D107 — l'un des TROIS écrans en densité compacte, avec `/comptes` (Task 20) et
+    // `/evenements/a-traiter` (Task 18). Six jetons d'espacement remappés, rien d'autre :
+    // ni couleur, ni typographie, ni rayon, ni hauteur de cible tactile.
+    <main data-densite="compact" className="mx-auto max-w-4xl px-esp-6 py-esp-10">
+      <EnTetePage
+        retour={{ href: '/tableau-de-bord', libelle: 'Retour au tableau de bord' }}
+        titre="Demandes"
+      />
 
       {demandeCreee === '1' ? (
-        <p
-          role="status"
-          className="mb-8 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800"
-        >
-          {MESSAGE_DEMANDE_CREEE}
-        </p>
+        <div className="mb-esp-8">
+          <Carte ton="succes" role="status">
+            {MESSAGE_DEMANDE_CREEE}
+          </Carte>
+        </div>
       ) : null}
 
       {estAdmin ? (
-        <section className="mb-10">
+        <section className="mb-esp-10">
           {/* LE TOTAL, PAS LA LONGUEUR DE LA PAGE. Afficher `demandesEnAttente.length`
               annoncerait « À traiter (25) » à un administrateur qui en a cent — le mensonge
               exact que `totalObligatoire` existe pour empêcher côté lecture. */}
-          <h2 className="mb-4 text-lg font-medium">À traiter ({totalATraiter})</h2>
+          <h2 className="mb-esp-4 text-section">À traiter ({totalATraiter})</h2>
           {demandesEnAttente.length === 0 ? (
-            <p className="text-sm text-neutral-500">Aucune demande en attente.</p>
+            <p className="text-petit text-encre-attenuee">Aucune demande en attente.</p>
           ) : (
-            <ul className="divide-y divide-neutral-200">
+            <Liste>
               {demandesEnAttente.map((demande) => (
                 <LigneDemandeAdmin
                   key={demande.id}
@@ -123,70 +140,30 @@ export default async function PageDemandes({
                   dirigeantInitial={propositionsDirigeant[demande.id] ?? null}
                 />
               ))}
-            </ul>
+            </Liste>
           )}
 
-          {pagesATraiter > 1 ? (
-            <nav className="mt-6 flex items-center gap-4 text-sm">
-              {pageATraiter > 1 ? (
-                <Link
-                  href={`/demandes?page=${pageATraiter - 1}&pageMiennes=${pageMiennes}`}
-                  className="underline underline-offset-4"
-                >
-                  Page précédente
-                </Link>
-              ) : null}
-              <span className="text-neutral-500">
-                Page {pageATraiter} sur {pagesATraiter}
-              </span>
-              {pageATraiter < pagesATraiter ? (
-                <Link
-                  href={`/demandes?page=${pageATraiter + 1}&pageMiennes=${pageMiennes}`}
-                  className="underline underline-offset-4"
-                >
-                  Page suivante
-                </Link>
-              ) : null}
-            </nav>
-          ) : null}
+          <div className="mt-esp-6">
+            <Pagination page={pageATraiter} pages={pagesATraiter} lienVersPage={lienATraiter} />
+          </div>
         </section>
       ) : null}
 
       <section>
-        <h2 className="mb-4 text-lg font-medium">Mes demandes ({totalMiennes})</h2>
+        <h2 className="mb-esp-4 text-section">Mes demandes ({totalMiennes})</h2>
         {mesPropositions.length === 0 ? (
-          <p className="text-sm text-neutral-500">Vous n&apos;avez soumis aucune demande.</p>
+          <p className="text-petit text-encre-attenuee">Vous n&apos;avez soumis aucune demande.</p>
         ) : (
-          <ul className="divide-y divide-neutral-200">
+          <Liste>
             {mesPropositions.map((demande) => (
               <LigneDemandePersonnelle key={demande.id} demande={demande} />
             ))}
-          </ul>
+          </Liste>
         )}
 
-        {pagesMiennes > 1 ? (
-          <nav className="mt-6 flex items-center gap-4 text-sm">
-            {pageMiennes > 1 ? (
-              <Link
-                href={`/demandes?page=${pageATraiter}&pageMiennes=${pageMiennes - 1}`}
-                className="underline underline-offset-4"
-              >
-                Page précédente
-              </Link>
-            ) : null}
-            <span className="text-neutral-500">
-              Page {pageMiennes} sur {pagesMiennes}
-            </span>
-            {pageMiennes < pagesMiennes ? (
-              <Link
-                href={`/demandes?page=${pageATraiter}&pageMiennes=${pageMiennes + 1}`}
-                className="underline underline-offset-4"
-              >
-                Page suivante
-              </Link>
-            ) : null}
-          </nav>
-        ) : null}
+        <div className="mt-esp-6">
+          <Pagination page={pageMiennes} pages={pagesMiennes} lienVersPage={lienMiennes} />
+        </div>
       </section>
     </main>
   )
