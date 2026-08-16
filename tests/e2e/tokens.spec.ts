@@ -46,6 +46,15 @@ async function supprimerCompte(identifiant: string) {
   if (orphelin) await admin.auth.admin.deleteUser(orphelin.id)
 }
 
+/**
+ * Le nom AFFICHÉ des comptes de cette suite. Il paraît dans la méta de chaque ligne de
+ * `/tokens` (« Créé le … par … »), et c'est ce qui permet d'y désigner LA ligne de ce test
+ * plutôt qu'une ligne étrangère — voir la révocation plus bas.
+ */
+function nomAffichage(identifiant: string): string {
+  return `Test tokens ${identifiant}`
+}
+
 async function creerCompte(identifiant: string, administrateur: boolean) {
   const { data, error } = await admin.auth.admin.createUser({
     email: identifiantVersEmail(identifiant),
@@ -55,7 +64,7 @@ async function creerCompte(identifiant: string, administrateur: boolean) {
   if (error || !data.user) throw new Error(error?.message)
   const { error: erreurProfil } = await admin
     .from('profils')
-    .insert({ id: data.user.id, identifiant, nom_affichage: `Test tokens ${identifiant}` })
+    .insert({ id: data.user.id, identifiant, nom_affichage: nomAffichage(identifiant) })
   // Erreur d'insertion VÉRIFIÉE, pas jetée en silence : un insert de préparation
   // dont l'erreur est ignorée rendrait ce test vert en éprouvant un tout autre
   // chemin (registre du projet — trouvé trois fois dans cette phase). Sans ce
@@ -175,9 +184,36 @@ test('un administrateur génère un token générique, le voit une seule fois, p
   // COMPTAGE AVANT, ET C'EST TOUT L'OBJET DU CORRECTIF CI-DESSOUS.
   const revocablesAvant = await page.getByRole('button', { name: 'Révoquer' }).count()
 
-  await page.getByRole('button', { name: 'Révoquer' }).first().click()
+  /*
+    ⚠️ LA LIGNE DE CE TEST, ET NON « UNE LIGNE QUELCONQUE » (enquête statuts, §6).
+    Les deux points de synchronisation qui suivaient cessaient de synchroniser dès qu'un
+    token révoqué ÉTRANGER traînait en base — état régulier, la base servant aussi de
+    production et n'étant jamais réinitialisée :
+      - `getByText('Révoqué le').first()` était satisfait IMMÉDIATEMENT par la ligne de cet
+        autre token, jamais par celle du test ;
+      - le comptage était satisfait à l'instant où le bouton cliqué bascule sur son libellé
+        d'attente « Révocation… », donc PENDANT que la Server Action est encore en vol.
+    Le test lisait alors `consommer_token_inscription` avant que l'écriture ait atterri, et
+    recevait 'ok'. Reproduit trois fois sur trois, et refermé par mutation dans les deux sens.
+    La ligne est donc désignée par le nom du compte créateur, propre à cette suite, et son
+    unicité est vérifiée AVANT le clic : une ambiguïté doit rougir ici, pas se traduire en
+    attente satisfaite ailleurs.
+  */
+  const ligneCible = page.locator('li').filter({ hasText: nomAffichage(IDENT_ADMIN) })
+  await expect(ligneCible, 'la ligne du token de CE test doit être identifiable seule').toHaveCount(1)
+
+  await ligneCible.getByRole('button', { name: 'Révoquer' }).click()
   await accepterDialogue(page)
-  await expect(page.getByText('Révoqué le').first()).toBeVisible()
+  await expect(ligneCible.getByText('Révoqué le')).toBeVisible()
+
+  /*
+    LA FIN DE L'ÉCRITURE, PAS SON DÉBUT. `revocable` se calcule sur les données RENDUES par
+    le serveur (`!token.revoqueLe && !token.utiliseLe`) : tant que la revalidation n'a pas
+    atterri, la ligne porte encore un bouton — « Révocation… » pendant l'attente, puis de
+    nouveau « Révoquer » si l'action a échoué. Exiger qu'il n'en reste AUCUN des deux sur
+    cette ligne attend donc l'aller-retour complet, et rougit si la révocation échoue.
+  */
+  await expect(ligneCible.getByRole('button', { name: /Révo/ })).toHaveCount(0)
 
   // Le bouton de CETTE ligne disparaît : preuve que `revocable` est bien retombé à faux
   // côté interface. Mais une ligne qui porte une date de révocation ne prouve rien du
