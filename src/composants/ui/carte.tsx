@@ -23,9 +23,12 @@ import type { ReactNode } from 'react'
   inventer deux (un ambre pâle, un vert pâle) ajouterait deux valeurs que la conception n'a
   pas arbitrées, dans un fichier dont la raison d'être est de porter les valeurs arbitrées.
 
-  Donc : fond `--surface` pour les trois tons, et le ton s'exprime par la BORDURE et par la
-  couleur du texte. Le contraste texte/fond y gagne, et la couleur reste un second canal,
-  conformément à l'esprit de D126.
+  Donc : fond `--surface` pour les trois tons, et le ton s'exprime par la BORDURE, elle
+  seule — le texte reste en `--encre` pour les trois (voir `CLASSES_TON` juste dessous).
+  Cette phrase annonçait aussi « la couleur du texte » comme second canal ; c'était faux, et
+  c'est corrigé à la revue finale de branche. Le contraste texte/fond y gagne, et le second
+  canal que D126 exige n'est pas porté ici : il l'est par le `role` et par le texte même du
+  bandeau, jamais par la seule teinte de la bordure.
 
   ⚠️ CE N'EST PAS UN RAIL. La bordure de ton fait le tour de la carte ; le rail de filiation
   est un bord GAUCHE de 2 px en `--filiation`, posé par la prop `rail`. Les deux sont

@@ -43,9 +43,18 @@
   --sur-action: #FFFFFF;
 
   /*
-    ── Couleurs d'état, distinctes de `--action`, employées UNIQUEMENT en pastille (D126).
-    `--etat-refus` sert AUSSI au texte des bandeaux de refus, où il est employé comme
-    COULEUR DE TEXTE sur `--surface`, jamais comme fond.
+    ── Couleurs d'état, distinctes de `--action`. LA RÈGLE EST « LA COULEUR N'EST JAMAIS LE
+    SEUL PORTEUR DU SENS » (D126, amendée le 2026-08-16), et non « uniquement en pastille » :
+    cette dernière formulation énonçait la règle par son cas particulier, ce qui rendait
+    fausse toute application par ailleurs légitime. La pastille reste la forme PRINCIPALE, et
+    la seule qui s'emploie pour rendre un état ; à côté d'elle, le dépôt porte aujourd'hui
+    `--etat-refus` en COULEUR DE TEXTE dans les bandeaux de refus, `--etat-attente` et
+    `--etat-acquis` en COULEUR DE BORDURE sur les tons de `Carte`, et `--etat-attente` en
+    bordure du nœud cible de la recherche (`arborescence/noeud.tsx:114`, doublé de
+    `font-medium`). AUCUN INVENTAIRE ICI NE SE PRÉTEND CLOS : c'est le principe qu'il faut
+    tenir, jamais la liste — le troisième emploi ci-dessus a précisément été omis d'une liste
+    qui se disait exhaustive. JAMAIS EN FOND, en revanche : aucun jeton de fond d'état
+    n'existe, et en inventer un serait une décision que personne n'a prise.
   */
   --etat-acquis: #3F6B52;
   --etat-attente: #C08A2E;
@@ -199,9 +208,15 @@
     sur `defaultValue` et que le reset des points de rupture.
 
     ⚠️ POSÉ EN DERNIER, ET C'EST OBLIGATOIRE (Task 24) : il casse tout écran non migré. Le
-    balayage qui l'autorise a rendu ZÉRO occurrence réelle avant que cette ligne existe
-    (12 mentions brutes de `rounded-*`/couleurs littérales dans src/, TOUTES dans des
-    commentaires — zéro dans un `className`).
+    balayage qui l'autorise a rendu ZÉRO occurrence réelle avant que cette ligne existe.
+
+    ⚠️ DEUX BALAYAGES DISTINCTS, ET NON UN CHIFFRE UNIQUE. Cette ligne mêlait en un seul
+    nombre le décompte des couleurs littérales (ici) et celui des rayons littéraux (voir
+    `--radius-*` plus bas) — deux mesures différentes, sur deux périmètres différents,
+    qu'aucun chiffre ne peut porter ensemble ; corrigé à la revue finale de branche. Ce qui
+    se rejoue, et qui est le vrai critère : chacun des deux balayages ne doit rendre AUCUNE
+    occurrence dans un `className` réel. Celles qu'ils rendent vivent toutes dans des
+    commentaires — l'en-tête historique de `bouton.tsx` et l'inventaire de `carte.tsx`.
   */
   --color-*: initial;
   --color-fond: var(--fond);
@@ -261,10 +276,15 @@
     `rounded-bord` subsiste. Un rayon divergent devient donc IMPOSSIBLE À ÉCRIRE, et non
     « déconseillé » — même mécanique que D111 sur `defaultValue`.
 
-    ACTIVÉ À LA TASK 24 : le balayage préalable (`grep -rEn "rounded-(xs|sm|md|lg|xl|2xl|
-    3xl|4xl)\b" src/`) rend 12 mentions brutes, TOUTES situées dans des commentaires
-    (ce fichier et l'en-tête historique de `bouton.tsx`) — zéro dans un `className` réel,
-    vérifié par un balayage restreint aux attributs `className`. `rounded-full` n'est pas
+    ACTIVÉ À LA TASK 24, SUR UN CRITÈRE ET NON SUR UN DÉCOMPTE. Le critère, lui, se rejoue :
+    le balayage `grep -rEn "rounded-(xs|sm|md|lg|xl|2xl|3xl|4xl)\b" src/` ne doit rendre
+    AUCUNE mention dans un `className` réel — toutes celles qu'il rend vivent dans des
+    commentaires (ce fichier et l'en-tête historique de `bouton.tsx`), et c'est vérifié par
+    un second balayage restreint aux attributs `className`. Le chiffre de « 12 mentions »
+    qu'écrivait cette ligne était faux et n'était reproductible sous aucune forme (la
+    commande rend 10 lignes, 14 occurrences) ; il a été remplacé par le critère à la revue
+    finale de branche, la conclusion de fond étant, elle, confirmée par un balayage élargi à
+    tout `src/` et à la palette complète. `rounded-full` n'est pas
     concerné : ce n'est pas une valeur du namespace `--radius-*`, c'est une utilité
     intégrée à Tailwind, et ses trois emplois légitimes (pastille d'`EtatBadge`, deux
     puces de `/membres/[id]`) survivent intacts.

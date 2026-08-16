@@ -24,9 +24,14 @@ import { expect, type Page } from '@playwright/test'
  *
  * ═══ PLACÉ À LA RACINE DE `tests/`, ET NON SOUS `tests/e2e/` ═══
  *
- * Il sert aux DEUX projets Playwright, dont `tests/e2e-prod/refus-evenements-production.spec.ts`
- * — l'une des dix preuves de production. `testDir` ne restreint que la découverte des
- * fichiers de test, jamais les imports.
+ * Il est POSITIONNÉ pour servir les deux projets Playwright — `testDir` ne restreint que la
+ * découverte des fichiers de test, jamais les imports —, mais un seul fichier l'importe à ce
+ * jour : `tests/e2e/dialogue.spec.ts`. Ce commentaire affirmait qu'il servait « dans les DEUX
+ * projets, dont `tests/e2e-prod/refus-evenements-production.spec.ts` » ; c'était faux, et
+ * c'est corrigé à la revue finale de branche. Cinq suites gardent par ailleurs leur propre
+ * copie locale d'`accepterDialogue` (`ael-seance-detail`, `arbre`, `archivage-compte`,
+ * `demandes`, `tokens`) : l'adoption reste à faire, et elle est hors du périmètre de la
+ * phase 6.
  */
 
 /** Le dialogue de confirmation ouvert. `<dialog>` a le rôle ARIA `dialog` implicite. */

@@ -69,17 +69,26 @@ import { Refus } from './refus'
   ═══ D'OÙ UNE FENTE DISTINCTE, ET NON UNE CONSIGNE ═══
 
   `actions` porte les boutons de soumission, et le composant les rend APRÈS le bandeau.
-  L'ordre d'origine est restitué PAR CONSTRUCTION : un appelant ne peut plus se tromper en
-  plaçant son bouton au mauvais endroit, puisqu'il ne choisit plus l'endroit. C'est la même
-  logique que celle qui a rendu `defaultValue` inexprimable (D111) — un remède structurel
-  plutôt qu'une règle que chaque écran doit se rappeler.
 
-  `actions` est OBLIGATOIRE. Un formulaire sans geste de soumission n'existe pas dans ce
-  dépôt, et l'optionnel rouvrirait la porte : on remettrait le bouton dans `children` sans
-  y penser, et le défaut reviendrait exactement comme il est venu.
+  ⚠️ CE QUE LA FENTE GARANTIT, ET CE QU'ELLE NE GARANTIT PAS. Elle est OBLIGATOIRE : un
+  appelant ne peut donc pas OUBLIER de fournir son geste de soumission, et le bouton qu'il
+  y met est TOUJOURS rendu après le bandeau. Elle ne ferme PAS la DOUBLE POSE : `children`
+  est un `ReactNode`, il accepte encore un `<button type="submit">`, et ce bouton-là
+  s'afficherait AVANT le bandeau — exactement le geste par lequel le défaut des tâches 8/9
+  est arrivé. Rien ici n'est inexprimable, et `formulaire.test.ts` ne voit pas ce cas : il
+  asserte l'ordre DOM entre le bandeau et la fente, pas l'absence de bouton dans `children`.
+  Le rapprochement avec D111 (`defaultValue` rendu INEXPRIMABLE par le type) serait donc
+  trompeur ; il a été retiré d'ici par la revue finale de branche. La règle « aucun bouton
+  de soumission dans `children` » reste une CONVENTION — tenue par les 30 appels du dépôt,
+  vérifiés un par un, et à revérifier à la main quand un appel s'ajoute.
 
-  `formulaire.test.ts` asserte l'ORDRE DOM entre le bandeau et le bouton. C'est la preuve
-  qui manquait ici, et elle rougit si l'ordre s'inverse.
+  C'est aussi pourquoi la fente reste OBLIGATOIRE plutôt qu'optionnelle : un formulaire sans
+  geste de soumission n'existe pas dans ce dépôt, et l'optionnel rouvrirait la porte — on
+  remettrait le bouton dans `children` sans y penser, et le défaut reviendrait exactement
+  comme il est venu.
+
+  `formulaire.test.ts` asserte l'ORDRE DOM entre le bandeau et la fente. C'est la preuve qui
+  manquait ici, et elle rougit si l'ordre s'inverse.
 */
 type ProprietesFormulaireBase = {
   /** Le refus RETOURNÉ par l'action, tel quel. `null` quand il n'y en a pas. */
