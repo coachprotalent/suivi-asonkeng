@@ -194,9 +194,15 @@ function LigneParticipant({
         </Bouton>
 
         {/*
-          D124 — `<dialog>` peut vivre n'importe où dans l'arbre, il est déplacé dans la
-          couche supérieure à l'ouverture : le placer dans le même `<form>` que son
-          déclencheur, à côté du bouton, est sans risque.
+          D124 — `Dialogue` PORTE lui-même son `<dialog>` vers `document.body` par
+          `createPortal` (`dialogue.tsx`) : c'est CE PORTAIL, et non la seule promotion
+          visuelle dans la couche supérieure de `showModal()`, qui rend son appel ici, à
+          côté du bouton et DANS le même `<form>`, sans risque. Sans le portail, ce serait
+          un `<form method="dialog">` imbriqué dans le `<form>` ancêtre — HTML invalide,
+          désaccord d'hydratation — précisément le défaut trouvé et corrigé après la Task
+          15 (`afa178a`), qui avait fait expirer trois fichiers de preuve sans aucun
+          rapport avec les confirmations. C'est la méprise exacte qui a produit cette
+          régression une première fois ; ne pas la réécrire.
         */}
         <Dialogue
           ouvert={suppressionConfirmationDemandee}

@@ -135,7 +135,20 @@ export function Dialogue({ ouvert, message, surConfirmation, surAnnulation }: Pr
     } else if (!ouvert && element.open) {
       element.close()
     }
-  }, [ouvert])
+    /*
+      ⚠️ `monte` DANS LE TABLEAU DE DÉPENDANCES (revue des Tasks 12-15, Mineur) — absent
+      jusqu'ici, sans conséquence AUJOURD'HUI puisque les quinze sites partent tous fermés
+      (`ouvert` false au premier rendu) : cet effet ne fait rien tant que `ouvert` ne
+      devient pas `true`, ce qui ne peut arriver qu'APRÈS le montage, donc après que
+      `monte` soit passé à `true` et que `reference.current` pointe un vrai `<dialog>`.
+      Mais un site qui monterait un jour avec `ouvert={true}` D'EMBLÉE romprait cet ordre :
+      la première passe (serveur et hydratation, `monte` encore `false`) rendrait `null`,
+      `reference.current` resterait `null`, et cet effet — dont les dépendances
+      n'incluaient QUE `ouvert`, inchangé — ne serait jamais rejoué au rendu client
+      supplémentaire qui suit. Le dialogue ne s'ouvrirait jamais, et aucune règle de lint
+      ne peut le voir : `reference` est un ref, pas une dépendance déclarable.
+    */
+  }, [ouvert, monte])
 
   function terminer() {
     const element = reference.current
