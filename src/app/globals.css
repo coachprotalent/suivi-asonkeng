@@ -103,6 +103,13 @@
   --rail-retrait: 0.9rem;
 
   /*
+    Le décalage d'indentation d'un niveau de l'arbre. Valeur reprise telle quelle de
+    `DECALAGE_PAR_NIVEAU_REM` (`arborescence.tsx:27`), qui disparaît avec les deux seules
+    lignes `style={{ marginLeft }}` du dépôt.
+  */
+  --indent-niveau: 1.25rem;
+
+  /*
     ── Le diametre de la pastille d'etat (D126). UN JETON A LUI, ET PAS `--esp-2`.
 
     Une pastille n'est pas de l'espacement : si elle empruntait un des six jetons remappes
@@ -353,4 +360,15 @@
     outline: var(--anneau-focus-epaisseur) solid var(--etat-refus);
     outline-offset: var(--anneau-focus-retrait);
   }
+}
+
+/*
+  L'indentation de l'arbre, plafonnée à cinq niveaux par D104 (`niveauDeRetrait`). Un
+  ensemble FINI de cinq valeurs n'a pas besoin d'être calculé en JavaScript : `retrait-0` à
+  `retrait-4` remplacent les DEUX SEULES lignes `style={{ marginLeft }}` du dépôt
+  (`arborescence.tsx:438` et `:521`), qui étaient aussi les deux seules valeurs de
+  présentation que D109 ne pouvait pas atteindre.
+*/
+@utility retrait-* {
+  margin-left: calc(--value(integer) * var(--indent-niveau));
 }
