@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useTransition } from 'react'
+import { Bouton } from '@/composants/ui/bouton'
+import { Dialogue } from '@/composants/ui/dialogue'
 import type { TokenListe } from '@/lib/donnees/tokens'
 import { revoquerToken } from './actions'
 
@@ -23,10 +25,14 @@ export function LigneToken({ token }: { token: TokenListe }) {
   // `<form action={...}>` : la lier directement ferait passer par
   // `src/app/error.tsx`, qui affiche un texte STATIQUE, sur toute panne
   // technique imprévue qui, elle, peut encore lever.
-  function soumettre() {
-    if (!window.confirm(`Révoquer ce token ${token.mode === 'nominatif' ? `(${token.membreNom ?? 'fiche inconnue'})` : 'générique'} ?`)) {
-      return
-    }
+  //
+  // ═══ D124 — voir le commentaire de tête de `comptes/ligne-compte.tsx`. Site « sans
+  // danger » (relevé d'avance) : aucun `evenement.currentTarget` en jeu, la `FormData`
+  // est construite de zéro à partir de `token.id`.
+  const messageRevocation = `Révoquer ce token ${token.mode === 'nominatif' ? `(${token.membreNom ?? 'fiche inconnue'})` : 'générique'} ?`
+  const [confirmationDemandee, setConfirmationDemandee] = useState(false)
+
+  function executerRevocation() {
     const donnees = new FormData()
     donnees.set('tokenId', token.id)
     setErreur(null)
@@ -53,14 +59,27 @@ export function LigneToken({ token }: { token: TokenListe }) {
         {token.utiliseParNom ? ` · Utilisé par ${token.utiliseParNom}` : ''}
       </p>
       {revocable ? (
-        <button
-          type="button"
-          onClick={soumettre}
-          disabled={enCours}
-          className="mt-2 text-sm text-red-600 underline underline-offset-4 disabled:opacity-50"
-        >
-          {enCours ? 'Révocation…' : 'Révoquer'}
-        </button>
+        <div className="mt-esp-2">
+          <Bouton
+            type="button"
+            variante="lien-danger"
+            enCours={enCours}
+            libelleAttente="Révocation…"
+            onClick={() => setConfirmationDemandee(true)}
+          >
+            Révoquer
+          </Bouton>
+
+          <Dialogue
+            ouvert={confirmationDemandee}
+            message={messageRevocation}
+            surConfirmation={() => {
+              setConfirmationDemandee(false)
+              executerRevocation()
+            }}
+            surAnnulation={() => setConfirmationDemandee(false)}
+          />
+        </div>
       ) : null}
       {erreur ? (
         <p role="alert" className="mt-2 text-sm text-red-600">

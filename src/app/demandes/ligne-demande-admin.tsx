@@ -1,9 +1,11 @@
 'use client'
 
 import Link from 'next/link'
-import { useState, useTransition, type FormEvent } from 'react'
+import { useRef, useState, useTransition, type FormEvent } from 'react'
 import type { DemandeListe } from '@/lib/donnees/demandes'
 import type { MembreBref } from '@/lib/donnees/membres'
+import { Bouton } from '@/composants/ui/bouton'
+import { Dialogue } from '@/composants/ui/dialogue'
 import { SelecteurMembre } from '@/app/membres/selecteur-membre'
 import {
   rejeterDemande,
@@ -72,17 +74,27 @@ export function LigneDemandeAdmin({
    * `etat = 'en_attente'` mais aussi une demande `en_attente`, l'annulation est refusée, et
    * le membre n'est pas supprimable. Aucun geste de l'application ne rattrape ce cas. La
    * confirmation le DIT, au lieu de le laisser découvrir après coup.
+   *
+   * ═══ D124 — voir le commentaire de tête de `comptes/ligne-compte.tsx` sur
+   * `evenement.currentTarget` ═══ Ce site capturait DÉJÀ `formulaire` dans une variable
+   * avant le `window.confirm`, ce qui l'aurait mis à l'abri du défaut — mais la `FormData`
+   * elle-même est construite ici plus tôt encore, dans le clic, pour rester dans le MÊME
+   * style que les deux sites de `ligne-compte.tsx` qui, eux, en avaient besoin.
    */
+  const nomComplet = `${demande.membrePrenom ?? ''} ${demande.membreNom ?? ''}`.trim()
+  const consequenceRejet =
+    demande.origine === 'conversion_participant'
+      ? "Cette personne a été convertie depuis un évènement : sa fiche restera « en attente » DÉFINITIVEMENT, et aucun geste de l'application ne pourra plus l'activer ni la supprimer."
+      : 'Le demandeur en sera notifié avec le motif saisi.'
+  const messageRejet = `Rejeter la demande concernant ${nomComplet} ? ${consequenceRejet}`
+
+  const [confirmationRejetDemandee, setConfirmationRejetDemandee] = useState(false)
+  const donneesRejetEnAttente = useRef<FormData | null>(null)
+
   function soumettreRejet(evenement: FormEvent<HTMLFormElement>) {
     evenement.preventDefault()
-    const formulaire = evenement.currentTarget
-    const nomComplet = `${demande.membrePrenom ?? ''} ${demande.membreNom ?? ''}`.trim()
-    const consequence =
-      demande.origine === 'conversion_participant'
-        ? "Cette personne a été convertie depuis un évènement : sa fiche restera « en attente » DÉFINITIVEMENT, et aucun geste de l'application ne pourra plus l'activer ni la supprimer."
-        : 'Le demandeur en sera notifié avec le motif saisi.'
-    if (!window.confirm(`Rejeter la demande concernant ${nomComplet} ? ${consequence}`)) return
-    appeler(rejeterDemande, new FormData(formulaire))
+    donneesRejetEnAttente.current = new FormData(evenement.currentTarget)
+    setConfirmationRejetDemandee(true)
   }
 
   return (
@@ -180,14 +192,20 @@ export function LigneDemandeAdmin({
           <span className="text-sm font-medium">Motif de rejet</span>
           <input name="motif" required className="rounded-md border border-neutral-300 px-3 py-2" />
         </label>
-        <button
-          type="submit"
-          disabled={enCours}
-          className="rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-600 disabled:opacity-50"
-        >
+        <Bouton type="submit" variante="bordure-danger" enCours={enCours}>
           Rejeter
-        </button>
+        </Bouton>
       </form>
+
+      <Dialogue
+        ouvert={confirmationRejetDemandee}
+        message={messageRejet}
+        surConfirmation={() => {
+          setConfirmationRejetDemandee(false)
+          if (donneesRejetEnAttente.current) appeler(rejeterDemande, donneesRejetEnAttente.current)
+        }}
+        surAnnulation={() => setConfirmationRejetDemandee(false)}
+      />
 
       {erreur ? (
         <p role="alert" className="mt-2 text-sm text-red-600">

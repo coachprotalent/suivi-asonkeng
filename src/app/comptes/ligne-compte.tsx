@@ -1,8 +1,10 @@
 'use client'
 
-import { useActionState, useId, useState, useTransition, type FormEvent } from 'react'
+import { useActionState, useId, useRef, useState, useTransition, type FormEvent } from 'react'
 import type { CompteListe } from '@/lib/donnees/comptes'
 import type { MembreBref } from '@/lib/donnees/membres'
+import { Bouton } from '@/composants/ui/bouton'
+import { Dialogue } from '@/composants/ui/dialogue'
 import { SelecteurMembre } from '../membres/selecteur-membre'
 import {
   basculerActivation,
@@ -75,18 +77,25 @@ export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: b
   // SANS PREUVE dans cet environnement (voir README) — c'est la seule chose qui
   // se tient entre un clic mal ciblé sur sa propre ligne et une application sans
   // administrateur, sans moyen d'en recréer un depuis l'interface.
-  function soumettreRoles(evenement: FormEvent<HTMLFormElement>) {
-    evenement.preventDefault()
-    if (
-      estMoi &&
-      !window.confirm(
-        'Modifier vos propres rôles ?\n\n' +
-          'Si vous retirez votre rôle administrateur, vous perdrez ce pouvoir immédiatement.',
-      )
-    ) {
-      return
-    }
-    const donnees = new FormData(evenement.currentTarget)
+  /*
+    ═══ D124 — `window.confirm` BLOQUE, UN `<dialog>` NE BLOQUE PAS, ET ICI ÇA MORD ═══
+
+    `evenement.currentTarget` ne survit PAS à la fin de la répartition synchrone de
+    l'évènement — comportement DOM standard que React reproduit sur son évènement
+    synthétique, INDÉPENDANT du pooling (retiré depuis React 17). Tant que
+    `window.confirm` BLOQUAIT, lire `evenement.currentTarget` juste après restait dans le
+    même passage synchrone : sans danger. Différer la confirmation à un rappel
+    asynchrone (`surConfirmation`) et Y LIRE `evenement.currentTarget` planterait
+    (`TypeError`, cible `null`) — c'est le défaut nommé d'avance pour ce fichier.
+
+    LE REMÈDE : construire la `FormData` — un CLICHÉ, indépendant de l'évènement — tout
+    de suite, avant toute confirmation, jamais dans le rappel. `donneesEnAttente` la
+    porte jusqu'à la confirmation.
+  */
+  const [confirmationRolesDemandee, setConfirmationRolesDemandee] = useState(false)
+  const donneesRolesEnAttente = useRef<FormData | null>(null)
+
+  function executerRoles(donnees: FormData) {
     setErreurRoles(null)
     demarrerRoles(async () => {
       try {
@@ -97,21 +106,21 @@ export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: b
     })
   }
 
-  function soumettreActivation(evenement: FormEvent<HTMLFormElement>) {
+  function soumettreRoles(evenement: FormEvent<HTMLFormElement>) {
     evenement.preventDefault()
-    if (
-      estMoi &&
-      !window.confirm(
-        compte.actif
-          ? 'Désactiver votre propre compte ?\n\n' +
-            "Vous serez déconnecté et ne pourrez plus vous reconnecter tant qu'un autre " +
-            'administrateur ne vous aura pas réactivé.'
-          : 'Réactiver votre propre compte ?',
-      )
-    ) {
+    const donnees = new FormData(evenement.currentTarget)
+    if (estMoi) {
+      donneesRolesEnAttente.current = donnees
+      setConfirmationRolesDemandee(true)
       return
     }
-    const donnees = new FormData(evenement.currentTarget)
+    executerRoles(donnees)
+  }
+
+  const [confirmationActivationDemandee, setConfirmationActivationDemandee] = useState(false)
+  const donneesActivationEnAttente = useRef<FormData | null>(null)
+
+  function executerActivation(donnees: FormData) {
     setErreurActivation(null)
     demarrerActivation(async () => {
       try {
@@ -120,6 +129,17 @@ export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: b
         setErreurActivation(erreur instanceof Error ? erreur.message : String(erreur))
       }
     })
+  }
+
+  function soumettreActivation(evenement: FormEvent<HTMLFormElement>) {
+    evenement.preventDefault()
+    const donnees = new FormData(evenement.currentTarget)
+    if (estMoi) {
+      donneesActivationEnAttente.current = donnees
+      setConfirmationActivationDemandee(true)
+      return
+    }
+    executerActivation(donnees)
   }
 
   const [etatMdp, reinitialiser, reinitialisationEnCours] = useActionState(
@@ -221,14 +241,23 @@ export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: b
             />
             Modérateur
           </label>
-          <button
-            type="submit"
-            disabled={rolesEnCours}
-            className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-50"
-          >
-            {rolesEnCours ? 'Enregistrement…' : 'Enregistrer les rôles'}
-          </button>
+          <Bouton type="submit" variante="secondaire" enCours={rolesEnCours} libelleAttente="Enregistrement…">
+            Enregistrer les rôles
+          </Bouton>
         </form>
+
+        <Dialogue
+          ouvert={confirmationRolesDemandee}
+          message={
+            'Modifier vos propres rôles ?\n\n' +
+            'Si vous retirez votre rôle administrateur, vous perdrez ce pouvoir immédiatement.'
+          }
+          surConfirmation={() => {
+            setConfirmationRolesDemandee(false)
+            if (donneesRolesEnAttente.current) executerRoles(donneesRolesEnAttente.current)
+          }}
+          surAnnulation={() => setConfirmationRolesDemandee(false)}
+        />
 
         <form onSubmit={soumettreActivation}>
           <input type="hidden" name="profilId" value={compte.id} />
@@ -236,14 +265,26 @@ export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: b
               inversion explicite, un double-clic ou un onglet périmé rejouerait
               l'état déjà en place au lieu de le basculer. */}
           <input type="hidden" name="actif" value={compte.actif ? '0' : '1'} />
-          <button
-            type="submit"
-            disabled={activationEnCours}
-            className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-50"
-          >
-            {activationEnCours ? 'Enregistrement…' : compte.actif ? 'Désactiver' : 'Réactiver'}
-          </button>
+          <Bouton type="submit" variante="secondaire" enCours={activationEnCours} libelleAttente="Enregistrement…">
+            {compte.actif ? 'Désactiver' : 'Réactiver'}
+          </Bouton>
         </form>
+
+        <Dialogue
+          ouvert={confirmationActivationDemandee}
+          message={
+            compte.actif
+              ? 'Désactiver votre propre compte ?\n\n' +
+                "Vous serez déconnecté et ne pourrez plus vous reconnecter tant qu'un autre " +
+                'administrateur ne vous aura pas réactivé.'
+              : 'Réactiver votre propre compte ?'
+          }
+          surConfirmation={() => {
+            setConfirmationActivationDemandee(false)
+            if (donneesActivationEnAttente.current) executerActivation(donneesActivationEnAttente.current)
+          }}
+          surAnnulation={() => setConfirmationActivationDemandee(false)}
+        />
 
         <form action={reinitialiser}>
           <input type="hidden" name="profilId" value={compte.id} />

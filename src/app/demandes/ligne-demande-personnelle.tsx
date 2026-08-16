@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useTransition } from 'react'
+import { Bouton } from '@/composants/ui/bouton'
+import { Dialogue } from '@/composants/ui/dialogue'
 import type { DemandeListe } from '@/lib/donnees/demandes'
 import { annulerDemandeSuivi } from './actions'
 
@@ -15,8 +17,13 @@ export function LigneDemandePersonnelle({ demande }: { demande: DemandeListe }) 
   const [erreur, setErreur] = useState<string | null>(null)
   const [enCours, demarrer] = useTransition()
 
-  function annuler() {
-    if (!window.confirm('Annuler cette demande ? La fiche créée sera supprimée.')) return
+  // ═══ D124 — voir le commentaire de tête de `comptes/ligne-compte.tsx`. Ce site est
+  // « sans danger » (relevé d'avance) : aucun `evenement.currentTarget` n'est en jeu, la
+  // `FormData` est construite de zéro à partir de `demande.id`, disponible que la
+  // confirmation soit immédiate ou différée.
+  const [confirmationDemandee, setConfirmationDemandee] = useState(false)
+
+  function executerAnnulation() {
     const donnees = new FormData()
     donnees.set('demandeId', demande.id)
     setErreur(null)
@@ -54,14 +61,27 @@ export function LigneDemandePersonnelle({ demande }: { demande: DemandeListe }) 
         l'administrateur convertisseur est précisément celui à qui il s'afficherait.
       */}
       {demande.etat === 'en_attente' && demande.origine !== 'conversion_participant' ? (
-        <button
-          type="button"
-          onClick={annuler}
-          disabled={enCours}
-          className="mt-2 text-sm text-red-600 underline underline-offset-4 disabled:opacity-50"
-        >
-          {enCours ? 'Annulation…' : 'Annuler'}
-        </button>
+        <div className="mt-esp-2">
+          <Bouton
+            type="button"
+            variante="lien-danger"
+            enCours={enCours}
+            libelleAttente="Annulation…"
+            onClick={() => setConfirmationDemandee(true)}
+          >
+            Annuler
+          </Bouton>
+
+          <Dialogue
+            ouvert={confirmationDemandee}
+            message="Annuler cette demande ? La fiche créée sera supprimée."
+            surConfirmation={() => {
+              setConfirmationDemandee(false)
+              executerAnnulation()
+            }}
+            surAnnulation={() => setConfirmationDemandee(false)}
+          />
+        </div>
       ) : null}
       {demande.etat === 'en_attente' && demande.origine === 'conversion_participant' ? (
         <p className="mt-2 text-sm text-neutral-500">
