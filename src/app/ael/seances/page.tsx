@@ -56,7 +56,7 @@ export default async function PageSeancesAel() {
         <div className="mb-esp-10 flex flex-col gap-esp-6">
           <BoutonGenerer />
           <details>
-            <summary className="cursor-pointer text-petit text-action underline underline-offset-4">
+            <summary className={`${CLASSES_VARIANTE.lien} cursor-pointer`}>
               Créer une séance manuellement
             </summary>
             <div className="mt-esp-4">
