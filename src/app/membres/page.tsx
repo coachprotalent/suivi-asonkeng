@@ -3,6 +3,7 @@ import { EnTetePage } from '@/composants/ui/en-tete-page'
 import { LigneListe, Liste } from '@/composants/ui/ligne-liste'
 import { Pagination } from '@/composants/ui/pagination'
 import { CLASSES_VARIANTE } from '@/composants/ui/bouton'
+import { CLASSES_CHAMP } from '@/composants/ui/champ'
 import { listerAntennes } from '@/lib/donnees/antennes'
 import { listerMembres, TAILLE_PAGE_ANNUAIRE } from '@/lib/donnees/membres'
 import { pageDemandee } from '@/lib/donnees/pagination'
@@ -32,9 +33,15 @@ const LIBELLE_SITUATION: Record<string, string> = {
 
   DEUX FORMULAIRES GET DANS TOUT LE DÉPÔT — celui-ci et `evenements/page.tsx:62`. Il n'y en
   aura pas un troisième sans que ce commentaire soit relu.
+
+  ═══ LA CLASSE N'EST PLUS RECOPIÉE ICI (Task 11) ═══
+
+  Elle vient de `champ.tsx` (`CLASSES_CHAMP`, exportée). La revue de dimensionnement a
+  ramené à UNE les quatre copies exactes de cette chaîne. Même précédent que
+  `CLASSES_VARIANTE` pour les `<Link>` stylés en bouton : quand un site a besoin de
+  l'apparence sans pouvoir passer par le composant, il importe la classe, il ne la recopie
+  pas.
 */
-const CLASSE_CHAMP_FILTRE =
-  'cible-tactile rounded-bord border border-bord-carte bg-surface px-esp-3 py-esp-2 text-corps text-encre'
 
 export default async function PageAnnuaire({
   searchParams,
@@ -109,13 +116,13 @@ export default async function PageAnnuaire({
           defaultValue={parametres.recherche ?? ''}
           placeholder="Nom, prénom ou ville"
           aria-label="Rechercher"
-          className={`min-w-48 flex-1 ${CLASSE_CHAMP_FILTRE}`}
+          className={`min-w-48 flex-1 ${CLASSES_CHAMP}`}
         />
         <select
           name="antenne"
           defaultValue={antenneFiltre ?? ''}
           aria-label="Antenne"
-          className={CLASSE_CHAMP_FILTRE}
+          className={CLASSES_CHAMP}
         >
           <option value="">Toutes les antennes</option>
           {antennes.map((antenne) => (

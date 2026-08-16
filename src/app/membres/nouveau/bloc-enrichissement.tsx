@@ -1,10 +1,11 @@
 'use client'
 
-import { useId, useRef, useState, useTransition } from 'react'
+import { useRef, useState, useTransition } from 'react'
 import { proposerDirigeant } from '@/app/membres/[id]/arbre/actions'
 import { SelecteurMembre } from '@/app/membres/selecteur-membre'
 import { Bouton } from '@/composants/ui/bouton'
 import { Champ } from '@/composants/ui/champ'
+import { Selecteur } from '@/composants/ui/selecteur'
 import type { MembreBref } from '@/lib/donnees/membres'
 import type { GroupeStatut } from '@/lib/donnees/statuts'
 
@@ -49,19 +50,18 @@ function nomComplet(membre: MembreBref | null): string {
 }
 
 /*
-  ⚠️ CE `<select>` NE PASSE PAS PAR `Selecteur`, ET C'EST VOULU (Task 9). Il rend des
-  `<optgroup>` — un groupe par groupe de statuts — et sa première option est désactivée.
-  `Selecteur` prend une liste PLATE d'options, ni groupe ni option désactivée, par
-  construction (voir son commentaire de tête). Il reste donc un `<select>` nu, CONTRÔLÉ
-  (`value` + `onChange`), avec la classe de champ du socle : D111 est satisfaite sur le
-  fond, seul le passage par le composant manque. La Task 11 tranche s'il faut élargir
-  `Selecteur` — deux appelants du dépôt ont ce même besoin.
-*/
-const CLASSE_SELECT_STATUT =
-  'cible-tactile rounded-bord border border-bord-carte bg-surface px-esp-3 py-esp-2 text-corps text-encre'
+  LE POINT OUVERT DE LA TASK 9 EST REFERMÉ (Task 11, revue de dimensionnement D120).
 
+  Ce `<select>` restait NU parce qu'il rend des `<optgroup>` et une première option
+  désactivée, que `Selecteur` ne savait pas exprimer. Le décompte de la revue a trouvé DEUX
+  appelants réels de `optgroup` — celui-ci et `membres/[id]/statuts/formulaire-statut.tsx` —,
+  de même forme et sur la même donnée : le seuil de D110 est franchi, et `Selecteur` porte
+  désormais `groupes` et `optionVide`. La constante de classe locale `CLASSE_SELECT_STATUT`,
+  qui recopiait la constante privée de `champ.tsx`, disparaît avec lui.
+
+  Le second appelant adopte à la Task 22 — il n'est pas encore migré.
+*/
 export function BlocEnrichissement({ groupes }: Props) {
-  const prefixe = useId()
   const aujourdhui = new Date().toISOString().slice(0, 10)
 
   const [lignes, setLignes] = useState<LigneStatut[]>([])
@@ -178,9 +178,8 @@ export function BlocEnrichissement({ groupes }: Props) {
         ) : null}
 
         {lignes.map((ligne, indice) => {
-          // `idDate` et `idNote` disparaissent : `Champ` génère son propre identifiant.
-          // `idStatut` reste — le `<select>` groupé demeure nu (voir plus haut).
-          const idStatut = `${prefixe}-statut-${ligne.cle}`
+          // `idDate`, `idNote` et `idStatut` ont tous disparu : `Champ` et `Selecteur`
+          // génèrent chacun leur identifiant par `useId`.
           return (
             <fieldset
               key={ligne.cle}
@@ -188,37 +187,29 @@ export function BlocEnrichissement({ groupes }: Props) {
             >
               <legend className="px-esp-1 text-nom">Statut {indice + 1}</legend>
 
-              <div className="flex flex-col gap-esp-1">
-                <label htmlFor={idStatut} className="text-petit text-encre">
-                  Statut
-                </label>
-                <select
-                  id={idStatut}
-                  name="statutId"
-                  value={ligne.statutId}
-                  onChange={(evenement) =>
-                    modifierLigne(ligne.cle, { statutId: evenement.target.value })
-                  }
-                  required
-                  className={CLASSE_SELECT_STATUT}
-                >
-                  <option value="" disabled>
-                    Choisir un statut…
-                  </option>
-                  {groupes.map((groupe) => (
-                    <optgroup
-                      key={groupe.id}
-                      label={groupe.exclusif ? `${groupe.nom} (un seul à la fois)` : groupe.nom}
-                    >
-                      {groupe.statuts.map((statut) => (
-                        <option key={statut.id} value={statut.id}>
-                          {statut.libelle}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-              </div>
+              {/*
+                LES LIBELLÉS DE GROUPE SONT CONSTRUITS ICI, ET PAS DANS `Selecteur` : la
+                mention « (un seul à la fois) » dit une règle du DOMAINE des statuts
+                (`groupe.exclusif`), que le composant de saisie n'a pas à connaître. Le texte
+                est repris à l'octet près (D117).
+              */}
+              <Selecteur
+                label="Statut"
+                name="statutId"
+                value={ligne.statutId}
+                onChange={(evenement) =>
+                  modifierLigne(ligne.cle, { statutId: evenement.target.value })
+                }
+                required
+                optionVide={{ libelle: 'Choisir un statut…', desactivee: true }}
+                groupes={groupes.map((groupe) => ({
+                  libelle: groupe.exclusif ? `${groupe.nom} (un seul à la fois)` : groupe.nom,
+                  options: groupe.statuts.map((statut) => ({
+                    valeur: statut.id,
+                    libelle: statut.libelle,
+                  })),
+                }))}
+              />
 
               <Champ
                 label="Date d'acquisition"

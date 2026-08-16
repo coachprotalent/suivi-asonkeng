@@ -1,5 +1,5 @@
 import { useId, type ChangeEvent, type ComponentPropsWithoutRef } from 'react'
-import { CLASSES_LARGEUR, type LargeurChamp } from './champ'
+import { CLASSES_CHAMP, CLASSES_LARGEUR, type LargeurChamp } from './champ'
 
 /*
   ═══ DEUX FAMILLES DE `<select>` DANS LE DÉPÔT, ET UNE SEULE SURVIT ═══
@@ -19,33 +19,71 @@ import { CLASSES_LARGEUR, type LargeurChamp } from './champ'
   `options` remplace `children` : passer des `<option>` en enfants laisserait un appelant
   y glisser un `<optgroup>` stylé, un `<option>` avec sa propre classe, ou un `defaultValue`
   déguisé en `selected`. Une liste de données ferme ces trois portes d'un coup.
+
+  ═══ LES GROUPES, AJOUTÉS À LA TASK 11 SUR UN DÉCOMPTE, PAS SUR UNE INTUITION ═══
+
+  La Task 9 a laissé le `<select>` des statuts EN DEHORS de ce composant, parce qu'il rend
+  des `<optgroup>` et une première option désactivée, et elle a explicitement renvoyé la
+  décision à la revue de dimensionnement (D120).
+
+  DÉCOMPTE DU 2026-08-16 — `grep -rn "optgroup" src --include="*.tsx"` rend trois fichiers,
+  dont un est le commentaire ci-dessus. Les DEUX appelants réels sont :
+    - `membres/nouveau/bloc-enrichissement.tsx:209`
+    - `membres/[id]/statuts/formulaire-statut.tsx:49`
+  Même forme, même donnée, même besoin : choisir un statut dans un catalogue groupé, avec la
+  mention « (un seul à la fois) » sur les groupes exclusifs, précédé d'une option désactivée
+  qui sert d'invite.
+
+  DEUX appelants, et non un : D110 refuse un composant qui grandit pour un seul appelant,
+  parce qu'un tel composant dérive. Ici le seuil est franchi, et la forme est identique des
+  deux côtés — c'est le cas que la revue de dimensionnement existe pour trancher. Le second
+  appelant adopte à la Task 22.
+
+  `groupes` et `options` sont MUTUELLEMENT EXCLUSIFS dans le type : porter les deux
+  laisserait l'appelant croire qu'ils se concatènent, et l'ordre du résultat dépendrait
+  d'une décision que personne n'a prise.
 */
 export type OptionSelecteur = { valeur: string; libelle: string }
 
-const CLASSES_SELECTEUR =
-  'cible-tactile rounded-bord border border-bord-carte bg-surface px-esp-3 py-esp-2 text-corps text-encre'
+/** Un `<optgroup>` : son libellé, et ses options. */
+export type GroupeSelecteur = { libelle: string; options: OptionSelecteur[] }
 
-export type ProprietesSelecteur = Omit<
+type ProprietesSelecteurBase = Omit<
   ComponentPropsWithoutRef<'select'>,
   'className' | 'style' | 'value' | 'onChange' | 'defaultValue' | 'children'
 > & {
   label: string
   value: string
   onChange: (evenement: ChangeEvent<HTMLSelectElement>) => void
-  options: OptionSelecteur[]
   aide?: string
   largeur?: LargeurChamp
+  /**
+   * L'option de tête, de valeur vide — l'invite (« Choisir un statut… »).
+   *
+   * `desactivee` rend l'option `disabled` : elle reste VISIBLE et sélectionnée tant que
+   * rien n'a été choisi, mais on ne peut pas y revenir. C'est ce que fait le `<select>` des
+   * statuts, et c'est ce qui, combiné à `required`, force un choix explicite. Une option
+   * vide NON désactivée est un choix légitime — « Non rattaché », « Non renseignée » — et
+   * celle-là passe par `options`, comme n'importe quelle autre valeur.
+   */
+  optionVide?: { libelle: string; desactivee?: boolean }
   /** D111 — jamais assignable. */
   defaultValue?: never
 }
+
+export type ProprietesSelecteur =
+  | (ProprietesSelecteurBase & { options: OptionSelecteur[]; groupes?: never })
+  | (ProprietesSelecteurBase & { groupes: GroupeSelecteur[]; options?: never })
 
 export function Selecteur({
   label,
   value,
   onChange,
   options,
+  groupes,
   aide,
   largeur = 'pleine',
+  optionVide,
   id,
   ...reste
 }: ProprietesSelecteur) {
@@ -55,7 +93,7 @@ export function Selecteur({
 
   return (
     <div className={`flex flex-col gap-esp-1 ${CLASSES_LARGEUR[largeur]}`}>
-      <label htmlFor={idChamp} className="text-petit text-encre">
+      <label htmlFor={idChamp} className="libelle-champ text-petit text-encre">
         {label}
       </label>
       <select
@@ -64,12 +102,35 @@ export function Selecteur({
         value={value}
         onChange={onChange}
         aria-describedby={aide ? idAide : undefined}
-        className={CLASSES_SELECTEUR}
+        className={CLASSES_CHAMP}
       >
-        {options.map((option) => (
+        {/*
+          L'INVITE EN PREMIER, TOUJOURS. `formulaire-statut.tsx` et `bloc-enrichissement.tsx`
+          la rendent en tête, et la preuve de bout en bout de la création enrichie prend
+          « la deuxième `<option>` » comme premier statut réel
+          (`tests/e2e/creation-enrichie.spec.ts:319`). La déplacer changerait ce que ce test
+          sélectionne.
+        */}
+        {optionVide ? (
+          <option value="" disabled={optionVide.desactivee}>
+            {optionVide.libelle}
+          </option>
+        ) : null}
+
+        {options?.map((option) => (
           <option key={option.valeur} value={option.valeur}>
             {option.libelle}
           </option>
+        ))}
+
+        {groupes?.map((groupe) => (
+          <optgroup key={groupe.libelle} label={groupe.libelle}>
+            {groupe.options.map((option) => (
+              <option key={option.valeur} value={option.valeur}>
+                {option.libelle}
+              </option>
+            ))}
+          </optgroup>
         ))}
       </select>
       {aide ? (

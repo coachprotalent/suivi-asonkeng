@@ -94,7 +94,28 @@ export function FormulaireMembre({
   }
 
   return (
-    <Formulaire action={envoyer} erreur={etat.erreur} enCours={enCours}>
+    /*
+      LE BOUTON PASSE PAR LA FENTE `actions`, ET CE N'EST PAS COSMÉTIQUE. Tant qu'il vivait
+      dans `children`, `Formulaire` rendait le bandeau de refus APRÈS lui : le message
+      s'affichait SOUS le bouton d'envoi, à rebours des 46 bandeaux du dépôt. La fente rend
+      l'ordre — champs, refus, geste — impossible à casser depuis ici.
+    */
+    <Formulaire
+      action={envoyer}
+      erreur={etat.erreur}
+      enCours={enCours}
+      actions={
+        <Bouton
+          type="submit"
+          variante="principal"
+          alignement="debut"
+          enCours={enCours}
+          libelleAttente="Enregistrement…"
+        >
+          {libelleBouton}
+        </Bouton>
+      }
+    >
       {membre ? <input type="hidden" name="id" value={membre.id} /> : null}
 
       <div className="grid gap-esp-4 md:grid-cols-2">
@@ -195,16 +216,6 @@ export function FormulaireMembre({
       </div>
 
       {children}
-
-      <Bouton
-        type="submit"
-        variante="principal"
-        alignement="debut"
-        enCours={enCours}
-        libelleAttente="Enregistrement…"
-      >
-        {libelleBouton}
-      </Bouton>
     </Formulaire>
   )
 }

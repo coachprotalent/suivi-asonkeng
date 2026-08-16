@@ -63,6 +63,28 @@
   --pile-mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Menlo, Consolas, monospace;
 
   /*
+    ── LA GRAISSE DU LIBELLÉ DE CHAMP. Tranché à la Task 11 (revue de dimensionnement,
+    question n°3), après que les dix champs de `/membres/nouveau` l'ont rendue observable.
+
+    L'ÉCHELLE RESTE À CINQ DEGRÉS : ceci n'est PAS un sixième degré. C'est une GRAISSE
+    appliquée à `--text-petit` QUAND IL SERT DE LIBELLÉ, et rien d'autre — même taille, même
+    interligne.
+
+    CE QUI L'A DÉCIDÉ, ET C'EST MESURÉ, PAS RESSENTI. Dans `Champ`, `Selecteur` et
+    `ZoneTexte`, le libellé et son texte d'aide portaient EXACTEMENT le même degré
+    (`--text-petit`, 0.85 rem / 400) : ils ne se distinguaient que par une NUANCE DE COULEUR
+    (`--encre` contre `--encre-attenuee`). Sur un formulaire de dix champs, le seul repère
+    disant « ici commence un nouveau champ » était donc un écart de teinte — le canal le plus
+    faible, et celui que D126 réserve justement au SECOND rôle, jamais au premier. Les 89
+    `<label>` du dépôt portaient `text-sm font-medium` (0.875 rem / 500) : la taille est
+    conservée par `--text-petit`, la graisse revient ici.
+
+    EN JETON, JAMAIS EN `font-medium` ÉCRIT DANS UN COMPOSANT (D109) : changer de direction
+    visuelle doit continuer de coûter ce fichier, et lui seul.
+  */
+  --poids-libelle: 500;
+
+  /*
     ── Espacement. LE RYTHME DE 4 PX N'EST PAS À INSTAURER : `--spacing` vaut déjà
     0.25rem dans le thème par défaut de Tailwind 4 (`node_modules/tailwindcss/theme.css:325`),
     et `p-1` vaut donc déjà 4 px. Ce qui manque, ce sont des jetons NOMMÉS que D107 puisse
@@ -359,6 +381,28 @@
   &:focus {
     outline: var(--anneau-focus-epaisseur) solid var(--etat-refus);
     outline-offset: var(--anneau-focus-retrait);
+  }
+}
+
+/*
+  ═══ LA GRAISSE DU LIBELLÉ DE CHAMP (Task 11, question n°3) ═══
+
+  Employée AVEC `text-petit`, jamais à sa place : `text-petit` porte la taille et
+  l'interligne, celle-ci ne porte que la graisse. L'échelle reste donc à cinq degrés.
+
+  ⚠️ `text-petit` FIXE DÉJÀ UNE GRAISSE (`--text-petit--font-weight`, 400). Avec une simple
+  déclaration `font-weight`, les deux utilitaires auraient la MÊME spécificité, et seul
+  L'ORDRE DANS LA FEUILLE les départagerait — un ordre que Tailwind décide, que rien dans ce
+  fichier ne fixe, et dont un changement retirerait la graisse des 89 libellés SANS AUCUN
+  SIGNAL. C'est exactement la famille de défaut silencieux que cette phase traque.
+
+  `&&` compose le sélecteur avec lui-même (`.libelle-champ.libelle-champ`) : la spécificité
+  passe à (0,2,0) contre (0,1,0), et le résultat NE DÉPEND PLUS DE L'ORDRE. Mesuré dans le
+  CSS produit, pas supposé.
+*/
+@utility libelle-champ {
+  && {
+    font-weight: var(--poids-libelle);
   }
 }
 

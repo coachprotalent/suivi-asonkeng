@@ -18,7 +18,7 @@
 */
 export { Bouton, CLASSES_VARIANTE, type ProprietesBouton, type VarianteBouton } from './bouton'
 export { Carte, type ProprietesCarte, type TonCarte } from './carte'
-export { Champ, type LargeurChamp, type ProprietesChamp } from './champ'
+export { Champ, CLASSES_CHAMP, type LargeurChamp, type ProprietesChamp } from './champ'
 export { Dialogue, LIBELLE_ANNULER, LIBELLE_CONFIRMER, type ProprietesDialogue } from './dialogue'
 export { EnTetePage, type ProprietesEnTetePage } from './en-tete-page'
 export { EtatBadge, type ProprietesEtatBadge, type TonEtat } from './etat-badge'
@@ -26,5 +26,10 @@ export { Formulaire, type ProprietesFormulaire } from './formulaire'
 export { Liste, LigneListe, type ProprietesLigneListe } from './ligne-liste'
 export { Pagination, type ProprietesPagination } from './pagination'
 export { Refus, type ProprietesRefus } from './refus'
-export { Selecteur, type OptionSelecteur, type ProprietesSelecteur } from './selecteur'
+export {
+  Selecteur,
+  type GroupeSelecteur,
+  type OptionSelecteur,
+  type ProprietesSelecteur,
+} from './selecteur'
 export { ZoneTexte, type ProprietesZoneTexte } from './zone-texte'

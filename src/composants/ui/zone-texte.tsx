@@ -32,7 +32,7 @@ export function ZoneTexte({ label, value, onChange, aide, id, rows = 3, ...reste
 
   return (
     <div className="flex w-full flex-col gap-esp-1">
-      <label htmlFor={idChamp} className="text-petit text-encre">
+      <label htmlFor={idChamp} className="libelle-champ text-petit text-encre">
         {label}
       </label>
       <textarea
