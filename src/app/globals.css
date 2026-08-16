@@ -427,21 +427,22 @@
 /*
   L'indentation de l'arbre, plafonnée à cinq niveaux par D104 (`niveauDeRetrait`). Un
   ensemble FINI de cinq valeurs n'a pas besoin d'être calculé en JavaScript : les cinq
-  classes `retrait-N` (N de 0 à 4, table de littéraux dans `arbre-affichage.ts`)
+  classes de cette utilité (une par niveau, table de littéraux dans `arbre-affichage.ts`)
   remplacent les DEUX SEULES lignes `style={{ marginLeft }}` du dépôt
   (`arborescence.tsx:438` et `:521`), qui étaient aussi les deux seules valeurs de
   présentation que D109 ne pouvait pas atteindre.
 
-  ⚠️ CE COMMENTAIRE ÉCRIVAIT AUPARAVANT DEUX DE CES CLASSES EN TOUTES LETTRES
-  (« `retrait-0` à `retrait-4` »). Tailwind balaye TOUT LE SOURCE À LA RECHERCHE DE CHAÎNES
-  DE CLASSE COMPLÈTES — y compris dans les commentaires — et ces deux chaînes suffisaient à
-  FABRIQUER les règles CSS correspondantes, indépendamment de tout usage réel. C'est cette
-  fabrication qui a laissé passer inaperçue une indentation cassée à la Task 10 (le gabarit
-  fautif `retrait-${n}` ne produisait RÉELLEMENT que `.retrait-1`, écrite en dur dans
-  `noeud.tsx` — `.retrait-0` et `.retrait-4` semblaient présentes, par ce seul commentaire,
-  masquant l'absence de `.retrait-2` et `.retrait-3`). Nettoyé ici ; voir
-  `arbre-affichage.ts` pour le récit complet et la table de littéraux qui ferme le cas pour
-  de bon.
+  ⚠️ AUCUN NOM DE CLASSE COMPLET NE DOIT ÊTRE ÉCRIT DANS CE COMMENTAIRE, NI DANS AUCUN
+  AUTRE. Tailwind balaye TOUT LE SOURCE à la recherche de chaînes de classe complètes — y
+  compris dans les commentaires — et une seule mention suffit à FABRIQUER la règle CSS
+  correspondante, indépendamment de tout usage réel. C'est cette fabrication qui a laissé
+  passer inaperçue une indentation cassée à la Task 10 : le gabarit fautif écrit en
+  JavaScript n'émettait réellement que le niveau écrit en dur dans `noeud.tsx`, deux autres
+  niveaux semblaient présents PAR LE SEUL FAIT DE CE COMMENTAIRE, et l'absence des deux
+  derniers passait inaperçue. Ce commentaire portait encore les cinq noms au moment de la
+  revue finale de branche : il aurait à lui seul régénéré les cinq règles si la table de
+  littéraux avait été amputée ou remise en gabarit, et toutes les portes seraient restées
+  vertes. Voir `arbre-affichage.ts` pour le récit complet et la table qui ferme le cas.
 */
 @utility retrait-* {
   margin-left: calc(--value(integer) * var(--indent-niveau));

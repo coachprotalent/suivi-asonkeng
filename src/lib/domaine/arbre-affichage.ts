@@ -90,23 +90,29 @@ export function niveauDeRetrait(profondeur: number): number {
 /**
  * ═══ LES CINQ CLASSES, ÉCRITES EN TOUTES LETTRES, ET C'EST OBLIGATOIRE ═══
  *
- * ⚠️ NE JAMAIS REVENIR À `` `retrait-${niveauDeRetrait(profondeur)}` ``. C'est le piège que
- * `bouton.tsx` documente déjà : **Tailwind balaye le SOURCE à la recherche de noms de
- * classe COMPLETS**, il n'exécute pas le JavaScript. Une classe construite par gabarit ne
- * produit AUCUNE RÈGLE, et le nœud sort sans indentation — sans message, sans erreur.
+ * ⚠️ NE JAMAIS CONSTRUIRE CES NOMS PAR GABARIT depuis `niveauDeRetrait(profondeur)`. C'est
+ * le piège que `bouton.tsx` documente déjà : **Tailwind balaye le SOURCE à la recherche de
+ * noms de classe COMPLETS**, il n'exécute pas le JavaScript. Une classe construite par
+ * gabarit ne produit AUCUNE RÈGLE, et le nœud sort sans indentation — sans message, sans
+ * erreur.
  *
  * CE N'EST PAS UNE PRÉCAUTION THÉORIQUE, C'EST UNE MESURE. Écrit par gabarit, le build du
- * 2026-08-16 n'émettait que `.retrait-0`, `.retrait-1` et `.retrait-4` :
- *   - `retrait-1` parce qu'il est écrit littéralement dans `noeud.tsx` (le décalage de la
+ * 2026-08-16 n'émettait que trois des cinq règles :
+ *   - le niveau 1, parce qu'il est écrit littéralement dans `noeud.tsx` (le décalage de la
  *     pagination d'un nœud) ;
- *   - `retrait-0` et `retrait-4` PARCE QU'ILS FIGURAIENT DANS UN COMMENTAIRE DE
- *     `globals.css`, que le balayeur lit comme le reste du fichier.
- * `.retrait-2` et `.retrait-3` — les profondeurs 2 et 3, cas parfaitement ordinaires —
- * n'existaient nulle part, et ces nœuds s'affichaient collés à la marge.
+ *   - les niveaux 0 et 4, PARCE QU'ILS ÉTAIENT NOMMÉS DANS UN COMMENTAIRE DE `globals.css`,
+ *     que le balayeur lit comme le reste du fichier.
+ * Les niveaux 2 et 3 — des profondeurs parfaitement ordinaires — n'existaient nulle part,
+ * et ces nœuds s'affichaient collés à la marge.
  *
- * La leçon vaut au-delà d'ici : une vérification qui cherche le JETON `retrait-4` dans le
- * CSS produit le TROUVE dans une règle fabriquée par sa propre documentation. C'est la
- * RÈGLE ÉMISE qu'il faut compter, pas l'occurrence du nom — voir le rapport de tâche.
+ * ⚠️ D'OÙ UNE SECONDE RÈGLE, QUE CE COMMENTAIRE-CI S'APPLIQUE À LUI-MÊME : AUCUN NOM DE
+ * CLASSE COMPLET NE S'ÉCRIT HORS DE LA TABLE. Ce texte les portait encore tous les cinq au
+ * moment de la revue finale de branche — il aurait donc régénéré à lui seul les cinq règles
+ * si la table venait à être amputée ou remise en gabarit, et toutes les portes seraient
+ * restées vertes : le défaut de la Task 10 restauré par la documentation écrite pour
+ * l'empêcher. La leçon vaut au-delà d'ici : une vérification qui cherche un nom de classe
+ * dans le CSS produit le TROUVE dans une règle fabriquée par sa propre documentation. C'est
+ * la RÈGLE ÉMISE qu'il faut compter, pas l'occurrence du nom.
  *
  * La table vit DANS ce module, et non dans `noeud.tsx`, pour une seule raison : c'est ici
  * qu'est écrit le fait dont elle dépend — l'image de `niveauDeRetrait` est un ensemble FINI
