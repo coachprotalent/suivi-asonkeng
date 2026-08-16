@@ -1,5 +1,7 @@
 'use client'
 
+import { ZoneTexte } from '@/composants/ui/zone-texte'
+
 /**
  * Les trois cases de désir plus la note, partagées par les TROIS formulaires de cet écran
  * (ajout d'un membre, ajout d'un externe, correction d'une ligne). Une seule définition :
@@ -42,12 +44,11 @@ export function ChampsDesirs({
   onChange: (valeurs: ValeursDesirs) => void
 }) {
   const idNote = `${prefixe}-note`
-  const idAideNote = `${prefixe}-aide-note`
 
   return (
-    <fieldset className="flex flex-col gap-2">
-      <legend className="text-sm font-medium">Trois désirs</legend>
-      <label className="flex items-center gap-2 text-sm">
+    <fieldset className="flex flex-col gap-esp-2">
+      <legend className="libelle-champ text-petit text-encre">Trois désirs</legend>
+      <label className="cible-tactile flex items-center gap-esp-2 text-petit text-encre">
         <input
           name="desirMentoratAcademique"
           type="checkbox"
@@ -56,7 +57,7 @@ export function ChampsDesirs({
         />
         Mentorat académique
       </label>
-      <label className="flex items-center gap-2 text-sm">
+      <label className="cible-tactile flex items-center gap-esp-2 text-petit text-encre">
         <input
           name="desirSuiviSpirituel"
           type="checkbox"
@@ -65,7 +66,7 @@ export function ChampsDesirs({
         />
         Suivi spirituel
       </label>
-      <label className="flex items-center gap-2 text-sm">
+      <label className="cible-tactile flex items-center gap-esp-2 text-petit text-encre">
         <input
           name="desirCpeap"
           type="checkbox"
@@ -75,26 +76,15 @@ export function ChampsDesirs({
         CPEAP
       </label>
 
-      {/* Champ AVEC aide : `htmlFor` explicite, aide SORTIE du label et rattachée par
-          `aria-describedby`. Une aide laissée dans le `<label>` serait concaténée au nom
-          accessible du champ. */}
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor={idNote} className="text-sm font-medium">
-          Note
-        </label>
-        <textarea
-          id={idNote}
-          name="note"
-          rows={2}
-          value={valeurs.note}
-          onChange={(evenement) => onChange({ ...valeurs, note: evenement.target.value })}
-          aria-describedby={idAideNote}
-          className="rounded-md border border-neutral-300 px-3 py-2"
-        />
-        <span id={idAideNote} className="text-xs text-neutral-500">
-          Visible des seuls modérateurs et administrateurs.
-        </span>
-      </div>
+      <ZoneTexte
+        id={idNote}
+        label="Note"
+        name="note"
+        rows={2}
+        value={valeurs.note}
+        onChange={(evenement) => onChange({ ...valeurs, note: evenement.target.value })}
+        aide="Visible des seuls modérateurs et administrateurs."
+      />
     </fieldset>
   )
 }

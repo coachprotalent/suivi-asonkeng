@@ -1,8 +1,10 @@
-import Link from 'next/link'
-import { notFound, redirect } from 'next/navigation'
+import { EnTetePage } from '@/composants/ui/en-tete-page'
+import { CLASSES_VARIANTE } from '@/composants/ui/bouton'
+import { notFound } from 'next/navigation'
 import { evenementParId, participantsDEvenement, typesEvenementActifs } from '@/lib/donnees/evenements'
 import { TAILLE_PAGE_PARTICIPANTS, type PageLue, type ParticipantLigne } from '@/lib/donnees/evenements-lots'
 import { formaterDateSeule } from '@/lib/format/date'
+import { bornerPage } from '@/lib/navigation/bornage'
 import { estModerateurOuAdministrateur, exigerProfilActif } from '@/lib/securite/garde'
 import { FormulaireEvenement } from '../formulaire-evenement'
 import { modifierEvenement } from './actions'
@@ -62,21 +64,24 @@ export default async function PageEvenement({
   // uniquement dans le cas déjà en échec, sans jamais rouvrir de fenêtre entre les deux.
   // `pagesParticipants` est calculé APRÈS coup, à partir du `total` REÇU DE CETTE MÊME
   // LECTURE — jamais d'un second calcul séparé qui pourrait diverger.
-  // PAS DE BOUCLE POSSIBLE : `pagesParticipants` vaut toujours au moins 1, et la cible de
-  // la redirection est `pagesParticipants` lui-même — la page rechargée aura donc
-  // `pageParticipants === pagesParticipants`, qui ne redéclenche pas la condition.
-  // HORS DE TOUT `try` : `redirect()` lève une exception de contrôle Next.js que ce fichier
-  // ne doit pas intercepter (aucun `try` dans ce fichier — vérifié).
-  // Sous `if (peutGerer)` : hors modérateur et administrateur, rien n'est lu, il n'y a
-  // aucune page à borner, et rediriger serait divulguer qu'il y a des participants.
+  // D121 — LE BORNAGE PASSE DÉSORMAIS PAR `bornerPage` (src/lib/navigation/bornage.ts),
+  // À COMPORTEMENT IDENTIQUE : même calcul, même cible de redirection. `bornerPage` lève
+  // `redirect()`, une exception de contrôle Next.js — HORS DE TOUT `try` (aucun `try` dans
+  // ce fichier — vérifié).
+  // ⚠️ SOUS `if (peutGerer)`, ET ÇA Y RESTE : hors modérateur et administrateur, rien n'est
+  // lu, il n'y a aucune page à borner, et rediriger serait divulguer qu'il y a des
+  // participants. `bornerPage` ne décide d'aucun accès — la condition reste au site
+  // d'appel (commentaire de tête de `bornage.ts`).
   let participants: PageLue<ParticipantLigne> | null = null
   let pagesParticipants = 1
   if (peutGerer) {
     participants = await participantsDEvenement(evenement.id, pageParticipants)
-    pagesParticipants = Math.max(1, Math.ceil(participants.total / TAILLE_PAGE_PARTICIPANTS))
-    if (pageParticipants > pagesParticipants) {
-      redirect(`/evenements/${evenement.id}?pageParticipants=${pagesParticipants}`)
-    }
+    pagesParticipants = bornerPage(
+      pageParticipants,
+      participants.total,
+      TAILLE_PAGE_PARTICIPANTS,
+      (numero) => `/evenements/${evenement.id}?pageParticipants=${numero}`,
+    )
   }
 
   const lignes: Array<[string, string | null]> = [
@@ -91,33 +96,32 @@ export default async function PageEvenement({
   ]
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-10">
-      <Link href="/evenements" className="text-sm underline underline-offset-4">
-        Retour aux évènements
-      </Link>
+    <main className="mx-auto max-w-3xl px-esp-6 py-esp-10">
+      <EnTetePage
+        retour={{ href: '/evenements', libelle: 'Retour aux évènements' }}
+        titre={evenement.titre}
+      />
 
-      <h1 className="mt-4 mb-6 text-2xl font-semibold">{evenement.titre}</h1>
-
-      <dl className="divide-y divide-neutral-200">
+      <dl className="divide-y divide-filet">
         {lignes.map(([intitule, valeur]) => (
-          <div key={intitule} className="flex justify-between gap-4 py-3">
-            <dt className="text-sm text-neutral-500">{intitule}</dt>
-            <dd className="text-sm">{valeur ?? '—'}</dd>
+          <div key={intitule} className="flex justify-between gap-esp-4 py-esp-3">
+            <dt className="text-petit text-encre-attenuee">{intitule}</dt>
+            <dd className="text-corps">{valeur ?? '—'}</dd>
           </div>
         ))}
       </dl>
 
       {evenement.description ? (
-        <p className="mt-6 text-sm whitespace-pre-line">{evenement.description}</p>
+        <p className="mt-esp-6 text-corps whitespace-pre-line">{evenement.description}</p>
       ) : null}
 
       {peutGerer ? (
-        <section className="mt-10">
+        <section className="mt-esp-10">
           <details>
-            <summary className="cursor-pointer text-sm underline underline-offset-4">
+            <summary className={`${CLASSES_VARIANTE.lien} cursor-pointer`}>
               Modifier l&apos;évènement
             </summary>
-            <div className="mt-4">
+            <div className="mt-esp-4">
               <FormulaireEvenement
                 action={modifierEvenement}
                 types={types}

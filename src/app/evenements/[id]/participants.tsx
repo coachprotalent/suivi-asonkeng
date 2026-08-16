@@ -6,8 +6,11 @@ import { formaterDateSeule } from '@/lib/format/date'
 import type { ParticipantLigne } from '@/lib/donnees/evenements-lots'
 import type { MembreBref } from '@/lib/donnees/membres'
 import { SelecteurMembre } from '@/app/membres/selecteur-membre'
-import { Bouton } from '@/composants/ui/bouton'
+import { Bouton, CLASSES_VARIANTE } from '@/composants/ui/bouton'
 import { Dialogue } from '@/composants/ui/dialogue'
+import { Formulaire } from '@/composants/ui/formulaire'
+import { LigneListe, Liste } from '@/composants/ui/ligne-liste'
+import { Pagination } from '@/composants/ui/pagination'
 import { ChampsDesirs, DESIRS_VIDES, type ValeursDesirs } from './champs-desirs'
 import { FormulaireParticipantExterne } from './formulaire-participant-externe'
 import {
@@ -38,7 +41,16 @@ function FormulaireAjoutMembre({ evenementId }: { evenementId: string }) {
   }, [enCours, etat])
 
   return (
-    <form action={envoyer} className="flex flex-col gap-3">
+    <Formulaire
+      action={envoyer}
+      erreur={etat.erreur}
+      enCours={enCours}
+      actions={
+        <Bouton type="submit" alignement="debut" disabled={!membre} enCours={enCours}>
+          Ajouter ce membre
+        </Bouton>
+      }
+    >
       <input type="hidden" name="evenementId" value={evenementId} />
       {/* D76 — `SelecteurMembre` (1c) RÉUTILISÉ TEL QUEL, aucun composant de recherche
           nouveau. Recherche serveur bornée à 20 résultats, membres ACTIFS seulement. */}
@@ -51,21 +63,7 @@ function FormulaireAjoutMembre({ evenementId }: { evenementId: string }) {
         exclureId={null}
       />
       <ChampsDesirs prefixe={prefixe} valeurs={desirs} onChange={setDesirs} />
-      <div className="flex items-center gap-4">
-        <button
-          type="submit"
-          disabled={enCours || !membre}
-          className="self-start rounded-md bg-neutral-900 px-4 py-2 text-white disabled:opacity-50"
-        >
-          Ajouter ce membre
-        </button>
-        {etat.erreur ? (
-          <p role="alert" className="text-sm text-red-600">
-            {etat.erreur}
-          </p>
-        ) : null}
-      </div>
-    </form>
+    </Formulaire>
   )
 }
 
@@ -117,18 +115,21 @@ function LigneParticipant({
       'Participant externe'
 
   return (
-    <li className="py-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <span className="font-medium">
-          {participant.membreId ? (
-            <Link href={`/membres/${participant.membreId}`} className="underline underline-offset-4">
-              {libelle}
-            </Link>
-          ) : (
-            libelle
-          )}
-        </span>
-        <span className="text-sm text-neutral-500">
+    <LigneListe
+      principal={
+        participant.membreId ? (
+          <Link
+            href={`/membres/${participant.membreId}`}
+            className="text-action underline underline-offset-4"
+          >
+            {libelle}
+          </Link>
+        ) : (
+          libelle
+        )
+      }
+      meta={
+        <>
           {participant.membreId ? 'Membre' : 'Externe'}
           {participant.externeConvertiEnMembreId ? ' · converti' : ''}
           {/* I3 de la revue finale — L'ÉTAT « CLASSÉ » ÉTAIT INVISIBLE PARTOUT. La ligne
@@ -139,88 +140,98 @@ function LigneParticipant({
               part. Cette fiche d'évènement est le seul écran qui liste encore ces
               personnes : c'est donc ici que l'information doit vivre. */}
           {participant.externeClasseLe ? ' · classé sans suite' : ''}
-        </span>
-      </div>
-
-      {participant.externeClasseLe ? (
-        <p className="mt-1 text-sm text-neutral-600">
-          Classé sans suite le {formaterDateSeule(participant.externeClasseLe)}
-          {participant.externeMotifClassement ? ` — ${participant.externeMotifClassement}` : ''}
-        </p>
-      ) : null}
-
-      <details className="mt-2">
-        <summary className="cursor-pointer text-sm underline underline-offset-4">
-          Corriger les désirs et la note
-        </summary>
-        {/* D77 — modifiable après coup : un désir se recueille souvent APRÈS l'évènement.
-            `saisi_par` et `saisi_le` ne sont jamais touchés (D60). */}
-        <form action={modifier} className="mt-3 flex flex-col gap-3">
-          <input type="hidden" name="evenementId" value={evenementId} />
-          <input type="hidden" name="participationId" value={participant.id} />
-          <ChampsDesirs prefixe={prefixe} valeurs={desirs} onChange={setDesirs} />
-          <button
-            type="submit"
-            disabled={modificationEnCours}
-            className="self-start rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-50"
-          >
-            Enregistrer
-          </button>
-          {etatModification.erreur ? (
-            <p role="alert" className="text-sm text-red-600">
-              {etatModification.erreur}
+        </>
+      }
+      complement={
+        <div className="flex flex-col gap-esp-2">
+          {participant.externeClasseLe ? (
+            <p className="text-petit text-encre-attenuee">
+              Classé sans suite le {formaterDateSeule(participant.externeClasseLe)}
+              {participant.externeMotifClassement ? ` — ${participant.externeMotifClassement}` : ''}
             </p>
           ) : null}
-        </form>
-      </details>
 
-      {/* D78 — SEUL GESTE DESTRUCTIF DE LA PHASE. La confirmation dit ce qui disparaît :
-          les trois désirs partent avec la ligne, et l'étiquette de séminaire du membre
-          aussi. */}
-      <form action={supprimer} className="mt-2">
-        <input type="hidden" name="evenementId" value={evenementId} />
-        <input type="hidden" name="participationId" value={participant.id} />
-        <Bouton
-          ref={boutonSuppression}
-          type="submit"
-          variante="lien-danger"
-          enCours={suppressionEnCours}
-          onClick={(evenement) => {
-            evenement.preventDefault()
-            setSuppressionConfirmationDemandee(true)
-          }}
-        >
-          Supprimer cette participation
-        </Bouton>
+          <details>
+            <summary className={`${CLASSES_VARIANTE.lien} cursor-pointer`}>
+              Corriger les désirs et la note
+            </summary>
+            {/* D77 — modifiable après coup : un désir se recueille souvent APRÈS
+                l'évènement. `saisi_par` et `saisi_le` ne sont jamais touchés (D60). */}
+            <div className="mt-esp-3">
+              <Formulaire
+                action={modifier}
+                erreur={etatModification.erreur}
+                enCours={modificationEnCours}
+                actions={
+                  <Bouton
+                    type="submit"
+                    variante="secondaire"
+                    alignement="debut"
+                    enCours={modificationEnCours}
+                  >
+                    Enregistrer
+                  </Bouton>
+                }
+              >
+                <input type="hidden" name="evenementId" value={evenementId} />
+                <input type="hidden" name="participationId" value={participant.id} />
+                <ChampsDesirs prefixe={prefixe} valeurs={desirs} onChange={setDesirs} />
+              </Formulaire>
+            </div>
+          </details>
 
-        {/*
-          D124 — `Dialogue` PORTE lui-même son `<dialog>` vers `document.body` par
-          `createPortal` (`dialogue.tsx`) : c'est CE PORTAIL, et non la seule promotion
-          visuelle dans la couche supérieure de `showModal()`, qui rend son appel ici, à
-          côté du bouton et DANS le même `<form>`, sans risque. Sans le portail, ce serait
-          un `<form method="dialog">` imbriqué dans le `<form>` ancêtre — HTML invalide,
-          désaccord d'hydratation — précisément le défaut trouvé et corrigé après la Task
-          15 (`afa178a`), qui avait fait expirer trois fichiers de preuve sans aucun
-          rapport avec les confirmations. C'est la méprise exacte qui a produit cette
-          régression une première fois ; ne pas la réécrire.
-        */}
-        <Dialogue
-          ouvert={suppressionConfirmationDemandee}
-          message={`Supprimer la participation de ${libelle} ? Les trois désirs et la note saisis pour cet évènement seront effacés, et l'évènement disparaîtra des séminaires assistés de cette personne.`}
-          surConfirmation={() => {
-            setSuppressionConfirmationDemandee(false)
-            boutonSuppression.current?.form?.requestSubmit(boutonSuppression.current)
-          }}
-          surAnnulation={() => setSuppressionConfirmationDemandee(false)}
-        />
+          {/* D78 — SEUL GESTE DESTRUCTIF DE LA PHASE. La confirmation dit ce qui disparaît :
+              les trois désirs partent avec la ligne, et l'étiquette de séminaire du membre
+              aussi. */}
+          <Formulaire
+            action={supprimer}
+            erreur={etatSuppression.erreur}
+            enCours={suppressionEnCours}
+            actions={
+              <>
+                <Bouton
+                  ref={boutonSuppression}
+                  type="submit"
+                  variante="lien-danger"
+                  enCours={suppressionEnCours}
+                  onClick={(evenement) => {
+                    evenement.preventDefault()
+                    setSuppressionConfirmationDemandee(true)
+                  }}
+                >
+                  Supprimer cette participation
+                </Bouton>
 
-        {etatSuppression.erreur ? (
-          <p role="alert" className="mt-2 text-sm text-red-600">
-            {etatSuppression.erreur}
-          </p>
-        ) : null}
-      </form>
-    </li>
+                {/*
+                  D124 — `Dialogue` PORTE lui-même son `<dialog>` vers `document.body` par
+                  `createPortal` (`dialogue.tsx`) : c'est CE PORTAIL, et non la seule
+                  promotion visuelle dans la couche supérieure de `showModal()`, qui rend
+                  son appel ici, à côté du bouton et DANS le même `<form>`, sans risque.
+                  Sans le portail, ce serait un `<form method="dialog">` imbriqué dans le
+                  `<form>` ancêtre — HTML invalide, désaccord d'hydratation — précisément le
+                  défaut trouvé et corrigé après la Task 15 (`afa178a`), qui avait fait
+                  expirer trois fichiers de preuve sans aucun rapport avec les
+                  confirmations. C'est la méprise exacte qui a produit cette régression une
+                  première fois ; ne pas la réécrire.
+                */}
+                <Dialogue
+                  ouvert={suppressionConfirmationDemandee}
+                  message={`Supprimer la participation de ${libelle} ? Les trois désirs et la note saisis pour cet évènement seront effacés, et l'évènement disparaîtra des séminaires assistés de cette personne.`}
+                  surConfirmation={() => {
+                    setSuppressionConfirmationDemandee(false)
+                    boutonSuppression.current?.form?.requestSubmit(boutonSuppression.current)
+                  }}
+                  surAnnulation={() => setSuppressionConfirmationDemandee(false)}
+                />
+              </>
+            }
+          >
+            <input type="hidden" name="evenementId" value={evenementId} />
+            <input type="hidden" name="participationId" value={participant.id} />
+          </Formulaire>
+        </div>
+      }
+    />
   )
 }
 
@@ -237,28 +248,30 @@ export function SectionParticipants({
   page: number
   pages: number
 }) {
-  return (
-    <section className="mt-10">
-      <h2 className="mb-4 text-lg font-medium">
-        Participants ({total})
-      </h2>
+  function lienPage(numero: number): string {
+    return `/evenements/${evenementId}?pageParticipants=${numero}`
+  }
 
-      <div className="mb-8 flex flex-col gap-8">
+  return (
+    <section className="mt-esp-10">
+      <h2 className="mb-esp-4 text-section">Participants ({total})</h2>
+
+      <div className="mb-esp-8 flex flex-col gap-esp-8">
         <FormulaireAjoutMembre evenementId={evenementId} />
         <details>
-          <summary className="cursor-pointer text-sm underline underline-offset-4">
+          <summary className={`${CLASSES_VARIANTE.lien} cursor-pointer`}>
             Ajouter un participant externe
           </summary>
-          <div className="mt-4">
+          <div className="mt-esp-4">
             <FormulaireParticipantExterne evenementId={evenementId} />
           </div>
         </details>
       </div>
 
       {participants.length === 0 ? (
-        <p className="text-sm text-neutral-600">Aucun participant enregistré.</p>
+        <p className="text-petit text-encre-attenuee">Aucun participant enregistré.</p>
       ) : (
-        <ul className="divide-y divide-neutral-200">
+        <Liste>
           {participants.map((participant) => (
             <LigneParticipant
               key={participant.id}
@@ -266,32 +279,12 @@ export function SectionParticipants({
               participant={participant}
             />
           ))}
-        </ul>
+        </Liste>
       )}
 
-      {pages > 1 ? (
-        <nav className="mt-6 flex items-center gap-4 text-sm">
-          {page > 1 ? (
-            <Link
-              href={`/evenements/${evenementId}?pageParticipants=${page - 1}`}
-              className="underline underline-offset-4"
-            >
-              Page précédente
-            </Link>
-          ) : null}
-          <span className="text-neutral-500">
-            Page {page} sur {pages}
-          </span>
-          {page < pages ? (
-            <Link
-              href={`/evenements/${evenementId}?pageParticipants=${page + 1}`}
-              className="underline underline-offset-4"
-            >
-              Page suivante
-            </Link>
-          ) : null}
-        </nav>
-      ) : null}
+      <div className="mt-esp-6">
+        <Pagination page={page} pages={pages} lienVersPage={lienPage} />
+      </div>
     </section>
   )
 }
