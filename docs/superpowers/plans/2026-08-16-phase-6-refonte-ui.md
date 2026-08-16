@@ -4076,8 +4076,7 @@ Puis, à la suite des utilitaires :
 ```css
 /*
   L'indentation de l'arbre, plafonnée à cinq niveaux par D104 (`niveauDeRetrait`). Un
-  ensemble FINI de cinq valeurs n'a pas besoin d'être calculé en JavaScript : `retrait-0` à
-  `retrait-4` remplacent les DEUX SEULES lignes `style={{ marginLeft }}` du dépôt
+  ensemble FINI de cinq valeurs n'a pas besoin d'être calculé en JavaScript : une classe d'indentation par niveau remplace les DEUX SEULES lignes `style={{ marginLeft }}` du dépôt
   (`arborescence.tsx:438` et `:521`), qui étaient aussi les deux seules valeurs de
   présentation que D109 ne pouvait pas atteindre.
 */
@@ -4087,13 +4086,16 @@ Puis, à la suite des utilitaires :
 ```
 
 **⚠️ SI `--value(integer)` NE COMPILE PAS** sous `tailwindcss@4.3.3`, remplacer par cinq
-utilitaires statiques — `@utility retrait-0 { margin-left: 0 }`, `retrait-1 { margin-left:
-calc(1 * var(--indent-niveau)) }`, … jusqu'à `retrait-4`. Le résultat est identique ; la forme
+utilitaires statiques, un `@utility` par niveau, de zero a quatre, chacun posant
+`margin-left: calc(N * var(--indent-niveau))`. Le résultat est identique ; la forme
 fonctionnelle est seulement plus courte. **Consigner laquelle des deux formes a été retenue**,
 et **vérifier la sortie CSS** :
 
 ```bash
-npm run build && grep -c "retrait-4" $(find .next/static -name "*.css")
+# NB : ne PAS ecrire ici le nom litteral d une classe utilitaire — Tailwind balaie
+# ce fichier (suivi par git) et FABRIQUERAIT la regle cherchee, rendant la mesure
+# vraie a vide. Construire le motif, p. ex. : MOTIF="retrait-$((2+2))"
+npm run build && grep -c "$MOTIF" $(find .next/static -name "*.css")
 ```
 
 Attendu : **au moins 1** — la classe est bien générée. Contrôle positif implicite : si elle
