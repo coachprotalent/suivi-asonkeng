@@ -1,7 +1,9 @@
-import Link from 'next/link'
 import { seDeconnecter } from '@/app/connexion/actions'
 import { rolesDuProfil } from '@/lib/donnees/profils'
 import { exigerProfilActif } from '@/lib/securite/garde'
+import { Bouton } from '@/composants/ui/bouton'
+import { EnTetePage } from '@/composants/ui/en-tete-page'
+import { LigneListe, Liste } from '@/composants/ui/ligne-liste'
 
 export default async function PageTableauDeBord() {
   const profil = await exigerProfilActif()
@@ -10,68 +12,44 @@ export default async function PageTableauDeBord() {
   const estModerateur = roles.includes('moderateur')
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-12">
-      <header className="mb-10 flex items-baseline justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">Suivi Asonkeng</h1>
-          <p className="text-sm text-neutral-500">
-            Connecté en tant que {profil.nomAffichage} ({profil.identifiant})
-          </p>
-        </div>
-        <form action={seDeconnecter}>
-          <button type="submit" className="text-sm underline underline-offset-4">
-            Se déconnecter
-          </button>
-        </form>
-      </header>
+    <main className="mx-auto max-w-3xl px-esp-6 py-esp-10">
+      {/*
+        LE SEUL ÉCRAN QUI AFFICHE L'ÉTAT DE SESSION (Task 24) — c'est le hub, pas une
+        destination de retour : `EnTetePage` SANS `retour`.
+      */}
+      <EnTetePage
+        titre="Suivi Asonkeng"
+        soustitre={`Connecté en tant que ${profil.nomAffichage} (${profil.identifiant})`}
+        action={
+          <form action={seDeconnecter}>
+            <Bouton type="submit" variante="secondaire">
+              Se déconnecter
+            </Bouton>
+          </form>
+        }
+      />
 
-      <div className="flex flex-wrap gap-6">
-        <Link href="/membres" className="underline underline-offset-4">
-          Consulter l&apos;annuaire
-        </Link>
-        <Link href="/arborescence" className="underline underline-offset-4">
-          Parcourir l&apos;arborescence
-        </Link>
-        <Link href="/demandes/nouvelle" className="underline underline-offset-4">
-          Proposer une personne à suivre
-        </Link>
-        <Link href="/demandes" className="underline underline-offset-4">
-          Voir les demandes
-        </Link>
-        <Link href="/evenements" className="underline underline-offset-4">
-          Voir les évènements
-        </Link>
+      {/*
+        Les libellés ne changent pas d'un octet (D117) : un modérateur ne voit toujours
+        pas /antennes, /statuts, /comptes, /tokens.
+      */}
+      <Liste>
+        <LigneListe lien="/membres" principal="Consulter l'annuaire" />
+        <LigneListe lien="/arborescence" principal="Parcourir l'arborescence" />
+        <LigneListe lien="/demandes/nouvelle" principal="Proposer une personne à suivre" />
+        <LigneListe lien="/demandes" principal="Voir les demandes" />
+        <LigneListe lien="/evenements" principal="Voir les évènements" />
+        {estAdmin || estModerateur ? <LigneListe lien="/ael/seances" principal="Gérer l'AEL" /> : null}
         {estAdmin || estModerateur ? (
-          <Link href="/ael/seances" className="underline underline-offset-4">
-            Gérer l&apos;AEL
-          </Link>
+          <LigneListe lien="/evenements/a-traiter" principal="Participants à traiter" />
         ) : null}
-        {estAdmin || estModerateur ? (
-          <Link href="/evenements/a-traiter" className="underline underline-offset-4">
-            Participants à traiter
-          </Link>
-        ) : null}
+        {estAdmin ? <LigneListe lien="/antennes" principal="Gérer les antennes" /> : null}
+        {estAdmin ? <LigneListe lien="/statuts" principal="Gérer les statuts" /> : null}
+        {estAdmin ? <LigneListe lien="/comptes" principal="Gérer les comptes" /> : null}
         {estAdmin ? (
-          <Link href="/antennes" className="underline underline-offset-4">
-            Gérer les antennes
-          </Link>
+          <LigneListe lien="/tokens" principal="Générer des tokens d'inscription" />
         ) : null}
-        {estAdmin ? (
-          <Link href="/statuts" className="underline underline-offset-4">
-            Gérer les statuts
-          </Link>
-        ) : null}
-        {estAdmin ? (
-          <Link href="/comptes" className="underline underline-offset-4">
-            Gérer les comptes
-          </Link>
-        ) : null}
-        {estAdmin ? (
-          <Link href="/tokens" className="underline underline-offset-4">
-            Générer des tokens d&apos;inscription
-          </Link>
-        ) : null}
-      </div>
+      </Liste>
     </main>
   )
 }

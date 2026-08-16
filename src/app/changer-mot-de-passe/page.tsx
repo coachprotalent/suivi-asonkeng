@@ -1,60 +1,70 @@
 'use client'
 
-import { useActionState } from 'react'
+import { useActionState, useState } from 'react'
+import { Bouton } from '@/composants/ui/bouton'
+import { Champ } from '@/composants/ui/champ'
+import { EnTetePage } from '@/composants/ui/en-tete-page'
+import { Formulaire } from '@/composants/ui/formulaire'
 import { changerMotDePasse, type EtatChangement } from './actions'
 import { LONGUEUR_MDP_MINIMALE } from './constantes'
 
 const etatInitial: EtatChangement = { erreur: null }
 
+/**
+ * ⚠️ ÉCRAN D'ÉTAT FORCÉ (Task 24) — atteint uniquement par `middleware.ts` (drapeau
+ * `doit_changer_mdp`) ou par redirection depuis `connexion/actions.ts`, JAMAIS la
+ * cible d'un `<Link>` de navigation volontaire : `EnTetePage` sans `retour`, même
+ * gabarit que `/connexion` et `/inscription`. Les 2 champs libres (motDePasse,
+ * confirmation) sont fermés par `Champ`. Le lien de déconnexion reste.
+ */
 export default function PageChangementMotDePasse() {
   const [etat, action, enCours] = useActionState(changerMotDePasse, etatInitial)
+  const [motDePasse, setMotDePasse] = useState('')
+  const [confirmation, setConfirmation] = useState('')
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-6">
-      <h1 className="mb-1 text-2xl font-semibold">Choisissez un mot de passe</h1>
-      <p className="mb-8 text-sm text-neutral-500">
-        Votre mot de passe actuel est temporaire. Choisissez-en un nouveau d&apos;au moins{' '}
-        {LONGUEUR_MDP_MINIMALE} caractères pour continuer.
-      </p>
+    <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-esp-6">
+      <EnTetePage
+        titre="Choisissez un mot de passe"
+        soustitre={
+          <>
+            Votre mot de passe actuel est temporaire. Choisissez-en un nouveau d&apos;au moins{' '}
+            {LONGUEUR_MDP_MINIMALE} caractères pour continuer.
+          </>
+        }
+      />
 
-      <form action={action} className="flex flex-col gap-4">
-        <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">Nouveau mot de passe</span>
-          <input
-            name="motDePasse"
-            type="password"
-            autoComplete="new-password"
-            required
-            minLength={LONGUEUR_MDP_MINIMALE}
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          />
-        </label>
+      <Formulaire
+        action={action}
+        erreur={etat.erreur}
+        enCours={enCours}
+        actions={
+          <Bouton type="submit" enCours={enCours} libelleAttente="Enregistrement…">
+            Enregistrer
+          </Bouton>
+        }
+      >
+        <Champ
+          label="Nouveau mot de passe"
+          name="motDePasse"
+          type="password"
+          autoComplete="new-password"
+          required
+          minLength={LONGUEUR_MDP_MINIMALE}
+          value={motDePasse}
+          onChange={(evenement) => setMotDePasse(evenement.target.value)}
+        />
 
-        <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">Confirmation</span>
-          <input
-            name="confirmation"
-            type="password"
-            autoComplete="new-password"
-            required
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          />
-        </label>
-
-        {etat.erreur ? (
-          <p role="alert" className="text-sm text-red-600">
-            {etat.erreur}
-          </p>
-        ) : null}
-
-        <button
-          type="submit"
-          disabled={enCours}
-          className="rounded-md bg-neutral-900 px-4 py-2 font-medium text-white disabled:opacity-50"
-        >
-          {enCours ? 'Enregistrement…' : 'Enregistrer'}
-        </button>
-      </form>
+        <Champ
+          label="Confirmation"
+          name="confirmation"
+          type="password"
+          autoComplete="new-password"
+          required
+          value={confirmation}
+          onChange={(evenement) => setConfirmation(evenement.target.value)}
+        />
+      </Formulaire>
 
       {/*
         Seule issue depuis cet écran. Le middleware renvoie ici toute navigation
@@ -64,7 +74,7 @@ export default function PageChangementMotDePasse() {
       */}
       <a
         href="/deconnexion"
-        className="mt-6 text-center text-sm text-neutral-500 underline underline-offset-4"
+        className="cible-tactile mt-esp-6 justify-center text-petit text-encre-attenuee underline underline-offset-4"
       >
         Se déconnecter
       </a>

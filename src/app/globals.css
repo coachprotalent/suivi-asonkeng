@@ -186,6 +186,24 @@
    ════════════════════════════════════════════════════════════════════════════ */
 
 @theme inline {
+  /*
+    ═══ D109 — LA DIRECTION VISUELLE COÛTE UN FICHIER, ET C'EST VÉRIFIABLE ═══
+
+    `--color-*: initial` supprime du thème les 250 couleurs par défaut de Tailwind
+    (`neutral`, `red`, `amber`, `green`, `white`, `black`, …). À partir d'ici, `text-red-600`
+    ou `bg-neutral-900` ne produisent AUCUNE règle : un écran qui y reviendrait sortirait
+    sans couleur, et cela se verrait.
+
+    C'est ce qui fait de « aucun composant ne porte de valeur littérale » une PROPRIÉTÉ
+    TENUE PAR L'OUTIL, et non une intention à surveiller en revue. Même mécanique que D111
+    sur `defaultValue` et que le reset des points de rupture.
+
+    ⚠️ POSÉ EN DERNIER, ET C'EST OBLIGATOIRE (Task 24) : il casse tout écran non migré. Le
+    balayage qui l'autorise a rendu ZÉRO occurrence réelle avant que cette ligne existe
+    (12 mentions brutes de `rounded-*`/couleurs littérales dans src/, TOUTES dans des
+    commentaires — zéro dans un `className`).
+  */
+  --color-*: initial;
   --color-fond: var(--fond);
   --color-surface: var(--surface);
   --color-encre: var(--encre);
@@ -243,15 +261,15 @@
     `rounded-bord` subsiste. Un rayon divergent devient donc IMPOSSIBLE À ÉCRIRE, et non
     « déconseillé » — même mécanique que D111 sur `defaultValue`.
 
-    ⚠️ CE RESET CASSE LES 126 `rounded-md` DES ÉCRANS NON ENCORE MIGRÉS. Il est donc posé
-    à la TASK 24, pas ici. Des deux lignes ci-dessous, SEULE `--radius-*: initial;` reste
-    COMMENTÉE jusque-là, avec ce commentaire, pour que la Task 24 n'ait qu'à la
-    décommenter. `--radius-bord: var(--rayon);`, elle, est ACTIVE depuis la Task 3 : c'est
-    la ligne purement additive, sans risque pour les 126 `rounded-md` existants — rien
-    n'imposait de coupler les deux (revue des Tasks 1/2, constat Important absorbé dans
-    fe78e03).
+    ACTIVÉ À LA TASK 24 : le balayage préalable (`grep -rEn "rounded-(xs|sm|md|lg|xl|2xl|
+    3xl|4xl)\b" src/`) rend 12 mentions brutes, TOUTES situées dans des commentaires
+    (ce fichier et l'en-tête historique de `bouton.tsx`) — zéro dans un `className` réel,
+    vérifié par un balayage restreint aux attributs `className`. `rounded-full` n'est pas
+    concerné : ce n'est pas une valeur du namespace `--radius-*`, c'est une utilité
+    intégrée à Tailwind, et ses trois emplois légitimes (pastille d'`EtatBadge`, deux
+    puces de `/membres/[id]`) survivent intacts.
   */
-  /* --radius-*: initial; */
+  --radius-*: initial;
   --radius-bord: var(--rayon);
 
   /*
@@ -408,10 +426,22 @@
 
 /*
   L'indentation de l'arbre, plafonnée à cinq niveaux par D104 (`niveauDeRetrait`). Un
-  ensemble FINI de cinq valeurs n'a pas besoin d'être calculé en JavaScript : `retrait-0` à
-  `retrait-4` remplacent les DEUX SEULES lignes `style={{ marginLeft }}` du dépôt
+  ensemble FINI de cinq valeurs n'a pas besoin d'être calculé en JavaScript : les cinq
+  classes `retrait-N` (N de 0 à 4, table de littéraux dans `arbre-affichage.ts`)
+  remplacent les DEUX SEULES lignes `style={{ marginLeft }}` du dépôt
   (`arborescence.tsx:438` et `:521`), qui étaient aussi les deux seules valeurs de
   présentation que D109 ne pouvait pas atteindre.
+
+  ⚠️ CE COMMENTAIRE ÉCRIVAIT AUPARAVANT DEUX DE CES CLASSES EN TOUTES LETTRES
+  (« `retrait-0` à `retrait-4` »). Tailwind balaye TOUT LE SOURCE À LA RECHERCHE DE CHAÎNES
+  DE CLASSE COMPLÈTES — y compris dans les commentaires — et ces deux chaînes suffisaient à
+  FABRIQUER les règles CSS correspondantes, indépendamment de tout usage réel. C'est cette
+  fabrication qui a laissé passer inaperçue une indentation cassée à la Task 10 (le gabarit
+  fautif `retrait-${n}` ne produisait RÉELLEMENT que `.retrait-1`, écrite en dur dans
+  `noeud.tsx` — `.retrait-0` et `.retrait-4` semblaient présentes, par ce seul commentaire,
+  masquant l'absence de `.retrait-2` et `.retrait-3`). Nettoyé ici ; voir
+  `arbre-affichage.ts` pour le récit complet et la table de littéraux qui ferme le cas pour
+  de bon.
 */
 @utility retrait-* {
   margin-left: calc(--value(integer) * var(--indent-niveau));
