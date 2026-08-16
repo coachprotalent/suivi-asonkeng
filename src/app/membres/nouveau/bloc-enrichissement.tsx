@@ -3,6 +3,8 @@
 import { useId, useRef, useState, useTransition } from 'react'
 import { proposerDirigeant } from '@/app/membres/[id]/arbre/actions'
 import { SelecteurMembre } from '@/app/membres/selecteur-membre'
+import { Bouton } from '@/composants/ui/bouton'
+import { Champ } from '@/composants/ui/champ'
 import type { MembreBref } from '@/lib/donnees/membres'
 import type { GroupeStatut } from '@/lib/donnees/statuts'
 
@@ -45,6 +47,18 @@ type LigneStatut = {
 function nomComplet(membre: MembreBref | null): string {
   return membre ? `${membre.prenom} ${membre.nom}` : 'aucun'
 }
+
+/*
+  ⚠️ CE `<select>` NE PASSE PAS PAR `Selecteur`, ET C'EST VOULU (Task 9). Il rend des
+  `<optgroup>` — un groupe par groupe de statuts — et sa première option est désactivée.
+  `Selecteur` prend une liste PLATE d'options, ni groupe ni option désactivée, par
+  construction (voir son commentaire de tête). Il reste donc un `<select>` nu, CONTRÔLÉ
+  (`value` + `onChange`), avec la classe de champ du socle : D111 est satisfaite sur le
+  fond, seul le passage par le composant manque. La Task 11 tranche s'il faut élargir
+  `Selecteur` — deux appelants du dépôt ont ce même besoin.
+*/
+const CLASSE_SELECT_STATUT =
+  'cible-tactile rounded-bord border border-bord-carte bg-surface px-esp-3 py-esp-2 text-corps text-encre'
 
 export function BlocEnrichissement({ groupes }: Props) {
   const prefixe = useId()
@@ -150,32 +164,32 @@ export function BlocEnrichissement({ groupes }: Props) {
   }
 
   return (
-    <div className="flex flex-col gap-8 border-t border-neutral-200 pt-6">
-      <p className="text-sm text-neutral-500">
+    <div className="flex flex-col gap-esp-8 border-t border-filet pt-esp-6">
+      <p className="text-petit text-encre-attenuee">
         Les trois sections ci-dessous sont facultatives et indépendantes. Elles sont
         enregistrées <strong>en même temps</strong> que la fiche : si l&apos;une est
         refusée, rien n&apos;est créé et votre saisie reste à l&apos;écran.
       </p>
 
       <section className="flex flex-col gap-4">
-        <h2 className="text-lg font-medium">Statuts</h2>
+        <h2 className="text-section">Statuts</h2>
         {lignes.length === 0 ? (
-          <p className="text-sm text-neutral-600">Aucun statut à attribuer.</p>
+          <p className="text-petit text-encre-attenuee">Aucun statut à attribuer.</p>
         ) : null}
 
         {lignes.map((ligne, indice) => {
+          // `idDate` et `idNote` disparaissent : `Champ` génère son propre identifiant.
+          // `idStatut` reste — le `<select>` groupé demeure nu (voir plus haut).
           const idStatut = `${prefixe}-statut-${ligne.cle}`
-          const idDate = `${prefixe}-date-${ligne.cle}`
-          const idNote = `${prefixe}-note-${ligne.cle}`
           return (
             <fieldset
               key={ligne.cle}
-              className="flex flex-col gap-3 rounded-md border border-neutral-300 p-4"
+              className="flex flex-col gap-esp-3 rounded-bord border border-bord-carte p-esp-4"
             >
-              <legend className="px-1 text-sm font-medium">Statut {indice + 1}</legend>
+              <legend className="px-esp-1 text-nom">Statut {indice + 1}</legend>
 
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor={idStatut} className="text-sm font-medium">
+              <div className="flex flex-col gap-esp-1">
+                <label htmlFor={idStatut} className="text-petit text-encre">
                   Statut
                 </label>
                 <select
@@ -186,7 +200,7 @@ export function BlocEnrichissement({ groupes }: Props) {
                     modifierLigne(ligne.cle, { statutId: evenement.target.value })
                   }
                   required
-                  className="rounded-md border border-neutral-300 px-3 py-2"
+                  className={CLASSE_SELECT_STATUT}
                 >
                   <option value="" disabled>
                     Choisir un statut…
@@ -206,70 +220,40 @@ export function BlocEnrichissement({ groupes }: Props) {
                 </select>
               </div>
 
-              {/*
-                RÈGLE D'ASSOCIATION DES LIBELLÉS, posée en tête de
-                `src/app/membres/[id]/statuts/formulaire-statut.tsx` et vérifiée dans un
-                vrai navigateur : un texte d'aide laissé DANS le <label> est CONCATÉNÉ au
-                nom accessible du champ. Champ AVEC aide => `htmlFor` explicite et l'aide
-                sortie du label, rattachée par `aria-describedby`.
-              */}
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor={idDate} className="text-sm font-medium">
-                  Date d&apos;acquisition
-                </label>
-                <input
-                  id={idDate}
-                  name="statutDateAcquisition"
-                  type="date"
-                  max={aujourdhui}
-                  value={ligne.dateAcquisition}
-                  onChange={(evenement) =>
-                    modifierLigne(ligne.cle, { dateAcquisition: evenement.target.value })
-                  }
-                  aria-describedby={`${idDate}-aide`}
-                  className="rounded-md border border-neutral-300 px-3 py-2"
-                />
-                <span id={`${idDate}-aide`} className="text-xs text-neutral-500">
-                  Facultative. Elle n&apos;est pas toujours connue.
-                </span>
-              </div>
+              <Champ
+                label="Date d'acquisition"
+                name="statutDateAcquisition"
+                type="date"
+                max={aujourdhui}
+                value={ligne.dateAcquisition}
+                onChange={(evenement) =>
+                  modifierLigne(ligne.cle, { dateAcquisition: evenement.target.value })
+                }
+                aide="Facultative. Elle n'est pas toujours connue."
+              />
 
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor={idNote} className="text-sm font-medium">
-                  Note
-                </label>
-                <input
-                  id={idNote}
-                  name="statutNote"
-                  maxLength={500}
-                  value={ligne.note}
-                  onChange={(evenement) => modifierLigne(ligne.cle, { note: evenement.target.value })}
-                  className="rounded-md border border-neutral-300 px-3 py-2"
-                />
-              </div>
+              <Champ
+                label="Note"
+                name="statutNote"
+                maxLength={500}
+                value={ligne.note}
+                onChange={(evenement) => modifierLigne(ligne.cle, { note: evenement.target.value })}
+              />
 
-              <button
-                type="button"
-                onClick={() => retirerLigne(ligne.cle)}
-                className="self-start text-sm underline underline-offset-4"
-              >
+              <Bouton variante="lien" alignement="debut" onClick={() => retirerLigne(ligne.cle)}>
                 Retirer ce statut
-              </button>
+              </Bouton>
             </fieldset>
           )
         })}
 
-        <button
-          type="button"
-          onClick={ajouterLigne}
-          className="self-start rounded-md border border-neutral-300 px-4 py-2 text-sm"
-        >
+        <Bouton variante="secondaire" alignement="debut" onClick={ajouterLigne}>
           Ajouter un statut
-        </button>
+        </Bouton>
       </section>
 
       <section className="flex flex-col gap-4">
-        <h2 className="text-lg font-medium">Place dans l&apos;arbre</h2>
+        <h2 className="text-section">Place dans l&apos;arbre</h2>
 
         {/* Champ caché CONTRÔLÉ : sa valeur vient de l'état, jamais du DOM. */}
         <input type="hidden" name="dirigeantForce" value={force ? '1' : '0'} />
@@ -295,18 +279,14 @@ export function BlocEnrichissement({ groupes }: Props) {
             surChoix={changerDirigeant}
             exclureId={null}
           />
-          <p className="text-xs text-neutral-500">
+          <p className="text-petit text-encre-attenuee">
             {calculEnCours ? 'Calcul de la proposition…' : mentionDirigeant()}
             {!calculEnCours && (force || proposeDiffere) ? (
               <>
                 {' '}
-                <button
-                  type="button"
-                  onClick={revenirAuCalcul}
-                  className="underline underline-offset-4"
-                >
+                <Bouton variante="lien" onClick={revenirAuCalcul}>
                   Revenir au dirigeant calculé
-                </button>
+                </Bouton>
                 {` (${nomComplet(proposition)})`}
               </>
             ) : null}

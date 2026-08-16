@@ -1,4 +1,4 @@
-import Link from 'next/link'
+import { EnTetePage } from '@/composants/ui/en-tete-page'
 import { listerAntennes } from '@/lib/donnees/antennes'
 import { listerCatalogue } from '@/lib/donnees/statuts'
 import { exigerAdministrateur } from '@/lib/securite/garde'
@@ -16,15 +16,12 @@ export default async function PageNouveauMembre() {
   const [antennes, groupes] = await Promise.all([listerAntennes(), listerCatalogue()])
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-10">
-      <Link href="/membres" className="text-sm underline underline-offset-4">
-        Retour à l&apos;annuaire
-      </Link>
-      <h1 className="mt-4 mb-2 text-2xl font-semibold">Nouveau membre</h1>
-      <p className="mb-8 text-sm text-neutral-500">
-        La fiche, ses statuts et sa place dans l&apos;arbre sont enregistrés en une seule
-        fois. Les trois enrichissements sont facultatifs.
-      </p>
+    <main className="mx-auto max-w-2xl px-esp-6 py-esp-10">
+      <EnTetePage
+        retour={{ href: '/membres', libelle: "Retour à l'annuaire" }}
+        titre="Nouveau membre"
+        soustitre="La fiche, ses statuts et sa place dans l'arbre sont enregistrés en une seule fois. Les trois enrichissements sont facultatifs."
+      />
       <FormulaireMembre
         action={creerMembreEnrichi}
         antennes={antennes}
