@@ -123,6 +123,13 @@
   --anneau-focus: #2F5D46;
   --anneau-focus-epaisseur: 2px;
   --anneau-focus-retrait: 2px;
+
+  /*
+    Le voile du dialogue modal (`::backdrop`). Dérivé de `--encre`, et non d'un noir pur :
+    un fond neutre froid jurerait avec le biais vert des neutres. Déclaré ici comme tout le
+    reste (D109) — aucun composant ne porte de valeur.
+  */
+  --voile: rgba(28, 35, 33, 0.45);
 }
 
 /*
@@ -163,6 +170,7 @@
   --color-etat-attente: var(--etat-attente);
   --color-etat-refus: var(--etat-refus);
   --color-etat-neutre: var(--etat-neutre);
+  --color-voile: var(--voile);
 
   --font-sans: var(--pile-texte);
   --font-mono: var(--pile-mono);
@@ -207,8 +215,12 @@
     « déconseillé » — même mécanique que D111 sur `defaultValue`.
 
     ⚠️ CE RESET CASSE LES 126 `rounded-md` DES ÉCRANS NON ENCORE MIGRÉS. Il est donc posé
-    à la TASK 24, pas ici. Les deux lignes ci-dessous restent COMMENTÉES jusque-là, avec
-    ce commentaire, pour que la Task 24 n'ait qu'à les décommenter.
+    à la TASK 24, pas ici. Des deux lignes ci-dessous, SEULE `--radius-*: initial;` reste
+    COMMENTÉE jusque-là, avec ce commentaire, pour que la Task 24 n'ait qu'à la
+    décommenter. `--radius-bord: var(--rayon);`, elle, est ACTIVE depuis la Task 3 : c'est
+    la ligne purement additive, sans risque pour les 126 `rounded-md` existants — rien
+    n'imposait de coupler les deux (revue des Tasks 1/2, constat Important absorbé dans
+    fe78e03).
   */
   /* --radius-*: initial; */
   --radius-bord: var(--rayon);
