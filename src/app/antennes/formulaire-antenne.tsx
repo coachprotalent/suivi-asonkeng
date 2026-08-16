@@ -1,6 +1,9 @@
 'use client'
 
-import { useActionState } from 'react'
+import { useActionState, useState } from 'react'
+import { Bouton } from '@/composants/ui/bouton'
+import { Champ } from '@/composants/ui/champ'
+import { Formulaire } from '@/composants/ui/formulaire'
 import { creerAntenne, type EtatAntenne } from './actions'
 
 const etatInitial: EtatAntenne = { erreur: null }
@@ -8,37 +11,46 @@ const etatInitial: EtatAntenne = { erreur: null }
 export function FormulaireAntenne() {
   const [etat, envoyer, enCours] = useActionState(creerAntenne, etatInitial)
 
-  return (
-    <form action={envoyer} className="flex flex-col gap-3">
-      <div className="flex flex-wrap gap-3">
-        <input
-          name="nom"
-          placeholder="Nom"
-          required
-          aria-label="Nom de l'antenne"
-          className="flex-1 rounded-md border border-neutral-300 px-3 py-2"
-        />
-        <input
-          name="pays"
-          placeholder="Pays"
-          required
-          aria-label="Pays de l'antenne"
-          className="flex-1 rounded-md border border-neutral-300 px-3 py-2"
-        />
-        <button
-          type="submit"
-          disabled={enCours}
-          className="rounded-md bg-neutral-900 px-4 py-2 text-white disabled:opacity-50"
-        >
-          {enCours ? 'Ajout…' : 'Ajouter'}
-        </button>
-      </div>
+  /*
+    CONTRÔLÉS (D111) : les deux champs n'avaient jusqu'ici qu'un `aria-label` (« Nom de
+    l'antenne », « Pays de l'antenne ») et un `placeholder` (« Nom », « Pays ») — aucun
+    `<label>` visible. `Champ` en exige un. Le texte du `label` ci-dessous reprend le
+    libellé qui existait DÉJÀ dans le fichier — celui de l'`aria-label`, plus explicite
+    que le `placeholder` isolé — et non un texte inventé : aucun mot n'est ajouté au
+    dépôt, il change seulement de canal (de l'arbre d'accessibilité vers l'écran).
+  */
+  const [nom, setNom] = useState('')
+  const [pays, setPays] = useState('')
 
-      {etat.erreur ? (
-        <p role="alert" className="text-sm text-red-600">
-          {etat.erreur}
-        </p>
-      ) : null}
-    </form>
+  return (
+    <Formulaire
+      action={envoyer}
+      erreur={etat.erreur}
+      enCours={enCours}
+      actions={
+        <Bouton type="submit" alignement="debut" enCours={enCours} libelleAttente="Ajout…">
+          Ajouter
+        </Bouton>
+      }
+    >
+      <div className="flex flex-wrap gap-esp-3">
+        <Champ
+          label="Nom de l'antenne"
+          name="nom"
+          value={nom}
+          onChange={(evenement) => setNom(evenement.target.value)}
+          required
+          largeur="flexible"
+        />
+        <Champ
+          label="Pays de l'antenne"
+          name="pays"
+          value={pays}
+          onChange={(evenement) => setPays(evenement.target.value)}
+          required
+          largeur="flexible"
+        />
+      </div>
+    </Formulaire>
   )
 }

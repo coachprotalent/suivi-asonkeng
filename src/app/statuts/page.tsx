@@ -1,4 +1,5 @@
-import Link from 'next/link'
+import { EnTetePage } from '@/composants/ui/en-tete-page'
+import { LigneListe, Liste } from '@/composants/ui/ligne-liste'
 import { listerCatalogue } from '@/lib/donnees/statuts'
 import { exigerAdministrateur } from '@/lib/securite/garde'
 import { desactiverStatut, reactiverStatut } from './actions'
@@ -10,47 +11,52 @@ export default async function PageCatalogueStatuts() {
   const groupes = await listerCatalogue(true)
 
   return (
-    <main className="mx-auto max-w-2xl px-6 py-10">
-      <Link href="/tableau-de-bord" className="text-sm underline underline-offset-4">
-        Retour au tableau de bord
-      </Link>
-      <h1 className="mt-4 mb-8 text-2xl font-semibold">Statuts</h1>
+    <main className="mx-auto max-w-2xl px-esp-6 py-esp-10">
+      <EnTetePage
+        retour={{ href: '/tableau-de-bord', libelle: 'Retour au tableau de bord' }}
+        titre="Statuts"
+      />
 
       {groupes.map((groupe) => (
-        <section key={groupe.id} className="mb-8">
-          <h2 className="mb-1 text-lg font-medium">{groupe.nom}</h2>
-          <p className="mb-3 text-sm text-neutral-500">
+        <section key={groupe.id} className="mb-esp-8">
+          <h2 className="mb-esp-1 text-section">{groupe.nom}</h2>
+          <p className="mb-esp-3 text-petit text-encre-attenuee">
             {groupe.exclusif
               ? "Un membre ne peut porter qu'un seul statut de ce groupe."
               : 'Les statuts de ce groupe se cumulent.'}
           </p>
           {groupe.statuts.length === 0 ? (
-            <p className="text-sm text-neutral-600">Aucun statut dans ce groupe.</p>
+            <p className="text-petit text-encre-attenuee">Aucun statut dans ce groupe.</p>
           ) : (
-            <ul className="divide-y divide-neutral-200">
+            <Liste>
               {groupe.statuts.map((statut) => (
-                <li key={statut.id} className="flex items-center justify-between gap-4 py-3">
-                  <span className={statut.actif ? '' : 'text-neutral-500'}>
-                    {statut.libelle}
-                    {statut.actif ? '' : ' — désactivé'}
-                  </span>
-                  <form action={statut.actif ? desactiverStatut : reactiverStatut}>
-                    <input type="hidden" name="id" value={statut.id} />
-                    <BoutonBasculeStatut libelle={statut.libelle} desactiver={statut.actif} />
-                  </form>
-                </li>
+                <LigneListe
+                  key={statut.id}
+                  principal={
+                    <span className={statut.actif ? '' : 'text-encre-attenuee'}>
+                      {statut.libelle}
+                      {statut.actif ? '' : ' — désactivé'}
+                    </span>
+                  }
+                  actions={
+                    <form action={statut.actif ? desactiverStatut : reactiverStatut}>
+                      <input type="hidden" name="id" value={statut.id} />
+                      <BoutonBasculeStatut libelle={statut.libelle} desactiver={statut.actif} />
+                    </form>
+                  }
+                />
               ))}
-            </ul>
+            </Liste>
           )}
         </section>
       ))}
 
-      <h2 className="mb-4 text-lg font-medium">Ajouter un statut</h2>
-      <div className="mb-10">
+      <h2 className="mb-esp-4 text-section">Ajouter un statut</h2>
+      <div className="mb-esp-10">
         <FormulaireStatutCatalogue groupes={groupes} />
       </div>
 
-      <h2 className="mb-4 text-lg font-medium">Ajouter un groupe</h2>
+      <h2 className="mb-esp-4 text-section">Ajouter un groupe</h2>
       <FormulaireGroupe />
     </main>
   )

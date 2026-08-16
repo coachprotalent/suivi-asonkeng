@@ -1,4 +1,5 @@
-import Link from 'next/link'
+import { EnTetePage } from '@/composants/ui/en-tete-page'
+import { LigneListe, Liste } from '@/composants/ui/ligne-liste'
 import { listerAntennes } from '@/lib/donnees/antennes'
 import { listerCalendriers } from '@/lib/donnees/ael'
 import { exigerModerateurOuAdministrateur } from '@/lib/securite/garde'
@@ -31,42 +32,49 @@ export default async function PageCalendriersAel() {
   const inactifs = calendriers.filter((c) => !c.actif)
 
   return (
-    <main className="mx-auto max-w-2xl px-6 py-10">
-      <Link href="/ael/seances" className="text-sm underline underline-offset-4">
-        Voir les séances
-      </Link>
-      <h1 className="mt-4 mb-8 text-2xl font-semibold">Calendrier AEL récurrent</h1>
+    <main className="mx-auto max-w-2xl px-esp-6 py-esp-10">
+      <EnTetePage retour={{ href: '/ael/seances', libelle: 'Voir les séances' }} titre="Calendrier AEL récurrent" />
 
-      <ul className="mb-10 divide-y divide-neutral-200">
-        {actifs.map((c) => (
-          <li key={c.id} className="flex items-center justify-between gap-4 py-3">
-            <span>{libelleCreneau(c)}</span>
-            <form action={desactiverCalendrier}>
-              <input type="hidden" name="id" value={c.id} />
-              <BoutonBasculeCalendrier libelle={libelleCreneau(c)} desactiver />
-            </form>
-          </li>
-        ))}
-      </ul>
+      <div className="mb-esp-10">
+        <Liste>
+          {actifs.map((c) => (
+            <LigneListe
+              key={c.id}
+              principal={libelleCreneau(c)}
+              actions={
+                <form action={desactiverCalendrier}>
+                  <input type="hidden" name="id" value={c.id} />
+                  <BoutonBasculeCalendrier libelle={libelleCreneau(c)} desactiver />
+                </form>
+              }
+            />
+          ))}
+        </Liste>
+      </div>
 
       {inactifs.length > 0 ? (
         <>
-          <h2 className="mb-4 text-lg font-medium">Créneaux désactivés</h2>
-          <ul className="mb-10 divide-y divide-neutral-200">
-            {inactifs.map((c) => (
-              <li key={c.id} className="flex items-center justify-between gap-4 py-3">
-                <span className="text-neutral-500">{libelleCreneau(c)}</span>
-                <form action={reactiverCalendrier}>
-                  <input type="hidden" name="id" value={c.id} />
-                  <BoutonBasculeCalendrier libelle={libelleCreneau(c)} desactiver={false} />
-                </form>
-              </li>
-            ))}
-          </ul>
+          <h2 className="mb-esp-4 text-section">Créneaux désactivés</h2>
+          <div className="mb-esp-10">
+            <Liste>
+              {inactifs.map((c) => (
+                <LigneListe
+                  key={c.id}
+                  principal={<span className="text-encre-attenuee">{libelleCreneau(c)}</span>}
+                  actions={
+                    <form action={reactiverCalendrier}>
+                      <input type="hidden" name="id" value={c.id} />
+                      <BoutonBasculeCalendrier libelle={libelleCreneau(c)} desactiver={false} />
+                    </form>
+                  }
+                />
+              ))}
+            </Liste>
+          </div>
         </>
       ) : null}
 
-      <h2 className="mb-4 text-lg font-medium">Ajouter un créneau</h2>
+      <h2 className="mb-esp-4 text-section">Ajouter un créneau</h2>
       <FormulaireCalendrier antennes={antennes} />
     </main>
   )
