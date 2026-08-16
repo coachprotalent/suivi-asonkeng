@@ -1,7 +1,11 @@
 'use client'
 
-import { useActionState, useEffect, useId, useRef, useState } from 'react'
+import { useActionState, useState } from 'react'
 import { LONGUEUR_MDP_MINIMALE } from '@/app/changer-mot-de-passe/constantes'
+import { Bouton } from '@/composants/ui/bouton'
+import { Champ } from '@/composants/ui/champ'
+import { Formulaire } from '@/composants/ui/formulaire'
+import { Selecteur } from '@/composants/ui/selecteur'
 import type { Antenne } from '@/lib/donnees/antennes'
 import { sInscrire, type EtatInscription } from './actions'
 
@@ -25,7 +29,8 @@ const etatInitial: EtatInscription = { erreur: null }
  *
  * NE JAMAIS REVENIR À `defaultValue` NI À UN CHAMP SANS `value` ICI. Le message d'erreur
  * de cet écran ne peut pas expliquer ; la saisie conservée est donc la SEULE chose qui
- * reste à l'utilisateur pour réessayer.
+ * reste à l'utilisateur pour réessayer. `Champ` et `Selecteur` rendent désormais ce cas
+ * inexprimable (D111).
  *
  * LE MOT DE PASSE EST CONTRÔLÉ COMME LES AUTRES, et ce n'est pas une imprudence : sa
  * valeur vit dans l'état React du navigateur, exactement là où le DOM la gardait déjà.
@@ -33,23 +38,20 @@ const etatInitial: EtatInscription = { erreur: null }
  * perdre à chaque refus obligeait au contraire à le retaper, ce qui pousse aux mots de
  * passe courts.
  *
- * ═══ `onReset` SUR LE `<form>`, CORRECTIF DÉCOUVERT EN ÉCRIVANT LA PREUVE DE LA TASK 8
+ * ═══ `onReset` ET LE FOCUS AU REFUS MIGRENT DANS `Formulaire`, ILS NE DISPARAISSENT PAS
  * ═══ Un `<select>` contrôlé (`value` + `onChange`) n'est PAS protégé de la remise à zéro
  * automatique que React déclenche après toute complétion d'action, contrairement à un
  * `<input>` ou un `<textarea>` : le navigateur applique nativement un vrai événement DOM
  * `reset` sur le `<form>`, et React ne resynchronise pas systématiquement l'option
  * sélectionnée après coup — mesuré empiriquement (développement ET production) sur le
  * `<select>` « Antenne » de cet écran, qui repartait vide sur un refus alors que les sept
- * autres champs survivaient. `onReset={(e) => e.preventDefault()}` empêche le navigateur
- * d'exécuter cette remise à zéro native, sans danger ici puisque AUCUN champ de ce
- * formulaire n'est non contrôlé.
+ * autres champs survivaient. `Formulaire` pose désormais `onReset={(e) =>
+ * e.preventDefault()}` INCONDITIONNELLEMENT (D112), sans que ce fichier ait plus à y
+ * penser. Ce composant était l'un des DEUX SEULS du dépôt à porter le focus sur son refus
+ * (D113) : `Formulaire`/`Refus` reprennent cette mécanique telle quelle.
  */
 export function FormulaireInscription({ antennes }: { antennes: Antenne[] }) {
   const [etat, envoyer, enCours] = useActionState(sInscrire, etatInitial)
-  const prefixe = useId()
-  const idCode = `${prefixe}-code`
-  const idIdentifiant = `${prefixe}-identifiant`
-  const idMotDePasse = `${prefixe}-mdp`
 
   const [code, setCode] = useState('')
   const [identifiant, setIdentifiant] = useState('')
@@ -60,158 +62,97 @@ export function FormulaireInscription({ antennes }: { antennes: Antenne[] }) {
   const [ville, setVille] = useState('')
   const [antenneId, setAntenneId] = useState('')
 
-  const zoneErreur = useRef<HTMLParagraphElement | null>(null)
-
-  /*
-    ═══ POURQUOI CE `useRef` FERME LA COURSE AU MONTAGE PAR CONSTRUCTION ═══
-
-    `enCoursPrecedent` est initialisé avec la valeur du PREMIER rendu, nécessairement
-    `false`. La passe de montage ne peut donc jamais satisfaire
-    `enCoursPrecedent.current && !enCours` : la condition exige une transition
-    `true -> false`, c'est-à-dire une VRAIE soumission terminée. Tester `etat.erreur`
-    seul se déclencherait dès le montage.
-
-    Ce que l'effet fait : porter le FOCUS sur le refus. Sur mobile, où cet écran est le
-    plus employé, le message peut être hors champ après une saisie longue, et rien ne
-    semble se passer au clic. AUCUNE remise à zéro n'est faite au succès : `sInscrire`
-    REDIRIGE. Si cette redirection disparaissait un jour, c'est EXACTEMENT ce garde qu'il
-    faudrait réutiliser, avec `etat.erreur === null`.
-  */
-  const enCoursPrecedent = useRef(enCours)
-  useEffect(() => {
-    if (enCoursPrecedent.current && !enCours && etat.erreur !== null) {
-      zoneErreur.current?.focus()
-    }
-    enCoursPrecedent.current = enCours
-  }, [enCours, etat])
-
   return (
-    <form
+    <Formulaire
       action={envoyer}
-      onReset={(evenement) => evenement.preventDefault()}
-      className="flex flex-col gap-4"
+      erreur={etat.erreur}
+      enCours={enCours}
+      actions={
+        <Bouton type="submit" alignement="debut" enCours={enCours} libelleAttente="Inscription…">
+          S&apos;inscrire
+        </Bouton>
+      }
     >
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor={idCode} className="text-sm font-medium">
-          Code d&apos;inscription
-        </label>
-        <input
-          id={idCode}
-          name="code"
-          value={code}
-          onChange={(evenement) => setCode(evenement.target.value)}
-          required
-          autoCapitalize="none"
-          spellCheck={false}
-          aria-describedby={`${idCode}-aide`}
-          className="rounded-md border border-neutral-300 px-3 py-2"
-        />
-        <span id={`${idCode}-aide`} className="text-xs text-neutral-500">
-          Fourni par un administrateur de l&apos;équipe.
-        </span>
-      </div>
+      <Champ
+        label="Code d'inscription"
+        name="code"
+        value={code}
+        onChange={(evenement) => setCode(evenement.target.value)}
+        required
+        autoCapitalize="none"
+        spellCheck={false}
+        aide="Fourni par un administrateur de l'équipe."
+      />
 
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor={idIdentifiant} className="text-sm font-medium">
-          Identifiant choisi
-        </label>
-        <input
-          id={idIdentifiant}
-          name="identifiant"
-          value={identifiant}
-          onChange={(evenement) => setIdentifiant(evenement.target.value)}
-          required
-          autoCapitalize="none"
-          spellCheck={false}
-          aria-describedby={`${idIdentifiant}-aide`}
-          className="rounded-md border border-neutral-300 px-3 py-2"
-        />
-        <span id={`${idIdentifiant}-aide`} className="text-xs text-neutral-500">
-          3 à 32 caractères : lettres, chiffres, points ou tirets, commençant par une
-          lettre.
-        </span>
-      </div>
+      <Champ
+        label="Identifiant choisi"
+        name="identifiant"
+        value={identifiant}
+        onChange={(evenement) => setIdentifiant(evenement.target.value)}
+        required
+        autoCapitalize="none"
+        spellCheck={false}
+        aide="3 à 32 caractères : lettres, chiffres, points ou tirets, commençant par une lettre."
+      />
 
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor={idMotDePasse} className="text-sm font-medium">
-          Mot de passe choisi
-        </label>
-        <input
-          id={idMotDePasse}
-          name="motDePasse"
-          type="password"
-          value={motDePasse}
-          onChange={(evenement) => setMotDePasse(evenement.target.value)}
-          required
-          // Interpolée, jamais écrite en dur : la page sœur `/changer-mot-de-passe` fait
-          // de même, et une valeur recopiée à la main deviendrait un mensonge le jour où
-          // la constante change.
-          minLength={LONGUEUR_MDP_MINIMALE}
-          autoComplete="new-password"
-          aria-describedby={`${idMotDePasse}-aide`}
-          className="rounded-md border border-neutral-300 px-3 py-2"
-        />
-        <span id={`${idMotDePasse}-aide`} className="text-xs text-neutral-500">
-          Au moins {LONGUEUR_MDP_MINIMALE} caractères.
-        </span>
-      </div>
+      <Champ
+        label="Mot de passe choisi"
+        name="motDePasse"
+        type="password"
+        value={motDePasse}
+        onChange={(evenement) => setMotDePasse(evenement.target.value)}
+        required
+        // Interpolée, jamais écrite en dur : la page sœur `/changer-mot-de-passe` fait
+        // de même, et une valeur recopiée à la main deviendrait un mensonge le jour où
+        // la constante change.
+        minLength={LONGUEUR_MDP_MINIMALE}
+        autoComplete="new-password"
+        aide={`Au moins ${LONGUEUR_MDP_MINIMALE} caractères.`}
+      />
 
-      <div className="grid gap-4 sm:grid-cols-2">
-        <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">Prénom</span>
-          <input
-            name="prenom"
-            value={prenom}
-            onChange={(evenement) => setPrenom(evenement.target.value)}
-            required
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          />
-        </label>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">Nom</span>
-          <input
-            name="nom"
-            value={nom}
-            onChange={(evenement) => setNom(evenement.target.value)}
-            required
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          />
-        </label>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">Téléphone</span>
-          <input
-            name="telephone"
-            type="tel"
-            value={telephone}
-            onChange={(evenement) => setTelephone(evenement.target.value)}
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          />
-        </label>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">Ville</span>
-          <input
-            name="ville"
-            value={ville}
-            onChange={(evenement) => setVille(evenement.target.value)}
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          />
-        </label>
-        <label className="flex flex-col gap-1.5 sm:col-span-2">
-          <span className="text-sm font-medium">Antenne</span>
-          <select
+      <div className="grid gap-esp-4 md:grid-cols-2">
+        <Champ
+          label="Prénom"
+          name="prenom"
+          value={prenom}
+          onChange={(evenement) => setPrenom(evenement.target.value)}
+          required
+        />
+        <Champ
+          label="Nom"
+          name="nom"
+          value={nom}
+          onChange={(evenement) => setNom(evenement.target.value)}
+          required
+        />
+        <Champ
+          label="Téléphone"
+          name="telephone"
+          type="tel"
+          value={telephone}
+          onChange={(evenement) => setTelephone(evenement.target.value)}
+        />
+        <Champ
+          label="Ville"
+          name="ville"
+          value={ville}
+          onChange={(evenement) => setVille(evenement.target.value)}
+        />
+        <div className="md:col-span-2">
+          <Selecteur
+            label="Antenne"
             name="antenneId"
             value={antenneId}
             onChange={(evenement) => setAntenneId(evenement.target.value)}
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          >
-            <option value="">Non rattaché</option>
-            {antennes.map((antenne) => (
-              <option key={antenne.id} value={antenne.id}>
-                {antenne.nom}
-              </option>
-            ))}
-          </select>
-        </label>
+            // « Non rattaché » est un CHOIX légitime, pas une invite : il passe par
+            // `options`, pas par `optionVide`, qui est réservée à une option désactivée
+            // (voir le commentaire de tête de `selecteur.tsx`).
+            options={[
+              { valeur: '', libelle: 'Non rattaché' },
+              ...antennes.map((antenne) => ({ valeur: antenne.id, libelle: antenne.nom })),
+            ]}
+          />
+        </div>
       </div>
 
       {/*
@@ -221,25 +162,6 @@ export function FormulaireInscription({ antennes }: { antennes: Antenne[] }) {
         supposition sur le mode reviendrait à recréer un oracle par la forme de la page,
         exactement ce que D30 interdit.
       */}
-
-      {etat.erreur ? (
-        <p
-          ref={zoneErreur}
-          tabIndex={-1}
-          role="alert"
-          className="text-sm text-red-600 outline-none"
-        >
-          {etat.erreur}
-        </p>
-      ) : null}
-
-      <button
-        type="submit"
-        disabled={enCours}
-        className="self-start rounded-md bg-neutral-900 px-4 py-2 font-medium text-white disabled:opacity-50"
-      >
-        {enCours ? 'Inscription…' : "S'inscrire"}
-      </button>
-    </form>
+    </Formulaire>
   )
 }

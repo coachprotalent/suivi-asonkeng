@@ -1,3 +1,4 @@
+import { EnTetePage } from '@/composants/ui/en-tete-page'
 import { listerAntennesPubliques } from '@/lib/donnees/antennes'
 import { FormulaireInscription } from './formulaire-inscription'
 
@@ -60,11 +61,11 @@ export default async function PageInscription() {
   const antennes = await listerAntennesPubliques()
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-6 py-12">
-      <h1 className="mb-1 text-2xl font-semibold">Inscription</h1>
-      <p className="mb-8 text-sm text-neutral-500">
-        Munissez-vous du code fourni par un administrateur de l&apos;équipe.
-      </p>
+    <main className="mx-auto flex min-h-screen max-w-md flex-col justify-center px-esp-6 py-esp-10">
+      <EnTetePage
+        titre="Inscription"
+        soustitre="Munissez-vous du code fourni par un administrateur de l'équipe."
+      />
       <FormulaireInscription antennes={antennes} />
     </main>
   )
