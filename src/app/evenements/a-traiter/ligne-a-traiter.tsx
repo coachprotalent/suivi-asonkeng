@@ -1,10 +1,12 @@
 'use client'
 
-import { useActionState, useId, useState } from 'react'
+import { useActionState, useId, useRef, useState } from 'react'
 import { formaterDateSeule } from '@/lib/format/date'
 import type { ATraiterLigne } from '@/lib/donnees/evenements-lots'
 import type { MembreBref } from '@/lib/donnees/membres'
 import { SelecteurMembre } from '@/app/membres/selecteur-membre'
+import { Bouton } from '@/composants/ui/bouton'
+import { Dialogue } from '@/composants/ui/dialogue'
 import { classerParticipant, convertirParticipant, type EtatConversion } from './actions'
 
 const etatInitial: EtatConversion = { erreur: null }
@@ -77,6 +79,26 @@ export function LigneATraiter({
   const idAideMotif = `${prefixe}-aide-motif`
 
   const nomComplet = `${participant.prenom ?? ''} ${participant.nom}`.trim()
+
+  /*
+    ═══ D124 — voir le commentaire de tête de `antennes/bouton-bascule-antenne.tsx`, le
+    gabarit des dix confirmations de famille A ═══
+
+    `messageConfirmationConversion` est PURE : l'appeler ici, à chaque rendu, est gratuit.
+    Le formulaire porte des champs `required` et trois chemins mutuellement exclusifs :
+    `requestSubmit()` applique la validation de contrainte, donc un chemin incomplet est
+    refusé par le navigateur exactement comme avant.
+
+    `chemin` NE PEUT PAS changer entre l'ouverture du dialogue et sa confirmation : un
+    `<dialog>` modal rend le reste du document INERTE, donc aucun des trois boutons radio
+    n'est atteignable pendant que le dialogue est ouvert.
+
+    Le bouton n'a pas de libellé d'attente aujourd'hui (« Convertir » ne bascule pas) : ne
+    pas en inventer un (D117).
+  */
+  const messageConversion = messageConfirmationConversion(nomComplet, chemin)
+  const [conversionConfirmationDemandee, setConversionConfirmationDemandee] = useState(false)
+  const boutonConversion = useRef<HTMLButtonElement | null>(null)
 
   return (
     <li className="py-5">
@@ -223,18 +245,29 @@ export function LigneATraiter({
                     conversion. La confirmation nomme LE CHEMIN CHOISI, parce que c'est là que
                     se joue l'erreur coûteuse — un chemin 2 crée une fiche ACTIVE, un chemin 3
                     rattache DÉFINITIVEMENT le séminaire à la fiche de quelqu'un d'autre. */}
-                <button
+                <Bouton
+                  ref={boutonConversion}
                   type="submit"
-                  disabled={conversionEnCours}
+                  alignement="debut"
+                  enCours={conversionEnCours}
                   onClick={(evenement) => {
-                    if (!window.confirm(messageConfirmationConversion(nomComplet, chemin))) {
-                      evenement.preventDefault()
-                    }
+                    evenement.preventDefault()
+                    setConversionConfirmationDemandee(true)
                   }}
-                  className="self-start rounded-md bg-neutral-900 px-4 py-2 text-white disabled:opacity-50"
                 >
                   Convertir
-                </button>
+                </Bouton>
+
+                <Dialogue
+                  ouvert={conversionConfirmationDemandee}
+                  message={messageConversion}
+                  surConfirmation={() => {
+                    setConversionConfirmationDemandee(false)
+                    boutonConversion.current?.form?.requestSubmit(boutonConversion.current)
+                  }}
+                  surAnnulation={() => setConversionConfirmationDemandee(false)}
+                />
+
                 {etatConversion.erreur ? (
                   <p role="alert" className="text-sm text-red-600">
                     {etatConversion.erreur}

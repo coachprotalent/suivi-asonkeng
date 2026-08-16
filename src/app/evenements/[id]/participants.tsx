@@ -6,6 +6,8 @@ import { formaterDateSeule } from '@/lib/format/date'
 import type { ParticipantLigne } from '@/lib/donnees/evenements-lots'
 import type { MembreBref } from '@/lib/donnees/membres'
 import { SelecteurMembre } from '@/app/membres/selecteur-membre'
+import { Bouton } from '@/composants/ui/bouton'
+import { Dialogue } from '@/composants/ui/dialogue'
 import { ChampsDesirs, DESIRS_VIDES, type ValeursDesirs } from './champs-desirs'
 import { FormulaireParticipantExterne } from './formulaire-participant-externe'
 import {
@@ -96,6 +98,13 @@ function LigneParticipant({
     note: participant.note ?? '',
   })
 
+  // ═══ D124 — voir le commentaire de tête de `antennes/bouton-bascule-antenne.tsx`, le
+  // gabarit des dix confirmations de famille A. Ce site est couvert par
+  // `tests/e2e-prod/refus-evenements-production.spec.ts:235-240`, l'une des DIX preuves de
+  // production, qui ASSERTE LE MESSAGE : il ne change pas d'un octet.
+  const [suppressionConfirmationDemandee, setSuppressionConfirmationDemandee] = useState(false)
+  const boutonSuppression = useRef<HTMLButtonElement | null>(null)
+
   // Un membre DÉSIGNÉ dont la fiche n'est pas consultable par ce compte (typiquement
   // archivée, vue par un modérateur) : `membreId` non nul, embed nul. Les deux
   // informations sont DIFFÉRENTES, et les confondre afficherait « — » là où un
@@ -171,22 +180,34 @@ function LigneParticipant({
       <form action={supprimer} className="mt-2">
         <input type="hidden" name="evenementId" value={evenementId} />
         <input type="hidden" name="participationId" value={participant.id} />
-        <button
+        <Bouton
+          ref={boutonSuppression}
           type="submit"
-          disabled={suppressionEnCours}
+          variante="lien-danger"
+          enCours={suppressionEnCours}
           onClick={(evenement) => {
-            if (
-              !window.confirm(
-                `Supprimer la participation de ${libelle} ? Les trois désirs et la note saisis pour cet évènement seront effacés, et l'évènement disparaîtra des séminaires assistés de cette personne.`,
-              )
-            ) {
-              evenement.preventDefault()
-            }
+            evenement.preventDefault()
+            setSuppressionConfirmationDemandee(true)
           }}
-          className="text-sm text-red-600 underline underline-offset-4 disabled:opacity-50"
         >
           Supprimer cette participation
-        </button>
+        </Bouton>
+
+        {/*
+          D124 — `<dialog>` peut vivre n'importe où dans l'arbre, il est déplacé dans la
+          couche supérieure à l'ouverture : le placer dans le même `<form>` que son
+          déclencheur, à côté du bouton, est sans risque.
+        */}
+        <Dialogue
+          ouvert={suppressionConfirmationDemandee}
+          message={`Supprimer la participation de ${libelle} ? Les trois désirs et la note saisis pour cet évènement seront effacés, et l'évènement disparaîtra des séminaires assistés de cette personne.`}
+          surConfirmation={() => {
+            setSuppressionConfirmationDemandee(false)
+            boutonSuppression.current?.form?.requestSubmit(boutonSuppression.current)
+          }}
+          surAnnulation={() => setSuppressionConfirmationDemandee(false)}
+        />
+
         {etatSuppression.erreur ? (
           <p role="alert" className="mt-2 text-sm text-red-600">
             {etatSuppression.erreur}

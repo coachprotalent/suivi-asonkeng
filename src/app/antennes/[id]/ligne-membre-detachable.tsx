@@ -1,12 +1,21 @@
 'use client'
 
 import Link from 'next/link'
-import { useActionState } from 'react'
+import { useActionState, useRef, useState } from 'react'
+import { Bouton } from '@/composants/ui/bouton'
+import { Dialogue } from '@/composants/ui/dialogue'
 import type { MembreBref } from '@/lib/donnees/membres'
 import { definirAntenneMembre, type EtatRattachement } from './actions'
 
 const etatInitial: EtatRattachement = { erreur: null }
 
+/**
+ * ═══ D124 — `window.confirm` BLOQUE, UN `<dialog>` NE BLOQUE PAS ═══
+ * Voir le commentaire de tête de `antennes/bouton-bascule-antenne.tsx`, le gabarit des dix
+ * confirmations de famille A. LE MESSAGE NE CHANGE PAS D'UN OCTET (D117). `disabled={enCours}`
+ * devient `enCours={enCours}` sur `Bouton`, avec `libelleAttente="Détachement…"` — le libellé
+ * basculait déjà ainsi, ce n'est pas un texte neuf.
+ */
 export function LigneMembreDetachable({
   membre,
   antenneId,
@@ -15,6 +24,14 @@ export function LigneMembreDetachable({
   antenneId: string
 }) {
   const [etat, envoyer, enCours] = useActionState(definirAntenneMembre, etatInitial)
+  const [confirmationDemandee, setConfirmationDemandee] = useState(false)
+  const bouton = useRef<HTMLButtonElement | null>(null)
+
+  const message =
+    `Détacher ${membre.prenom} ${membre.nom} de cette antenne ?\n\n` +
+    "Cette personne n'apparaîtra plus dans les listes de pointage " +
+    'pré-remplies des prochaines séances de cette antenne. Son historique ' +
+    'de présence reste intact.'
 
   return (
     <li className="flex flex-col gap-1 py-2">
@@ -29,25 +46,29 @@ export function LigneMembreDetachable({
             Pas de champ `antenneId` : `champOuNull` (Task 3) le lit `null`, ce qui
             DÉTACHE. `pageAntenneId` sert uniquement à revalider la bonne page.
           */}
-          <button
+          <Bouton
+            ref={bouton}
             type="submit"
-            disabled={enCours}
+            variante="lien-danger"
+            enCours={enCours}
+            libelleAttente="Détachement…"
             onClick={(evenement) => {
-              if (
-                !window.confirm(
-                  `Détacher ${membre.prenom} ${membre.nom} de cette antenne ?\n\n` +
-                    "Cette personne n'apparaîtra plus dans les listes de pointage " +
-                    'pré-remplies des prochaines séances de cette antenne. Son historique ' +
-                    'de présence reste intact.',
-                )
-              ) {
-                evenement.preventDefault()
-              }
+              evenement.preventDefault()
+              setConfirmationDemandee(true)
             }}
-            className="text-sm text-red-600 underline underline-offset-4 disabled:opacity-50"
           >
-            {enCours ? 'Détachement…' : 'Détacher'}
-          </button>
+            Détacher
+          </Bouton>
+
+          <Dialogue
+            ouvert={confirmationDemandee}
+            message={message}
+            surConfirmation={() => {
+              setConfirmationDemandee(false)
+              bouton.current?.form?.requestSubmit(bouton.current)
+            }}
+            surAnnulation={() => setConfirmationDemandee(false)}
+          />
         </form>
       </div>
       {etat.erreur ? (

@@ -93,15 +93,25 @@ export function Noeud({
   return (
     <li className={classeRetrait}>
       {/*
-        D106 — LE RAIL, ET LE SURLIGNAGE DE LA CIBLE. `bg-amber-50 font-medium` devient une
-        mise en évidence par le rail et le poids : le système de jetons ne fournit aucune
-        couleur de fond d'état (voir `Carte`, Task 5), et un fond ambre serait une valeur
-        que la conception n'a pas arbitrée.
+        D106 — LE SURLIGNAGE DE LA CIBLE, PAR DEUX CANAUX, NI L'UN NI L'AUTRE LE RAIL.
+        `bg-amber-50 font-medium` devient une bordure d'état (`border-etat-attente`) ET la
+        graisse (`font-medium`) : le système de jetons ne fournit aucune couleur de fond
+        d'état (voir `Carte`, Task 5), donc la couleur seule ne peut pas porter le fond —
+        elle porte la bordure à la place, et la graisse reste le second canal, exactement
+        comme avant la migration. AUCUN JETON NEUF : ni l'un ni l'autre n'en demande — la
+        règle interdit la couleur SEULE comme porteuse de sens, pas la couleur seule tout
+        court.
+
+        LE RAIL (`rail-filiation`, ci-dessous) EST SANS RAPPORT AVEC LA CIBLE : il dépend
+        de `profondeur > 0`, donc de la position dans l'arbre, jamais de `estCible`. Un
+        nœud peut porter le rail sans être la cible, et être la cible à la profondeur 0
+        (racine) sans porter le rail. Les deux mises en évidence se superposent parfois,
+        elles ne se confondent jamais.
       */}
       <div
         className={`flex flex-wrap items-baseline gap-esp-3 rounded-bord px-esp-2 py-esp-1 ${
           profondeur > 0 ? 'rail-filiation' : ''
-        }${estCible ? ' border border-etat-attente' : ''}`}
+        }${estCible ? ' border border-etat-attente font-medium' : ''}`}
       >
         <Bouton variante="lien" onClick={() => basculer(membre.id, ancetres)} aria-expanded={deplie}>
           {deplie ? '▾' : '▸'} {nomAffiche}

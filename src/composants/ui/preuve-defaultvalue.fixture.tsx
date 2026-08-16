@@ -29,6 +29,20 @@
   verbatim) : retirer `defaultValue?: never` de `champ.tsx` fait rougir CE FICHIER sur le
   cas n°2 (« Unused '@ts-expect-error' directive »), la ligne exacte que la mutation de
   la Task 3 avait identifiée. La ligne restaurée, le fichier redevient vert.
+
+  ═══ CAS N°7, AJOUTÉ APRÈS LA REVUE DES TASKS 10/11 — L'ÉTALEMENT SUR `Selecteur` N'AVAIT
+  PAS SON CAS ═══
+
+  Le type de `Selecteur` a été RÉÉCRIT à la Task 11 pour accepter les groupes
+  (`GroupeSelecteur`, options mutuellement exclusives avec `groupes`). Cette réécriture est
+  exactement le genre de changement qui peut faire tomber `defaultValue?: never` sans que
+  personne ne le remarque — la barrière qu'on vient de toucher est celle qui compte le
+  plus. Le cas n°7 couvre l'étalement sur `Selecteur`, symétrique du cas n°2 sur `Champ`.
+
+  Vérifié par mutation le 2026-08-16 (même méthode que le cas n°2, voir le rapport de
+  tâche pour les deux sorties verbatim) : retirer `defaultValue?: never` de
+  `selecteur.tsx` fait rougir CE FICHIER sur le cas n°7 (« Unused '@ts-expect-error'
+  directive »). La ligne restaurée, le fichier redevient vert.
 */
 import { Champ } from './champ'
 import { Selecteur } from './selecteur'
@@ -67,6 +81,15 @@ export function CasQuiDoiventRougir() {
       {/* 6. `value` OMIS — un champ sans valeur est non contrôlé par un autre chemin. */}
       {/* @ts-expect-error D111 — value est obligatoire sur Champ ; l'omettre doit rougir. */}
       <Champ label="F" onChange={() => {}} />
+
+      {/*
+        7. ÉTALEMENT sur Selecteur — symétrique du cas 2, sur le type réécrit à la Task 11
+        pour les groupes (`options`/`groupes` mutuellement exclusifs). Sans
+        `defaultValue?: never` dans `ProprietesSelecteurBase`, cette ligne compilerait
+        malgré le `Omit`.
+      */}
+      {/* @ts-expect-error D111 — sans defaultValue?: never, cet étalement échapperait à Omit et compilerait sur Selecteur. */}
+      <Selecteur label="G" value="" onChange={() => {}} options={[]} {...proprietesEtalees} />
     </>
   )
 }
