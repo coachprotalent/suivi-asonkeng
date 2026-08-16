@@ -1,26 +1,344 @@
+/*
+  ═══ LE SYSTÈME DE DESIGN « FILIATION » — PHASE 6, D106 À D116 ═══
+
+  CE FICHIER EST LA SEULE SOURCE DE VÉRITÉ DU VOCABULAIRE VISUEL (D109). Aucun composant
+  de `src/composants/` ne porte de valeur littérale : ni couleur, ni rayon, ni ombre, ni
+  espacement de rythme, ni taille de police. Changer de direction visuelle coûte donc CE
+  FICHIER, et lui seul — propriété vérifiable, pas intention (preuve n°2 du §7).
+
+  AUCUN FICHIER DE CONFIGURATION JAVASCRIPT N'EXISTE (D108). Tailwind 4 lit sa
+  configuration depuis le CSS. Un `tailwind.config.ts` ajouté « pour la forme »
+  introduirait une seconde source de vérité pour les mêmes valeurs — la classe de défaut
+  que ce projet combat sous le nom de CARTE FAUSSE TRANSMISE COMME ACQUISE, rencontrée
+  trois fois sur la seule phase 5.
+
+  DEUX NIVEAUX, ET C'EST DÉLIBÉRÉ :
+    1. `:root` déclare les VALEURS. C'est le seul endroit où un hexadécimal figure.
+    2. `@theme inline` expose ces valeurs à Tailwind SANS LES RECOPIER — `inline` fait que
+       l'utilitaire émet `var(--fond)` et non `#F2F4F1`. C'est ce qui rend D107 (densité)
+       et D116 (thème sombre futur) réalisables par une simple redéclaration en cascade,
+       sans retoucher un seul composant. Sans `inline`, Tailwind figerait la valeur dans
+       chaque utilitaire et la cascade n'aurait plus rien à surcharger.
+*/
+
 @import "tailwindcss";
 
+/* ════════════════════════════════════════════════════════════════════════════
+   1. LES VALEURS
+   ════════════════════════════════════════════════════════════════════════════ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /*
+    ── Couleur (§4.1). Les neutres portent un BIAIS VERT, choisi et non hérité : un gris
+    pur jurerait avec le rail de filiation, qui est l'élément signature de la direction.
+  */
+  --fond: #F2F4F1;
+  --surface: #FFFFFF;
+  --encre: #1C2321;
+  --encre-attenuee: #626F68;
+  --filet: #DCE3DD;
+  --bord-carte: #E3E9E3;
+  --filiation: #7E9A86;
+  --action: #2F5D46;
+  --sur-action: #FFFFFF;
+
+  /*
+    ── Couleurs d'état, distinctes de `--action`, employées UNIQUEMENT en pastille (D126).
+    `--etat-refus` sert AUSSI au texte des bandeaux de refus, où il est employé comme
+    COULEUR DE TEXTE sur `--surface`, jamais comme fond.
+  */
+  --etat-acquis: #3F6B52;
+  --etat-attente: #C08A2E;
+  --etat-refus: #97402F;
+  --etat-neutre: #7E9A86;
+
+  /*
+    ── Typographie (§4.2). AUCUNE POLICE N'EST CHARGÉE : la pile système est CHOISIE, pas
+    subie. Charger une police introduirait un octet bloquant sur le premier rendu de chaque
+    page pour un bénéfice esthétique. Les deux polices Google que `layout.tsx` chargeait
+    (Geist, Geist Mono) ont été retirées par cette même tâche — elles étaient téléchargées,
+    préchargées, et écrasées par un `font-family: Arial` posé trois lignes plus bas.
+  */
+  --pile-texte: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --pile-mono: ui-monospace, "Cascadia Mono", "Segoe UI Mono", Menlo, Consolas, monospace;
+
+  /*
+    ── Espacement. LE RYTHME DE 4 PX N'EST PAS À INSTAURER : `--spacing` vaut déjà
+    0.25rem dans le thème par défaut de Tailwind 4 (`node_modules/tailwindcss/theme.css:325`),
+    et `p-1` vaut donc déjà 4 px. Ce qui manque, ce sont des jetons NOMMÉS que D107 puisse
+    remapper. Les voici — SIX, et six seulement, plus un plancher qui ne bouge jamais.
+  */
+  --esp-1: 0.25rem; /* 4 px — PLANCHER, hors des six, jamais remappé */
+  --esp-2: 0.5rem; /* 8 px */
+  --esp-3: 0.75rem; /* 12 px */
+  --esp-4: 1rem; /* 16 px */
+  --esp-6: 1.5rem; /* 24 px */
+  --esp-8: 2rem; /* 32 px */
+  --esp-10: 2.5rem; /* 40 px */
+
+  /*
+    ── Rayon UNIQUE : 4 px (§4.3). L'inventaire relève `rounded-md` 126 fois, `rounded` nu
+    4 fois et `rounded-full` 2 fois, sans qu'aucune de ces valeurs ne porte de sens
+    différent. Une seule survit, et la classe `rounded-bord` est la seule que ce fichier
+    expose (voir le reset de namespace plus bas).
+  */
+  --rayon: 0.25rem;
+
+  /*
+    ── Cible tactile : 44 PX DE HAUTEUR MINIMALE pour tout élément interactif, y compris
+    les chevrons de dépliage de l'arbre. C'est la contrainte qui coûte des lignes visibles,
+    et c'est ELLE que la densité compacte (D107) NE TOUCHE PAS : une cible tactile réduite
+    serait une régression d'accessibilité déguisée en densité.
+  */
+  --cible-tactile: 2.75rem;
+
+  /*
+    ── Le rail de filiation : un bord gauche de 2 px, avec un retrait de 0.9 rem. Il marque
+    la PROFONDEUR et le LIEN DE DISCIPULAT — il porte une information vraie, il n'est pas
+    une décoration. NE JAMAIS le poser là où aucune relation n'existe (piège n°6 : le rail
+    ne doit pas mentir). L'annuaire `/membres` n'en porte pas : il affiche antenne, ville
+    et situation, jamais un faiseur de disciple.
+  */
+  --rail-epaisseur: 2px;
+  --rail-retrait: 0.9rem;
+
+  /*
+    ── Le diametre de la pastille d'etat (D126). UN JETON A LUI, ET PAS `--esp-2`.
+
+    Une pastille n'est pas de l'espacement : si elle empruntait un des six jetons remappes
+    par la densite compacte (D107), elle RETRECIRAIT sur `/comptes`, `/demandes` et
+    `/evenements/a-traiter` — c'est-a-dire sur les trois ecrans ou le reperage par la
+    couleur a justifie la densite. La conception est explicite : la densite compacte ne
+    remappe QUE des jetons d'espacement.
+  */
+  --pastille-taille: 0.5rem;
+
+  /*
+    ── L'anneau de focus (D114). ZÉRO CLASSE DE FOCUS DANS TOUT LE DÉPÔT aujourd'hui : le
+    focus repose entièrement sur le défaut du navigateur, et les deux `outline-none` du
+    dépôt le suppriment sans rien mettre à la place. Ce n'est pas une préférence
+    esthétique : c'est la seule chose qui rende l'application utilisable au clavier, et elle
+    est absente.
+  */
+  --anneau-focus: #2F5D46;
+  --anneau-focus-epaisseur: 2px;
+  --anneau-focus-retrait: 2px;
 }
+
+/*
+  ── DENSITÉ COMPACTE (D107). SIX JETONS D'ESPACEMENT, ET SIX SEULEMENT.
+
+  Ni la couleur, ni la typographie, ni le rayon, ni `--esp-1`, ni `--cible-tactile` ne
+  changent. C'est un attribut posé PAR L'ÉCRAN, jamais un réglage : aucune persistance,
+  aucune synchronisation entre onglets, aucun défaut à justifier, aucun axe de test
+  supplémentaire sur les vingt-sept écrans. La bonne densité est une propriété de la
+  TÂCHE, pas de la personne.
+
+  ÉCRANS CONCERNÉS, ET EUX SEULS : `/comptes`, `/evenements/a-traiter`, `/demandes`.
+*/
+[data-densite="compact"] {
+  --esp-2: 0.25rem;
+  --esp-3: 0.5rem;
+  --esp-4: 0.75rem;
+  --esp-6: 1rem;
+  --esp-8: 1.5rem;
+  --esp-10: 2rem;
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   2. L'EXPOSITION À TAILWIND
+   ════════════════════════════════════════════════════════════════════════════ */
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-fond: var(--fond);
+  --color-surface: var(--surface);
+  --color-encre: var(--encre);
+  --color-encre-attenuee: var(--encre-attenuee);
+  --color-filet: var(--filet);
+  --color-bord-carte: var(--bord-carte);
+  --color-filiation: var(--filiation);
+  --color-action: var(--action);
+  --color-sur-action: var(--sur-action);
+  --color-etat-acquis: var(--etat-acquis);
+  --color-etat-attente: var(--etat-attente);
+  --color-etat-refus: var(--etat-refus);
+  --color-etat-neutre: var(--etat-neutre);
+
+  --font-sans: var(--pile-texte);
+  --font-mono: var(--pile-mono);
+
+  /*
+    Cinq degrés et pas un de plus (§4.2). L'inventaire relève 28 `<h1>` dont 26 partagent
+    déjà le même style, 25 `<h2>` uniformes, et un unique `<h3>` que RIEN ne distingue
+    visuellement d'une étiquette de champ. Chaque degré porte SA TAILLE ET SA GRAISSE :
+    `text-titre` suffit, il n'y a plus de `font-semibold` à ne pas oublier.
+  */
+  --text-titre: 1.5rem;
+  --text-titre--font-weight: 650;
+  --text-titre--line-height: 1.25;
+  --text-section: 1.125rem;
+  --text-section--font-weight: 650;
+  --text-section--line-height: 1.35;
+  --text-corps: 1rem;
+  --text-corps--font-weight: 400;
+  --text-corps--line-height: 1.5;
+  --text-nom: 0.95rem;
+  --text-nom--font-weight: 600;
+  --text-nom--line-height: 1.4;
+  --text-petit: 0.85rem;
+  --text-petit--font-weight: 400;
+  --text-petit--line-height: 1.45;
+
+  /* Hors des six jetons remappes par la densite : voir `--pastille-taille`. */
+  --spacing-pastille: var(--pastille-taille);
+
+  --spacing-esp-1: var(--esp-1);
+  --spacing-esp-2: var(--esp-2);
+  --spacing-esp-3: var(--esp-3);
+  --spacing-esp-4: var(--esp-4);
+  --spacing-esp-6: var(--esp-6);
+  --spacing-esp-8: var(--esp-8);
+  --spacing-esp-10: var(--esp-10);
+
+  /*
+    RESET DE NAMESPACE, PUIS UNE SEULE VALEUR. `--radius-*: initial` supprime `rounded-xs`,
+    `rounded-sm`, `rounded-md`, `rounded-lg`, `rounded-xl`, `rounded-2xl`… du thème. Seule
+    `rounded-bord` subsiste. Un rayon divergent devient donc IMPOSSIBLE À ÉCRIRE, et non
+    « déconseillé » — même mécanique que D111 sur `defaultValue`.
+
+    ⚠️ CE RESET CASSE LES 126 `rounded-md` DES ÉCRANS NON ENCORE MIGRÉS. Il est donc posé
+    à la TASK 24, pas ici. Les deux lignes ci-dessous restent COMMENTÉES jusque-là, avec
+    ce commentaire, pour que la Task 24 n'ait qu'à les décommenter.
+  */
+  /* --radius-*: initial; */
+  /* --radius-bord: var(--rayon); */
+
+  /*
+    TROIS POINTS DE RUPTURE RÉELS (D115), et les autres n'existent plus. Le §3 de la
+    spécification maîtresse promet « mobile d'abord » depuis le premier jour ; le dépôt
+    compte QUATRE usages de point de rupture, tous en `sm:`, tous pour le même motif de
+    grille à deux colonnes. `md:`, `lg:`, `xl:`, `2xl:` sont à zéro.
+
+    Le reset `--breakpoint-*: initial` fait qu'un `xl:` écrit par distraction ne produit
+    AUCUNE classe — il ne « marche pas discrètement autrement », il n'existe pas. Les trois
+    valeurs redéclarées sont exactement celles du thème par défaut
+    (`node_modules/tailwindcss/theme.css:327-329`) : aucun écran existant ne change de
+    comportement.
+  */
+  --breakpoint-*: initial;
+  --breakpoint-sm: 40rem;
+  --breakpoint-md: 48rem;
+  --breakpoint-lg: 64rem;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+/* ════════════════════════════════════════════════════════════════════════════
+   3. LA COUCHE DE BASE
+   ════════════════════════════════════════════════════════════════════════════ */
+
+@layer base {
+  body {
+    background-color: var(--fond);
+    color: var(--encre);
+    font-family: var(--pile-texte);
+  }
+
+  /*
+    ═══ D114 — L'ANNEAU DE FOCUS EST DÉFINI ICI, UNE FOIS, ET NULLE PART AILLEURS ═══
+
+    `:focus-visible` et non `:focus` : le halo n'apparaît que lorsque le navigateur juge
+    que l'utilisateur navigue au clavier. Un `:focus` nu ferait apparaître un anneau à
+    chaque clic de souris sur un bouton, ce qui a historiquement poussé des équipes à
+    écrire `outline: none` — c'est-à-dire à recréer exactement le défaut que cette règle
+    corrige.
+
+    `outline` et non `box-shadow` : l'outline suit la forme réelle de l'élément, ne
+    participe pas au flux, et survit à `overflow: hidden`.
+
+    À PARTIR D'ICI, `outline-none` SANS REMPLACEMENT VISIBLE EST UN DÉFAUT DE REVUE.
+  */
+  :focus-visible {
+    outline: var(--anneau-focus-epaisseur) solid var(--anneau-focus);
+    outline-offset: var(--anneau-focus-retrait);
+  }
+
+  /*
+    §9 — AUCUNE ANIMATION, hors les transitions d'état des composants interactifs, et
+    celles-ci s'effacent sous `prefers-reduced-motion`.
+  */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* ════════════════════════════════════════════════════════════════════════════
+   4. LES QUATRE UTILITAIRES MAISON
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/*
+  44 px de hauteur minimale (§4.3). `inline-flex` + `align-items: center` parce qu'une
+  simple `min-height` sur un `<button>` centre mal son texte selon le navigateur.
+*/
+@utility cible-tactile {
+  min-height: var(--cible-tactile);
+  display: inline-flex;
+  align-items: center;
+}
+
+/*
+  ═══ LE RAIL DE FILIATION — L'ÉLÉMENT SIGNATURE (D106) ═══
+
+  Un bord gauche de 2 px en `--filiation`, avec un retrait. IL PORTE UNE INFORMATION VRAIE :
+  la profondeur dans l'arbre, ou l'existence d'un lien de discipulat affiché. S'il apparaît
+  là où aucune relation n'existe, il devient une décoration qui AFFIRME QUELQUE CHOSE DE
+  FAUX — la forme de défaut la plus coûteuse de ce projet (piège n°6).
+
+  Les cinq seuls sites légitimes, vérifiés dans le code le 2026-08-16 :
+    - `/arborescence`, chaque nœud (profondeur) ;
+    - `/membres/[id]`, lignes « Faiseur de disciple » et « Dirigeant », section
+      « Disciples actifs » ;
+    - `/membres/[id]/arbre`, le formulaire de rattachement ;
+    - `/demandes`, le champ « Dirigeant proposé » de `FormulaireValidationSuivi` ;
+    - `/evenements/a-traiter`, le sélecteur de faiseur de disciple.
+*/
+@utility rail-filiation {
+  border-left: var(--rail-epaisseur) solid var(--filiation);
+  padding-left: var(--rail-retrait);
+}
+
+/*
+  §4.2 — `tabular-nums` PARTOUT OÙ DES CHIFFRES S'ALIGNENT : pagination, décomptes, dates.
+  Posé par utilitaire sur les seuls conteneurs concernés, jamais en global, où il
+  déformerait le texte courant.
+*/
+@utility chiffres-alignes {
+  font-variant-numeric: tabular-nums;
+}
+
+/*
+  ═══ D113 — LE REMPLACEMENT DE `outline-none`, PAS SON RETRAIT ═══
+
+  Le bandeau de refus reçoit le focus PROGRAMMATIQUEMENT (`element.focus()`), sur un
+  élément non interactif portant `tabIndex={-1}`. Or `:focus-visible` ne se déclenche PAS
+  de façon fiable sur un focus programmatique appliqué à un élément non interactif : les
+  navigateurs y appliquent leur propre heuristique, fondée sur la dernière modalité
+  d'interaction. S'en remettre à `:focus-visible` ici, c'est laisser au navigateur le soin
+  de décider si l'utilisateur voit ou non où le focus vient d'atterrir.
+
+  D'où une règle `:focus` NUE, explicite, réservée à ce seul cas : quand le focus arrive
+  sur un refus, il se voit, toujours. C'est ce que les deux `outline-none` du dépôt
+  (`inscription/formulaire-inscription.tsx:230`, `membres/formulaire-membre.tsx:275`)
+  retiraient sans rien mettre à la place.
+*/
+@utility refus-focus {
+  &:focus {
+    outline: var(--anneau-focus-epaisseur) solid var(--etat-refus);
+    outline-offset: var(--anneau-focus-retrait);
+  }
 }
