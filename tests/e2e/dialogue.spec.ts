@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import {
   accepterConfirmation,
   fermerConfirmationParEchap,
@@ -122,7 +122,8 @@ async function seConnecter(page: Page) {
   await expect(page).toHaveURL(/\/tableau-de-bord/)
 }
 
-async function ouvrirLaConfirmation(page: Page) {
+/** Ouvre la confirmation de la ligne du type de test, et REND cette ligne. */
+async function ouvrirLaConfirmation(page: Page): Promise<Locator> {
   await page.goto('/evenements/types')
   await expect(page.getByText(LIBELLE_TYPE)).toBeVisible()
   const ligne = page.locator('li').filter({ hasText: LIBELLE_TYPE })
@@ -140,6 +141,7 @@ async function ouvrirLaConfirmation(page: Page) {
     disparaissait — le prochain qui y touche le saura ICI, pas trois fichiers plus loin.
   */
   await expect(page.locator('form dialog')).toHaveCount(0)
+  return ligne
 }
 
 test("le dialogue PIÈGE le focus : la tabulation n'atteint jamais un élément interactif extérieur", async ({
@@ -200,16 +202,25 @@ test('Échap ferme le dialogue SANS rien soumettre', async ({ page }) => {
 
 test('le focus REVIENT sur le bouton déclencheur après la fermeture', async ({ page }) => {
   await seConnecter(page)
-  await ouvrirLaConfirmation(page)
+  const ligne = await ouvrirLaConfirmation(page)
   await fermerConfirmationParEchap(page)
 
   /*
     Le bouton « Désactiver » de CETTE ligne doit avoir repris le focus. Sans restitution,
     l'utilisateur clavier se retrouve sur `<body>`, en haut de page, et doit re-tabuler
     jusqu'à l'endroit où il était.
+
+    ⚠️ ON COMPARE L'ÉLÉMENT, JAMAIS SON TEXTE (revue finale de branche, I1). Cette assertion
+    lisait `document.activeElement?.textContent` et y cherchait « Désactiver ». Or
+    `activeElement` N'EST JAMAIS NUL dans un document rendu : sans restitution, il retombe
+    sur `<body>`, dont le `textContent` concatène le texte de TOUTE la page — qui contient
+    « Désactiver », puisque le test ferme par Échap et que rien n'a donc muté. L'assertion
+    passait dans les deux cas, et le repli sur `<body>` est précisément celui que le test du
+    piège de focus, dix lignes plus haut, gère explicitement. L'identité de nœud, elle,
+    distingue les deux états.
   */
-  const texteFocalise = await page.evaluate(() => document.activeElement?.textContent ?? '')
-  expect(texteFocalise).toContain('Désactiver')
+  const bouton = ligne.getByRole('button', { name: 'Désactiver' })
+  await expect(bouton).toBeFocused()
 })
 
 test('Annuler ne soumet rien, Confirmer soumet une seule fois', async ({ page }) => {
