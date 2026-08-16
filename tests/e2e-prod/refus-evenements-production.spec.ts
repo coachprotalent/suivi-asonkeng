@@ -219,22 +219,35 @@ test("le refus « fiche cible non active » — remonté d'un MARQUEUR POSTGRES 
   // ce qui reproduit EXACTEMENT le cas réel visé — un onglet resté ouvert qui reposte un
   // identifiant devenu invalide entre-temps.
   const champCache = ligne.locator('input[name="membreCibleId"]')
-  await champCache.evaluate((element, valeur) => {
-    ;(element as HTMLInputElement).value = valeur
-  }, idMembreArchive)
-  // GARDE : sans elle, un re-rendu React qui réinitialiserait le champ contrôlé rendrait le
-  // formulaire vide, le contrôle amont `champManquantConversion` renverrait
-  // MESSAGE_FICHE_CIBLE_OBLIGATOIRE, et le test échouerait sur l'assertion suivante SANS
-  // qu'on sache que c'est la forge qui a raté, pas le refus qui manque.
-  await expect(champCache).toHaveValue(idMembreArchive)
+  async function forcerChampCache() {
+    await champCache.evaluate((element, valeur) => {
+      ;(element as HTMLInputElement).value = valeur
+    }, idMembreArchive)
+    // GARDE : sans elle, un re-rendu React qui réinitialiserait le champ contrôlé rendrait
+    // le formulaire vide, le contrôle amont `champManquantConversion` renverrait
+    // MESSAGE_FICHE_CIBLE_OBLIGATOIRE, et le test échouerait sur l'assertion suivante SANS
+    // qu'on sache que c'est la forge qui a raté, pas le refus qui manque.
+    await expect(champCache).toHaveValue(idMembreArchive)
+  }
+  await forcerChampCache()
   // M11 — la conversion porte une confirmation. Depuis la Task 15 (D124), ce n'est plus une
   // boîte native mais le `<dialog>` de `Dialogue` : le clic sur « Convertir » n'ouvre que le
   // dialogue, sans lui ce test échouerait sur l'absence du refus, en donnant à croire que le
   // refus a disparu. Le message est asséré, ce qui en fait aussi le contrôle positif de la
   // confirmation.
+  //
+  // ⚠️ DEUXIÈME FORÇAGE, DÉCOUVERT EN FAISANT TOURNER CETTE PREUVE (Task 15) : ouvrir le
+  // dialogue appelle `setConversionConfirmationDemandee(true)` dans `LigneATraiter`, ce qui
+  // RE-RESTITUE `SelecteurMembre` — et son champ caché est CONTRÔLÉ (`value={valeur?.id ?? ''}`),
+  // donc ce re-rendu écrase silencieusement le premier forçage et revide le champ. Avant la
+  // Task 13, aucun rendu React ne s'intercalait entre le forçage et la soumission native
+  // (`window.confirm` ne déclenche aucun état) : le premier forçage suffisait. Ce n'est plus
+  // le cas — il faut reforcer APRÈS l'ouverture du dialogue, juste avant « Confirmer », qui
+  // est le DERNIER moment où `LigneATraiter` se re-rend avant `requestSubmit`.
   await ligne.getByRole('button', { name: 'Convertir' }).click()
   const dialogueOuvert = page.locator('dialog[open]')
   const texteConfirmation = await dialogueOuvert.locator('p').first().innerText()
+  await forcerChampCache()
   await dialogueOuvert.getByRole('button', { name: 'Confirmer' }).click()
   // `expect.poll` inchangé bien que la valeur soit déjà résolue : ne pas modifier la forme
   // de l'assertion elle-même (Task 15, D124 — seuls les gestionnaires de dialogue natif
