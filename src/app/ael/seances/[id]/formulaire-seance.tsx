@@ -1,45 +1,70 @@
 'use client'
 
-import { useActionState } from 'react'
+import { useActionState, useState } from 'react'
 import type { SeanceAelDetail } from '@/lib/donnees/ael'
+import { Bouton } from '@/composants/ui/bouton'
+import { Champ } from '@/composants/ui/champ'
+import { Formulaire } from '@/composants/ui/formulaire'
 import { ChampIntervenant } from './champ-intervenant'
 import { enregistrerSeance, type EtatSeance } from './actions'
 
 const etatInitial: EtatSeance = { erreur: null }
 
+/** Les deux champs libres de ce fichier (Task 23) : date et thème, fermés par `Champ`. */
 export function FormulaireSeance({ seance }: { seance: SeanceAelDetail }) {
   const [etat, envoyer, enCours] = useActionState(enregistrerSeance, etatInitial)
+  const [date, setDate] = useState(seance.date)
+  const [theme, setTheme] = useState(seance.theme ?? '')
 
   return (
-    <form action={envoyer} className="flex flex-col gap-6">
+    <Formulaire
+      action={envoyer}
+      erreur={etat.erreur}
+      enCours={enCours}
+      actions={
+        <div className="flex flex-wrap gap-esp-3">
+          <Bouton
+            type="submit"
+            name="intention"
+            value="enregistrer"
+            variante="secondaire"
+            enCours={enCours}
+            libelleAttente="Enregistrement…"
+          >
+            Enregistrer
+          </Bouton>
+          {seance.etat !== 'tenue' ? (
+            <Bouton
+              type="submit"
+              name="intention"
+              value="tenir"
+              enCours={enCours}
+              libelleAttente="Enregistrement…"
+            >
+              Marquer tenue
+            </Bouton>
+          ) : null}
+        </div>
+      }
+    >
       <input type="hidden" name="seanceId" value={seance.id} />
 
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor="date" className="text-sm font-medium">
-          Date
-        </label>
-        <input
-          id="date"
-          name="date"
-          type="date"
-          required
-          defaultValue={seance.date}
-          className="rounded-md border border-neutral-300 px-3 py-2"
-        />
-      </div>
+      <Champ
+        label="Date"
+        name="date"
+        type="date"
+        required
+        value={date}
+        onChange={(evenement) => setDate(evenement.target.value)}
+      />
 
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor="theme" className="text-sm font-medium">
-          Thème
-        </label>
-        <input
-          id="theme"
-          name="theme"
-          type="text"
-          defaultValue={seance.theme ?? ''}
-          className="rounded-md border border-neutral-300 px-3 py-2"
-        />
-      </div>
+      <Champ
+        label="Thème"
+        name="theme"
+        type="text"
+        value={theme}
+        onChange={(evenement) => setTheme(evenement.target.value)}
+      />
 
       {/*
         `membreIdInitial` (la colonne brute) EN PLUS de `membreInitial` (l'embed) : les
@@ -65,35 +90,6 @@ export function FormulaireSeance({ seance }: { seance: SeanceAelDetail }) {
         membreInitial={seance.moderateurMembre}
         libreInitial={seance.moderateurLibre}
       />
-
-      {etat.erreur ? (
-        <p role="alert" className="text-sm text-red-600">
-          {etat.erreur}
-        </p>
-      ) : null}
-
-      <div className="flex flex-wrap gap-3">
-        <button
-          type="submit"
-          name="intention"
-          value="enregistrer"
-          disabled={enCours}
-          className="rounded-md border border-neutral-300 px-4 py-2 text-sm font-medium disabled:opacity-50"
-        >
-          {enCours ? 'Enregistrement…' : 'Enregistrer'}
-        </button>
-        {seance.etat !== 'tenue' ? (
-          <button
-            type="submit"
-            name="intention"
-            value="tenir"
-            disabled={enCours}
-            className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-          >
-            {enCours ? 'Enregistrement…' : 'Marquer tenue'}
-          </button>
-        ) : null}
-      </div>
-    </form>
+    </Formulaire>
   )
 }

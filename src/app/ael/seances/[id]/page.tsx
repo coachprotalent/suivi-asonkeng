@@ -1,9 +1,11 @@
-import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { formaterDateSeule } from '@/lib/format/date'
 import { seanceParId, presencesDeSeance } from '@/lib/donnees/ael'
+import type { EtatSeanceAel } from '@/lib/domaine/ael'
 import { membresBrefsParIds, membresDesAntennes } from '@/lib/donnees/membres'
 import { estModerateurOuAdministrateur, exigerProfilActif } from '@/lib/securite/garde'
+import { EnTetePage } from '@/composants/ui/en-tete-page'
+import { EtatBadge, type TonEtat } from '@/composants/ui/etat-badge'
 import { annulerSeance, remettrePrevue } from './actions'
 import { BoutonTransitionEtat } from './bouton-transition-etat'
 import { FormulaireSeance } from './formulaire-seance'
@@ -13,6 +15,15 @@ const LIBELLE_ETAT: Record<string, string> = {
   prevue: 'Prévue',
   tenue: 'Tenue',
   annulee: 'Annulée',
+}
+
+// ⚠️ `LIBELLE_ETAT` VIT EN DOUBLE avec `ael/seances/page.tsx:9` — voir le commentaire de
+// tête de ce fichier-là. Duplication de DONNÉES D'AFFICHAGE, signalée, non factorisée
+// (D121).
+const TON_ETAT_SEANCE: Record<EtatSeanceAel, TonEtat> = {
+  prevue: 'attente',
+  tenue: 'acquis',
+  annulee: 'refus',
 }
 
 /**
@@ -90,35 +101,38 @@ export default async function PageSeanceAel({ params }: { params: Promise<{ id: 
   }
 
   return (
-    <main className="mx-auto max-w-2xl px-6 py-10">
-      <Link href="/ael/seances" className="text-sm underline underline-offset-4">
-        Retour aux séances
-      </Link>
-      <header className="mt-4 mb-8">
-        <h1 className="text-2xl font-semibold">{formaterDateSeule(seance.date)}</h1>
-        <p className="text-sm text-neutral-500">
-          {seance.antennes.map((a) => a.nom).join(', ') || 'Aucune antenne'} · {LIBELLE_ETAT[seance.etat]}
-        </p>
-      </header>
+    <main className="mx-auto max-w-2xl px-esp-6 py-esp-10">
+      <EnTetePage
+        retour={{ href: '/ael/seances', libelle: 'Retour aux séances' }}
+        titre={formaterDateSeule(seance.date)}
+        soustitre={
+          <span className="inline-flex flex-wrap items-center gap-esp-2">
+            {seance.antennes.map((a) => a.nom).join(', ') || 'Aucune antenne'}
+            <EtatBadge ton={TON_ETAT_SEANCE[seance.etat]} libelle={LIBELLE_ETAT[seance.etat]} />
+          </span>
+        }
+      />
 
       {peutGerer ? (
         <FormulaireSeance seance={seance} />
       ) : (
-        <dl className="divide-y divide-neutral-200">
-          <div className="flex justify-between gap-4 py-3">
-            <dt className="text-sm text-neutral-500">Thème</dt>
-            <dd className="text-sm">{seance.theme ?? '—'}</dd>
+        <dl className="divide-y divide-filet">
+          <div className="flex justify-between gap-esp-4 py-esp-3">
+            <dt className="text-petit text-encre-attenuee">Thème</dt>
+            <dd className="text-corps">{seance.theme ?? '—'}</dd>
           </div>
-          <div className="flex justify-between gap-4 py-3">
-            <dt className="text-sm text-neutral-500">Enseignant</dt>
-            <dd className="text-sm">
-              {libelleIntervenant(seance.enseignantMembreId, seance.enseignantMembre, seance.enseignantLibre) ?? '—'}
+          <div className="flex justify-between gap-esp-4 py-esp-3">
+            <dt className="text-petit text-encre-attenuee">Enseignant</dt>
+            <dd className="text-corps">
+              {libelleIntervenant(seance.enseignantMembreId, seance.enseignantMembre, seance.enseignantLibre) ??
+                '—'}
             </dd>
           </div>
-          <div className="flex justify-between gap-4 py-3">
-            <dt className="text-sm text-neutral-500">Modérateur</dt>
-            <dd className="text-sm">
-              {libelleIntervenant(seance.moderateurMembreId, seance.moderateurMembre, seance.moderateurLibre) ?? '—'}
+          <div className="flex justify-between gap-esp-4 py-esp-3">
+            <dt className="text-petit text-encre-attenuee">Modérateur</dt>
+            <dd className="text-corps">
+              {libelleIntervenant(seance.moderateurMembreId, seance.moderateurMembre, seance.moderateurLibre) ??
+                '—'}
             </dd>
           </div>
         </dl>
@@ -142,7 +156,7 @@ export default async function PageSeanceAel({ params }: { params: Promise<{ id: 
         `tenue` (`20260817120000`, `is distinct from`).
       */}
       {peutGerer && seance.etat !== 'prevue' ? (
-        <div className="mt-6 flex flex-wrap gap-4">
+        <div className="mt-esp-6 flex flex-wrap gap-esp-4">
           <form action={remettrePrevue}>
             <input type="hidden" name="seanceId" value={seance.id} />
             <BoutonTransitionEtat
@@ -162,7 +176,7 @@ export default async function PageSeanceAel({ params }: { params: Promise<{ id: 
       ) : null}
 
       {peutGerer && seance.etat !== 'annulee' ? (
-        <div className="mt-2 flex flex-wrap gap-4">
+        <div className="mt-esp-2 flex flex-wrap gap-esp-4">
           <form action={annulerSeance}>
             <input type="hidden" name="seanceId" value={seance.id} />
             {/*
@@ -183,8 +197,8 @@ export default async function PageSeanceAel({ params }: { params: Promise<{ id: 
         </div>
       ) : null}
 
-      <section className="mt-10">
-        <h2 className="mb-3 text-lg font-medium">Présences</h2>
+      <section className="mt-esp-10">
+        <h2 className="mb-esp-3 text-section">Présences</h2>
         {peutGerer ? (
           <Pointage
             seanceId={seance.id}
@@ -193,7 +207,7 @@ export default async function PageSeanceAel({ params }: { params: Promise<{ id: 
             presencesHorsListe={presencesHorsListe}
           />
         ) : (
-          <p className="text-sm text-neutral-600">
+          <p className="text-petit text-encre-attenuee">
             {presentsCount} présent{presentsCount > 1 ? 's' : ''}.
           </p>
         )}

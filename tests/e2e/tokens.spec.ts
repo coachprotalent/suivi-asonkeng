@@ -46,6 +46,15 @@ async function supprimerCompte(identifiant: string) {
   if (orphelin) await admin.auth.admin.deleteUser(orphelin.id)
 }
 
+/**
+ * Le nom AFFICHÉ des comptes de cette suite. Il paraît dans la méta de chaque ligne de
+ * `/tokens` (« Créé le … par … »), et c'est ce qui permet d'y désigner LA ligne de ce test
+ * plutôt qu'une ligne étrangère — voir la révocation plus bas.
+ */
+function nomAffichage(identifiant: string): string {
+  return `Test tokens ${identifiant}`
+}
+
 async function creerCompte(identifiant: string, administrateur: boolean) {
   const { data, error } = await admin.auth.admin.createUser({
     email: identifiantVersEmail(identifiant),
@@ -55,7 +64,7 @@ async function creerCompte(identifiant: string, administrateur: boolean) {
   if (error || !data.user) throw new Error(error?.message)
   const { error: erreurProfil } = await admin
     .from('profils')
-    .insert({ id: data.user.id, identifiant, nom_affichage: `Test tokens ${identifiant}` })
+    .insert({ id: data.user.id, identifiant, nom_affichage: nomAffichage(identifiant) })
   // Erreur d'insertion VÉRIFIÉE, pas jetée en silence : un insert de préparation
   // dont l'erreur est ignorée rendrait ce test vert en éprouvant un tout autre
   // chemin (registre du projet — trouvé trois fois dans cette phase). Sans ce
@@ -126,6 +135,16 @@ async function connecter(page: Page, identifiant: string) {
 }
 
 /**
+ * Task 15 (D124) — `window.confirm` est remplacé par le `<dialog>` natif de `Dialogue` :
+ * le clic déclencheur n'ouvre plus qu'un dialogue, il ne soumet plus rien tout seul.
+ * Accepte le dialogue OUVERT en cliquant son bouton « Confirmer » — l'équivalent de
+ * l'ancien `page.once('dialog', (d) => d.accept())` sur la boîte native.
+ */
+async function accepterDialogue(page: Page) {
+  await page.locator('dialog[open]').getByRole('button', { name: 'Confirmer' }).click()
+}
+
+/**
  * Génère un token générique depuis un `/tokens` déjà chargé (page déjà connectée
  * en administrateur), et rend le code en clair affiché. Le hachage est
  * immédiatement enregistré pour le nettoyage — voir `hachagesCrees`.
@@ -158,19 +177,43 @@ test('un administrateur génère un token générique, le voit une seule fois, p
   await page.reload()
   await expect(page.getByText(code)).toHaveCount(0)
 
-  // Correction au brief de la Task 15 (constatée à l'essai, pas seulement lue à la
-  // lecture du code) : `LigneToken.soumettre` ouvre un `window.confirm` avant de
-  // révoquer. Sans gestionnaire `dialog` enregistré, Playwright REJETTE
-  // automatiquement toute boîte de dialogue native (comportement documenté) — la
-  // révocation ne serait donc jamais déclenchée, et l'assertion suivante resterait
-  // bloquée jusqu'au timeout. Même précaution que `tests/e2e/archivage-compte.spec.ts`
-  // pour son bouton « Archiver ».
+  // `LigneToken` demande une confirmation avant de révoquer. Depuis la Task 15 (D124),
+  // ce n'est plus une boîte native mais le `<dialog>` de `Dialogue` : le clic sur
+  // « Révoquer » n'ouvre que le dialogue, la révocation part au clic sur « Confirmer ».
+  // Même précaution que `tests/e2e/archivage-compte.spec.ts` pour son bouton « Archiver ».
   // COMPTAGE AVANT, ET C'EST TOUT L'OBJET DU CORRECTIF CI-DESSOUS.
   const revocablesAvant = await page.getByRole('button', { name: 'Révoquer' }).count()
 
-  page.once('dialog', (dialogue) => dialogue.accept())
-  await page.getByRole('button', { name: 'Révoquer' }).first().click()
-  await expect(page.getByText('Révoqué le').first()).toBeVisible()
+  /*
+    ⚠️ LA LIGNE DE CE TEST, ET NON « UNE LIGNE QUELCONQUE » (enquête statuts, §6).
+    Les deux points de synchronisation qui suivaient cessaient de synchroniser dès qu'un
+    token révoqué ÉTRANGER traînait en base — état régulier, la base servant aussi de
+    production et n'étant jamais réinitialisée :
+      - `getByText('Révoqué le').first()` était satisfait IMMÉDIATEMENT par la ligne de cet
+        autre token, jamais par celle du test ;
+      - le comptage était satisfait à l'instant où le bouton cliqué bascule sur son libellé
+        d'attente « Révocation… », donc PENDANT que la Server Action est encore en vol.
+    Le test lisait alors `consommer_token_inscription` avant que l'écriture ait atterri, et
+    recevait 'ok'. Reproduit trois fois sur trois, et refermé par mutation dans les deux sens.
+    La ligne est donc désignée par le nom du compte créateur, propre à cette suite, et son
+    unicité est vérifiée AVANT le clic : une ambiguïté doit rougir ici, pas se traduire en
+    attente satisfaite ailleurs.
+  */
+  const ligneCible = page.locator('li').filter({ hasText: nomAffichage(IDENT_ADMIN) })
+  await expect(ligneCible, 'la ligne du token de CE test doit être identifiable seule').toHaveCount(1)
+
+  await ligneCible.getByRole('button', { name: 'Révoquer' }).click()
+  await accepterDialogue(page)
+  await expect(ligneCible.getByText('Révoqué le')).toBeVisible()
+
+  /*
+    LA FIN DE L'ÉCRITURE, PAS SON DÉBUT. `revocable` se calcule sur les données RENDUES par
+    le serveur (`!token.revoqueLe && !token.utiliseLe`) : tant que la revalidation n'a pas
+    atterri, la ligne porte encore un bouton — « Révocation… » pendant l'attente, puis de
+    nouveau « Révoquer » si l'action a échoué. Exiger qu'il n'en reste AUCUN des deux sur
+    cette ligne attend donc l'aller-retour complet, et rougit si la révocation échoue.
+  */
+  await expect(ligneCible.getByRole('button', { name: /Révo/ })).toHaveCount(0)
 
   // Le bouton de CETTE ligne disparaît : preuve que `revocable` est bien retombé à faux
   // côté interface. Mais une ligne qui porte une date de révocation ne prouve rien du
@@ -222,8 +265,8 @@ test('révoquer un token déjà révoqué par ailleurs (concurrence) échoue pro
     .eq('code_hash', codeHash)
   if (erreurPreparation) throw new Error(`préparation du token déjà révoqué impossible : ${erreurPreparation.message}`)
 
-  page.once('dialog', (dialogue) => dialogue.accept())
   await page.getByRole('button', { name: 'Révoquer' }).first().click()
+  await accepterDialogue(page)
 
   await expect(page.getByText(MESSAGE_TOKEN_DEJA_CLOS)).toBeVisible()
 
@@ -252,8 +295,8 @@ test('révoquer un token déjà consommé par ailleurs échoue proprement et lai
     .eq('code_hash', codeHash)
   if (erreurPreparation) throw new Error(`préparation du token déjà consommé impossible : ${erreurPreparation.message}`)
 
-  page.once('dialog', (dialogue) => dialogue.accept())
   await page.getByRole('button', { name: 'Révoquer' }).first().click()
+  await accepterDialogue(page)
 
   await expect(page.getByText(MESSAGE_TOKEN_DEJA_CLOS)).toBeVisible()
 

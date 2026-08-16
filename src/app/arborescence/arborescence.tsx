@@ -3,6 +3,10 @@
 import Link from 'next/link'
 import { useState, useTransition } from 'react'
 import { SelecteurMembre } from '@/app/membres/selecteur-membre'
+import { Bouton } from '@/composants/ui/bouton'
+import { Pagination } from '@/composants/ui/pagination'
+import { Refus } from '@/composants/ui/refus'
+import { basculeRefusee } from '@/lib/domaine/arbre-affichage'
 import type { MaillonNomme } from '@/lib/domaine/arbre'
 // La CONSTANTE, jamais la chaîne recopiée : trois copies du même texte en feraient trois
 // vérités, et c'est exactement ce que D100 vient de supprimer.
@@ -14,17 +18,7 @@ import {
   MESSAGE_ECHEC_LECTURE_CHEMIN,
   MESSAGE_ECHEC_LECTURE_NOEUD,
 } from './messages'
-
-/**
- * ═══ D104 — L'INDENTATION EST PLAFONNÉE, ET LE FIL D'ARIANE PORTE LE RESTE ═══
- * Interface mobile d'abord (§3 de la spécification maîtresse). Une indentation
- * proportionnelle à la profondeur épuise la largeur d'un téléphone vers le cinquième
- * niveau, et l'arbre devient illisible LÀ OÙ IL EST LE PLUS CONSULTÉ. Au-delà du plafond,
- * le niveau est écrit en toutes lettres sur le nœud : c'est l'information que
- * l'indentation ne peut plus porter.
- */
-const PROFONDEUR_MAX_INDENTATION = 4
-const DECALAGE_PAR_NIVEAU_REM = 1.25
+import { Noeud } from './noeud'
 
 type Props = {
   racines: MembreBref[]
@@ -34,7 +28,12 @@ type Props = {
   estAdmin: boolean
 }
 
-type EtatArbre = {
+/**
+ * EXPORTÉ pour `./noeud.tsx`, qui l'importe EN TYPE SEUL. Voir le commentaire d'import de
+ * ce fichier-là : le cycle d'import qui en résulte est effacé à la compilation, et il ne
+ * doit jamais devenir un cycle de valeurs.
+ */
+export type EtatArbre = {
   /** Une page de disciples par nœud déjà chargé. */
   noeuds: Record<string, PageDisciples>
   /** Nœuds actuellement dépliés. */
@@ -90,24 +89,21 @@ export function Arborescence({ racines, totalRacines, page, pages, estAdmin }: P
   /**
    * ═══ D105 — REFUS DE REDÉPLIER UN NŒUD DÉJÀ PRÉSENT DANS LA BRANCHE COURANTE ═══
    *
-   * Les deux barrières anti-cycle (`membres_anti_cycle`, et la vérification de
-   * `public.definir_arbre`) rendent un cycle IMPOSSIBLE DANS LA DONNÉE. L'AFFICHAGE NE
-   * DOIT PAS EN DÉPENDRE : un dépliage automatique piloté par la recherche, sur une donnée
-   * corrompue, BOUCLERAIT DANS LE NAVIGATEUR — l'onglet se fige, et rien n'indique
-   * pourquoi. Même raisonnement que la borne à 64 niveaux des fonctions récursives, « la
-   * seule protection restante si une donnée corrompue franchissait un jour les barrières »
-   * (1c, piège n°5).
-   *
-   * `ancetres` porte les identifiants des nœuds AU-DESSUS de celui-ci dans la branche
-   * RENDUE — pas dans l'arbre en base : c'est bien le cycle d'AFFICHAGE qu'on ferme.
+   * Les deux barrières de la DONNÉE (`membres_anti_cycle`, et la vérification de
+   * `public.definir_arbre`) rendent un cycle IMPOSSIBLE EN BASE. L'AFFICHAGE NE DOIT PAS EN
+   * DÉPENDRE : un dépliage automatique piloté par la recherche, sur une donnée corrompue,
+   * BOUCLERAIT DANS LE NAVIGATEUR — l'onglet se fige, et rien n'indique pourquoi.
    *
    * CE REFUS-CI NE FERME QUE LE CLIC, et il ne suffit pas : `allerA` écrit dans `deplies`
-   * sans passer par ici. La barrière qui BORNE RÉELLEMENT LA RÉCURSION est celle du rendu,
-   * dans `Noeud`. Celle-ci reste parce qu'elle est la seule à pouvoir DIRE quelque chose —
-   * une trace de console à l'instant du geste.
+   * sans passer par ici. La barrière qui BORNE RÉELLEMENT LA RÉCURSION est `noeudDeplie`,
+   * appliquée dans `Noeud` (`./noeud.tsx`). Celle-ci reste parce qu'elle est la seule à
+   * pouvoir DIRE quelque chose — une trace de console à l'instant du geste.
+   *
+   * La CONDITION est extraite dans `basculeRefusee` (`@/lib/domaine/arbre-affichage`) pour
+   * être testée ; la TRACE reste ici, où elle a un sens.
    */
   function basculer(membreId: string, ancetres: readonly string[]) {
-    if (ancetres.includes(membreId)) {
+    if (basculeRefusee(membreId, ancetres)) {
       console.error(
         'arborescence : dépliage refusé, ce membre est déjà présent dans la branche affichée — donnée incohérente ?',
         { membreId, ancetres },
@@ -184,7 +180,7 @@ export function Arborescence({ racines, totalRacines, page, pages, estAdmin }: P
       // sont distincts par construction (`ancetres_membre` remonte une chaîne), donc
       // aucune boucle ici — mais ON NE S'APPUIE PAS SUR CE RAISONNEMENT : cette écriture ne
       // passe PAS par `basculer`, et la barrière de D105 qui protège de la récursion est
-      // celle du RENDU (voir `Noeud`), pas celle du clic.
+      // celle du RENDU (`noeudDeplie`, voir `./noeud.tsx`), pas celle du clic.
       setEtat((precedent) => ({
         ...precedent,
         deplies: Array.from(new Set([...precedent.deplies, ...maillons.map((m) => m.id)])),
@@ -232,7 +228,7 @@ export function Arborescence({ racines, totalRacines, page, pages, estAdmin }: P
   const enModeRecherche = chemin !== null && chemin.length > 0
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-esp-8">
       <SelecteurMembre
         nom="rechercheArborescence"
         label="Aller à une personne"
@@ -242,13 +238,11 @@ export function Arborescence({ racines, totalRacines, page, pages, estAdmin }: P
         exclureId={null}
       />
 
-      {rechercheEnCours ? <p className="text-sm text-neutral-500">Chargement du chemin…</p> : null}
-
-      {erreurChemin ? (
-        <p role="alert" className="text-sm text-red-600">
-          {erreurChemin}
-        </p>
+      {rechercheEnCours ? (
+        <p className="text-petit text-encre-attenuee">Chargement du chemin…</p>
       ) : null}
+
+      <Refus message={erreurChemin} />
 
       {/*
         AVERTISSEMENT, PAS ERREUR : le chemin ci-dessous est juste et complet ; c'est
@@ -256,27 +250,34 @@ export function Arborescence({ racines, totalRacines, page, pages, estAdmin }: P
         rien n'a échoué, et rien n'est perdu pour l'utilisateur, qui garde le fil d'Ariane.
       */}
       {avertissementChemin ? (
-        <p role="status" className="text-sm text-amber-700">
+        <p role="status" className="text-petit text-etat-attente">
           {avertissementChemin}
         </p>
       ) : null}
 
       {enModeRecherche ? (
-        <section className="flex flex-col gap-4">
+        <section className="flex flex-col gap-esp-4">
           {/*
             D104 — LE FIL D'ARIANE porte l'information que l'indentation ne peut plus
             porter au-delà du plafond. Chaque maillon est cliquable ; un maillon illisible
             (« Fiche non consultable ») ne l'est pas, et GARDE SA PLACE — l'effacer ferait
             mentir l'écran sur la profondeur (D98).
+
+            D110 — CE FIL D'ARIANE N'EST PAS UN COMPOSANT, ET IL NE DOIT PAS LE DEVENIR :
+            il n'existe que sur cet écran, et le socle s'arrête à douze composants dont
+            chacun se répète au moins dix fois.
           */}
-          <nav aria-label="Chemin depuis la racine" className="text-sm text-neutral-600">
+          <nav aria-label="Chemin depuis la racine" className="text-petit text-encre-attenuee">
             {chemin!.map((maillon, indice) => (
               <span key={maillon.id}>
                 {indice > 0 ? ' → ' : ''}
                 {maillon.libelle === LIBELLE_FICHE_NON_CONSULTABLE ? (
-                  <span className="italic text-neutral-500">{maillon.libelle}</span>
+                  <span className="italic text-encre-attenuee">{maillon.libelle}</span>
                 ) : (
-                  <Link href={`/membres/${maillon.id}`} className="underline underline-offset-4">
+                  <Link
+                    href={`/membres/${maillon.id}`}
+                    className="text-action underline underline-offset-4"
+                  >
                     {maillon.libelle}
                   </Link>
                 )}
@@ -284,7 +285,7 @@ export function Arborescence({ racines, totalRacines, page, pages, estAdmin }: P
             ))}
           </nav>
 
-          <ul className="flex flex-col gap-1">
+          <ul className="flex flex-col gap-esp-1">
             <Noeud
               membre={{ id: chemin![0].id, nom: chemin![0].libelle, prenom: '' }}
               profondeur={0}
@@ -297,19 +298,15 @@ export function Arborescence({ racines, totalRacines, page, pages, estAdmin }: P
             />
           </ul>
 
-          <button
-            type="button"
-            onClick={() => allerA(null)}
-            className="self-start text-sm underline underline-offset-4"
-          >
+          <Bouton variante="lien" alignement="debut" onClick={() => allerA(null)}>
             Revenir aux membres sans faiseur de disciple
-          </button>
+          </Bouton>
         </section>
       ) : (
-        <section className="flex flex-col gap-4">
+        <section className="flex flex-col gap-esp-4">
           <div>
-            <h2 className="text-lg font-medium">Membres sans faiseur de disciple</h2>
-            <p className="text-sm text-neutral-500">
+            <h2 className="text-section">Membres sans faiseur de disciple</h2>
+            <p className="chiffres-alignes text-petit text-encre-attenuee">
               {totalRacines} membre{totalRacines > 1 ? 's' : ''} — ce sont les racines de
               l&apos;arbre.
               {pages > 1 ? ` Page ${page} sur ${pages}.` : ''}
@@ -317,11 +314,11 @@ export function Arborescence({ racines, totalRacines, page, pages, estAdmin }: P
           </div>
 
           {racines.length === 0 ? (
-            <p className="text-sm text-neutral-600">
+            <p className="text-corps text-encre-attenuee">
               Aucun membre actif sans faiseur de disciple.
             </p>
           ) : (
-            <ul className="flex flex-col gap-1">
+            <ul className="flex flex-col gap-esp-1">
               {racines.map((racine) => (
                 <Noeud
                   key={racine.id}
@@ -338,211 +335,9 @@ export function Arborescence({ racines, totalRacines, page, pages, estAdmin }: P
             </ul>
           )}
 
-          {pages > 1 ? (
-            <nav aria-label="Pagination" className="flex items-center justify-between gap-4">
-              {page > 1 ? (
-                <Link
-                  href={`/arborescence?page=${page - 1}`}
-                  className="text-sm underline underline-offset-4"
-                >
-                  Page précédente
-                </Link>
-              ) : (
-                <span />
-              )}
-              {page < pages ? (
-                <Link
-                  href={`/arborescence?page=${page + 1}`}
-                  className="text-sm underline underline-offset-4"
-                >
-                  Page suivante
-                </Link>
-              ) : (
-                <span />
-              )}
-            </nav>
-          ) : null}
+          <Pagination page={page} pages={pages} lienVersPage={(numero) => `/arborescence?page=${numero}`} />
         </section>
       )}
     </div>
-  )
-}
-
-type PropsNoeud = {
-  membre: { id: string; nom: string; prenom: string }
-  profondeur: number
-  ancetres: readonly string[]
-  etat: EtatArbre
-  cibleId: string | null
-  estAdmin: boolean
-  basculer: (membreId: string, ancetres: readonly string[]) => void
-  changerPage: (membreId: string, page: number) => void
-}
-
-/**
- * Un nœud de l'arbre. Composant de PREMIER NIVEAU du module, jamais défini à l'intérieur
- * d'`Arborescence` : une définition interne produirait un TYPE de composant neuf à chaque
- * rendu du parent, et React démonterait puis remonterait tout le sous-arbre — perdant le
- * focus et rejouant les chargements.
- *
- * D101 — TOUT MEMBRE ACTIF EST DÉPLIABLE, sans indicateur pré-calculé. Un indicateur par
- * enfant, ce serait UNE REQUÊTE PAR ENFANT (N+1) ; l'alternative serait une vue
- * d'agrégation permanente, avec sa RLS à écrire et à prouver, POUR UN CHEVRON. Déplier une
- * feuille affiche « Aucun disciple actif rattaché. » — un aller-retour de trop, à la
- * demande, plutôt que N requêtes systématiques que personne n'a demandées.
- */
-function Noeud({
-  membre,
-  profondeur,
-  ancetres,
-  etat,
-  cibleId,
-  estAdmin,
-  basculer,
-  changerPage,
-}: PropsNoeud) {
-  /*
-    ═══ D105 — LA BARRIÈRE ANTI-CYCLE EST ICI, AU RENDU, ET PAS SEULEMENT SUR LE CLIC ═══
-
-    `basculer` la porte déjà, mais `basculer` n'est que le chemin MANUEL : `allerA` écrit
-    directement dans `deplies` sans passer par elle, et `deplies` est une liste GLOBALE, pas
-    une liste par branche. Sur une donnée porteuse d'un cycle A → B → A, les deux
-    identifiants seraient dépliés et `Noeud(A) → Noeud(B) → Noeud(A) → …` récurserait sans
-    borne : l'onglet se fige, et rien n'indique pourquoi. C'est LITTÉRALEMENT le scénario que
-    D105 nomme dans sa justification — « un dépliage automatique piloté par la recherche, sur
-    une donnée corrompue » —, et c'est le RENDU qu'elle vise.
-
-    `ancetres` porte les identifiants des nœuds AU-DESSUS de celui-ci dans la branche RENDUE.
-    La liste s'allonge d'un cran à chaque niveau : refuser de déplier un nœud qui s'y trouve
-    déjà BORNE la récursion au nombre de nœuds distincts chargés, quelle que soit la donnée.
-
-    SUR UNE DONNÉE SAINE, CETTE CONDITION NE CHANGE RIEN : dans un arbre sans cycle, aucun
-    nœud n'est son propre ancêtre. Le nœud répété reste AFFICHÉ — l'effacer cacherait le
-    cycle —, simplement replié, et le clic dessus retombe sur le refus explicite de
-    `basculer`, qui, lui, le journalise. On ne journalise pas ICI : un rendu peut se rejouer
-    autant de fois que React le décide.
-  */
-  const deplie = etat.deplies.includes(membre.id) && !ancetres.includes(membre.id)
-  const chargement = etat.enCours.includes(membre.id)
-  const page = etat.noeuds[membre.id]
-  const erreur = etat.erreurs[membre.id]
-  const estCible = cibleId === membre.id
-
-  // D104 : l'indentation est PLAFONNÉE. Au-delà, le niveau est écrit en toutes lettres —
-  // c'est l'information que le décalage ne peut plus porter.
-  const decalage = Math.min(profondeur, PROFONDEUR_MAX_INDENTATION) * DECALAGE_PAR_NIVEAU_REM
-
-  const nomAffiche = membre.prenom ? `${membre.prenom} ${membre.nom}` : membre.nom
-
-  return (
-    <li style={{ marginLeft: `${decalage}rem` }}>
-      <div
-        className={`flex flex-wrap items-baseline gap-3 rounded-md px-2 py-1 ${
-          estCible ? 'bg-amber-50 font-medium' : ''
-        }`}
-      >
-        <button
-          type="button"
-          onClick={() => basculer(membre.id, ancetres)}
-          aria-expanded={deplie}
-          className="text-sm underline underline-offset-4"
-        >
-          {deplie ? '▾' : '▸'} {nomAffiche}
-        </button>
-
-        {page ? (
-          <span className="text-xs text-neutral-500">
-            {page.total} disciple{page.total > 1 ? 's' : ''}
-          </span>
-        ) : null}
-
-        {profondeur > PROFONDEUR_MAX_INDENTATION ? (
-          <span className="text-xs text-neutral-500">niveau {profondeur + 1}</span>
-        ) : null}
-
-        <Link href={`/membres/${membre.id}`} className="text-xs underline underline-offset-4">
-          Fiche
-        </Link>
-
-        {/*
-          UN LIEN, PAS UN POUVOIR. `estAdmin` sert ici à DÉCIDER D'AFFICHER, jamais à
-          protéger : la barrière est `exigerAdministrateur` dans `/membres/[id]/arbre`.
-          D92 : l'arbre lui-même n'écrit rien, et le rattachement reste sur la fiche, où la
-          portée d'autorité, le verrou consultatif et l'anti-cycle sont déjà éprouvés.
-        */}
-        {estAdmin ? (
-          <Link
-            href={`/membres/${membre.id}/arbre`}
-            className="text-xs underline underline-offset-4"
-          >
-            Rattacher
-          </Link>
-        ) : null}
-      </div>
-
-      {deplie ? (
-        <div>
-          {chargement && !page ? (
-            <p className="px-2 py-1 text-xs text-neutral-500">Chargement…</p>
-          ) : null}
-
-          {erreur ? (
-            <p role="alert" className="px-2 py-1 text-xs text-red-600">
-              {erreur}
-            </p>
-          ) : null}
-
-          {page && page.disciples.length === 0 && !erreur ? (
-            <p className="px-2 py-1 text-xs text-neutral-600">Aucun disciple actif rattaché.</p>
-          ) : null}
-
-          {page && page.disciples.length > 0 ? (
-            <ul className="flex flex-col gap-1">
-              {page.disciples.map((disciple) => (
-                <Noeud
-                  key={disciple.id}
-                  membre={disciple}
-                  profondeur={profondeur + 1}
-                  // D105 : la branche courante s'allonge d'un cran à chaque niveau.
-                  ancetres={[...ancetres, membre.id]}
-                  etat={etat}
-                  cibleId={cibleId}
-                  estAdmin={estAdmin}
-                  basculer={basculer}
-                  changerPage={changerPage}
-                />
-              ))}
-            </ul>
-          ) : null}
-
-          {page && page.pages > 1 ? (
-            <div
-              className="flex items-center gap-4 px-2 py-1 text-xs"
-              style={{ marginLeft: `${DECALAGE_PAR_NIVEAU_REM}rem` }}
-            >
-              <button
-                type="button"
-                disabled={page.page <= 1 || chargement}
-                onClick={() => changerPage(membre.id, page.page - 1)}
-                className="underline underline-offset-4 disabled:no-underline disabled:opacity-40"
-              >
-                Page précédente
-              </button>
-              <span className="text-neutral-500">
-                page {page.page} sur {page.pages}
-              </span>
-              <button
-                type="button"
-                disabled={page.page >= page.pages || chargement}
-                onClick={() => changerPage(membre.id, page.page + 1)}
-                className="underline underline-offset-4 disabled:no-underline disabled:opacity-40"
-              >
-                Page suivante
-              </button>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-    </li>
   )
 }

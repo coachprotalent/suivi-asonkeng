@@ -1,8 +1,14 @@
 import Link from 'next/link'
-import { redirect } from 'next/navigation'
+import { EnTetePage } from '@/composants/ui/en-tete-page'
+import { LigneListe, Liste } from '@/composants/ui/ligne-liste'
+import { Pagination } from '@/composants/ui/pagination'
+import { CLASSES_VARIANTE } from '@/composants/ui/bouton'
+import { CLASSES_CHAMP } from '@/composants/ui/champ'
 import { listerEvenements, listerTypesEvenement, typesEvenementActifs } from '@/lib/donnees/evenements'
 import { TAILLE_PAGE_EVENEMENTS } from '@/lib/donnees/evenements-lots'
 import { formaterDateSeule } from '@/lib/format/date'
+import { pageDemandee } from '@/lib/donnees/pagination'
+import { bornerPage } from '@/lib/navigation/bornage'
 import { estModerateurOuAdministrateur, exigerProfilActif } from '@/lib/securite/garde'
 import { creerEvenement } from './actions'
 import { FormulaireEvenement } from './formulaire-evenement'
@@ -17,11 +23,10 @@ export default async function PageEvenements({
   await exigerProfilActif()
 
   const { page: pageBrute, typeId } = await searchParams
-  // `Number.parseInt`, pas `Number(...)` : `Number('2.5') || 1` vaut `2.5`, non entier, qui
-  // franchit le garde de borne haute plus bas et s'afficherait sous l'étiquette « Page 2.5
-  // sur N » (M5, ronde du 2026-08-14). Même garde que `src/app/membres/page.tsx:32-33`.
-  const pageBrut = Number.parseInt(pageBrute ?? '1', 10)
-  const page = Number.isFinite(pageBrut) && pageBrut > 0 ? pageBrut : 1
+  // `pageDemandee` (src/lib/donnees/pagination.ts) : même garde M5 (`Number('2.5') || 1`
+  // vaut 2.5, non entier, qui franchissait la borne haute et s'affichait « page 2.5 sur
+  // N ») que `src/app/membres/page.tsx`.
+  const page = pageDemandee(pageBrute)
 
   const [{ lignes, total }, typesActifs, tousTypes, peutGerer] = await Promise.all([
     listerEvenements({ page, typeId }),
@@ -32,41 +37,48 @@ export default async function PageEvenements({
     estModerateurOuAdministrateur(),
   ])
 
-  const pages = Math.max(1, Math.ceil(total / TAILLE_PAGE_EVENEMENTS))
-  if (page > pages) {
-    // Page hors bornes (signet périmé, résultat qui a rétréci) : rediriger vers la
-    // dernière page réelle plutôt que d'afficher une liste vide qui se lirait comme
-    // « aucun évènement ». Même traitement que l'annuaire.
+  function lienPage(numero: number): string {
     const parametres = new URLSearchParams()
-    parametres.set('page', String(pages))
+    parametres.set('page', String(numero))
     if (typeId) parametres.set('typeId', typeId)
-    redirect(`/evenements?${parametres.toString()}`)
+    return `/evenements?${parametres.toString()}`
   }
 
+  // D121 — LE BORNAGE EST EXTRAIT, À COMPORTEMENT IDENTIQUE (src/lib/navigation/bornage.ts).
+  // Une adresse pointant au-delà de la dernière page réelle est un signet périmé (ou un
+  // résultat qui a rétréci depuis) : sans ce garde, l'en-tête affichait « N évènements ·
+  // page 99 sur 2 » pendant que le corps affirmait qu'aucun évènement ne correspond — deux
+  // vérités contradictoires sur le même écran. `total` vient de la LECTURE ELLE-MÊME,
+  // jamais d'un aller-retour préalable. HORS DE TOUT `try` : `bornerPage` appelle
+  // `redirect()`, qui lève une exception de contrôle Next.js (aucun `try` dans ce fichier).
+  const pages = bornerPage(page, total, TAILLE_PAGE_EVENEMENTS, lienPage)
+
   return (
-    <main className="mx-auto max-w-3xl px-6 py-10">
-      <Link href="/tableau-de-bord" className="text-sm underline underline-offset-4">
-        Retour au tableau de bord
-      </Link>
+    <main className="mx-auto max-w-3xl px-esp-6 py-esp-10">
+      <EnTetePage
+        retour={{ href: '/tableau-de-bord', libelle: 'Retour au tableau de bord' }}
+        titre="Évènements"
+        action={
+          peutGerer ? (
+            <Link href="/evenements/a-traiter" className={CLASSES_VARIANTE.lien}>
+              Participants à traiter
+            </Link>
+          ) : null
+        }
+      />
 
-      <header className="mt-4 mb-8 flex flex-wrap items-baseline justify-between gap-4">
-        <h1 className="text-2xl font-semibold">Évènements</h1>
-        {peutGerer ? (
-          <Link href="/evenements/a-traiter" className="text-sm underline underline-offset-4">
-            Participants à traiter
-          </Link>
-        ) : null}
-      </header>
-
-      {/* Filtre par type : formulaire GET, sans JavaScript, sans Server Action. */}
-      <form method="get" className="mb-8 flex flex-wrap items-end gap-3">
-        <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">Type</span>
-          <select
-            name="typeId"
-            defaultValue={typeId ?? ''}
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          >
+      {/*
+        ⚠️ SECOND ET DERNIER `<form method="get">` DU DÉPÔT (le premier vit sur
+        `/membres`). Son `<select>` reste NU, D111 ne l'atteint pas : une navigation
+        recharge la page depuis l'adresse, la remise à zéro d'un `<form action>` que
+        `Selecteur` referme n'est pas en jeu ici — voir le commentaire de tête de
+        `membres/page.tsx`. Il n'y en aura pas un troisième sans que ce commentaire soit
+        relu.
+      */}
+      <form method="get" className="mb-esp-8 flex flex-wrap items-end gap-esp-3">
+        <label className="flex flex-col gap-esp-1">
+          <span className="libelle-champ text-petit text-encre">Type</span>
+          <select name="typeId" defaultValue={typeId ?? ''} className={CLASSES_CHAMP}>
             <option value="">Tous</option>
             {tousTypes.map((type) => (
               <option key={type.id} value={type.id}>
@@ -75,26 +87,22 @@ export default async function PageEvenements({
             ))}
           </select>
         </label>
-        <button type="submit" className="rounded-md border border-neutral-300 px-3 py-2 text-sm">
+        <button type="submit" className={CLASSES_VARIANTE.secondaire}>
           Filtrer
         </button>
       </form>
 
       {peutGerer ? (
-        <section className="mb-10">
+        <section className="mb-esp-10">
           <details>
-            <summary className="cursor-pointer text-sm underline underline-offset-4">
+            <summary className="cible-tactile cursor-pointer text-petit text-action underline underline-offset-4">
               Nouvel évènement
             </summary>
-            <div className="mt-4">
-              <FormulaireEvenement
-                action={creerEvenement}
-                types={typesActifs}
-                libelleBouton="Créer"
-              />
+            <div className="mt-esp-4">
+              <FormulaireEvenement action={creerEvenement} types={typesActifs} libelleBouton="Créer" />
             </div>
           </details>
-          <p className="mt-3 text-sm text-neutral-500">
+          <p className="mt-esp-3 text-petit text-encre-attenuee">
             <Link href="/evenements/types" className="underline underline-offset-4">
               Gérer les types
             </Link>{' '}
@@ -103,58 +111,39 @@ export default async function PageEvenements({
         </section>
       ) : null}
 
-      <p className="mb-3 text-sm text-neutral-500">
+      <p className="mb-esp-3 text-petit text-encre-attenuee">
         {total} évènement{total > 1 ? 's' : ''}
       </p>
 
       {lignes.length === 0 ? (
-        <p className="text-sm text-neutral-600">Aucun évènement pour le moment.</p>
+        <p className="text-petit text-encre-attenuee">Aucun évènement pour le moment.</p>
       ) : (
-        <ul className="divide-y divide-neutral-200">
+        <Liste>
           {lignes.map((evenement) => (
-            <li key={evenement.id}>
-              <Link
-                href={`/evenements/${evenement.id}`}
-                className="flex flex-wrap items-center justify-between gap-4 py-3"
-              >
-                <span>
+            <LigneListe
+              key={evenement.id}
+              lien={`/evenements/${evenement.id}`}
+              principal={
+                <>
                   {evenement.titre}
-                  <span className="text-neutral-500"> · {evenement.typeLibelle}</span>
-                </span>
-                <span className="text-sm text-neutral-500">
+                  <span className="text-encre-attenuee"> · {evenement.typeLibelle}</span>
+                </>
+              }
+              meta={
+                <>
                   {formaterDateSeule(evenement.dateDebut)}
                   {evenement.dateFin ? ` — ${formaterDateSeule(evenement.dateFin)}` : ''}
                   {evenement.lieu ? ` · ${evenement.lieu}` : ''}
-                </span>
-              </Link>
-            </li>
+                </>
+              }
+            />
           ))}
-        </ul>
+        </Liste>
       )}
 
-      {pages > 1 ? (
-        <nav className="mt-6 flex items-center gap-4 text-sm">
-          {page > 1 ? (
-            <Link
-              href={`/evenements?page=${page - 1}${typeId ? `&typeId=${typeId}` : ''}`}
-              className="underline underline-offset-4"
-            >
-              Page précédente
-            </Link>
-          ) : null}
-          <span className="text-neutral-500">
-            Page {page} sur {pages}
-          </span>
-          {page < pages ? (
-            <Link
-              href={`/evenements?page=${page + 1}${typeId ? `&typeId=${typeId}` : ''}`}
-              className="underline underline-offset-4"
-            >
-              Page suivante
-            </Link>
-          ) : null}
-        </nav>
-      ) : null}
+      <div className="mt-esp-6">
+        <Pagination page={page} pages={pages} lienVersPage={lienPage} />
+      </div>
     </main>
   )
 }

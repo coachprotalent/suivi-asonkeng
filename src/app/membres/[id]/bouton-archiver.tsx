@@ -1,5 +1,17 @@
 'use client'
 
+import { useRef, useState } from 'react'
+import { Bouton } from '@/composants/ui/bouton'
+import { Dialogue } from '@/composants/ui/dialogue'
+
+/**
+ * ═══ D124 — `window.confirm` BLOQUE, UN `<dialog>` NE BLOQUE PAS ═══
+ * Voir le commentaire de tête de `antennes/bouton-bascule-antenne.tsx`, le gabarit des dix
+ * confirmations de famille A. SEUL LE `onClick` CHANGE : la construction du message en
+ * quatre branches ci-dessous n'est pas touchée — elle est déjà hors du `onClick`, déjà
+ * correcte, et `tests/e2e/annuaire.spec.ts:183-190` et
+ * `tests/e2e/archivage-compte.spec.ts:151-160` l'assertent au mot près.
+ */
 export function BoutonArchiver({
   nomComplet,
   archiver,
@@ -37,21 +49,32 @@ export function BoutonArchiver({
     }
   }
 
+  const [confirmationDemandee, setConfirmationDemandee] = useState(false)
+  const bouton = useRef<HTMLButtonElement | null>(null)
+
   return (
-    <button
-      type="submit"
-      onClick={(evenement) => {
-        if (!window.confirm(message)) {
+    <>
+      <Bouton
+        ref={bouton}
+        type="submit"
+        variante={archiver ? 'lien-danger' : 'lien'}
+        onClick={(evenement) => {
           evenement.preventDefault()
-        }
-      }}
-      className={
-        archiver
-          ? 'text-sm text-red-600 underline underline-offset-4'
-          : 'text-sm underline underline-offset-4'
-      }
-    >
-      {archiver ? 'Archiver' : 'Rétablir'}
-    </button>
+          setConfirmationDemandee(true)
+        }}
+      >
+        {archiver ? 'Archiver' : 'Rétablir'}
+      </Bouton>
+
+      <Dialogue
+        ouvert={confirmationDemandee}
+        message={message}
+        surConfirmation={() => {
+          setConfirmationDemandee(false)
+          bouton.current?.form?.requestSubmit(bouton.current)
+        }}
+        surAnnulation={() => setConfirmationDemandee(false)}
+      />
+    </>
   )
 }

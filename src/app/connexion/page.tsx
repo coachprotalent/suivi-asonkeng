@@ -1,4 +1,6 @@
 import Link from 'next/link'
+import { Carte } from '@/composants/ui/carte'
+import { EnTetePage } from '@/composants/ui/en-tete-page'
 import { FormulaireConnexion } from './formulaire-connexion'
 import { MESSAGE_INSCRIPTION_REUSSIE } from './messages'
 
@@ -22,17 +24,15 @@ export default async function PageConnexion({
   const { inscrit } = await searchParams
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-6">
-      <h1 className="mb-1 text-2xl font-semibold">Suivi Asonkeng</h1>
-      <p className="mb-8 text-sm text-neutral-500">Connectez-vous pour continuer.</p>
+    <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-esp-6">
+      <EnTetePage titre="Suivi Asonkeng" soustitre="Connectez-vous pour continuer." />
 
       {inscrit === '1' ? (
-        <p
-          role="status"
-          className="mb-6 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800"
-        >
-          {MESSAGE_INSCRIPTION_REUSSIE}
-        </p>
+        <div className="mb-esp-6">
+          <Carte ton="succes" role="status">
+            {MESSAGE_INSCRIPTION_REUSSIE}
+          </Carte>
+        </div>
       ) : null}
 
       <FormulaireConnexion />
@@ -53,9 +53,9 @@ export default async function PageConnexion({
 
           Les deux routes sont déjà publiques dans le middleware (`ROUTE_CONNEXION` et
           `ROUTE_INSCRIPTION`, comparaison par segment entier) : rien à y changer. */}
-      <p className="mt-8 text-sm text-neutral-600">
+      <p className="mt-esp-8 text-petit text-encre-attenuee">
         Vous avez reçu un code d&apos;inscription ?{' '}
-        <Link href="/inscription" className="underline underline-offset-4">
+        <Link href="/inscription" className="cible-tactile text-action underline underline-offset-4">
           Créer votre compte
         </Link>
       </p>

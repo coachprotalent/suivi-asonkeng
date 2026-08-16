@@ -1,55 +1,70 @@
 'use client'
 
-import { useActionState } from 'react'
-import Link from 'next/link'
+import { useActionState, useState } from 'react'
+import { Bouton } from '@/composants/ui/bouton'
+import { Champ } from '@/composants/ui/champ'
+import { EnTetePage } from '@/composants/ui/en-tete-page'
+import { Formulaire } from '@/composants/ui/formulaire'
 import { creerDemandeSuivi, type EtatDemandeSuivi } from './actions'
 
 const etatInitial: EtatDemandeSuivi = { erreur: null }
 
+/** Les 4 champs libres de ce fichier (Task 24) : prénom, nom, téléphone, ville. */
 export default function PageNouvelleDemande() {
   const [etat, envoyer, enCours] = useActionState(creerDemandeSuivi, etatInitial)
+  const [prenom, setPrenom] = useState('')
+  const [nom, setNom] = useState('')
+  const [telephone, setTelephone] = useState('')
+  const [ville, setVille] = useState('')
 
   return (
-    <main className="mx-auto max-w-2xl px-6 py-10">
-      <Link href="/demandes" className="text-sm underline underline-offset-4">
-        Retour aux demandes
-      </Link>
-      <h1 className="mt-4 mb-8 text-2xl font-semibold">Proposer une personne à suivre</h1>
+    <main className="mx-auto max-w-2xl px-esp-6 py-esp-10">
+      <EnTetePage
+        retour={{ href: '/demandes', libelle: 'Retour aux demandes' }}
+        titre="Proposer une personne à suivre"
+      />
 
-      <form action={envoyer} className="flex flex-col gap-4">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <label className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium">Prénom (obligatoire)</span>
-            <input name="prenom" required className="rounded-md border border-neutral-300 px-3 py-2" />
-          </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium">Nom (obligatoire)</span>
-            <input name="nom" required className="rounded-md border border-neutral-300 px-3 py-2" />
-          </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium">Téléphone</span>
-            <input name="telephone" type="tel" className="rounded-md border border-neutral-300 px-3 py-2" />
-          </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-sm font-medium">Ville</span>
-            <input name="ville" className="rounded-md border border-neutral-300 px-3 py-2" />
-          </label>
+      <Formulaire
+        action={envoyer}
+        erreur={etat.erreur}
+        enCours={enCours}
+        actions={
+          <Bouton type="submit" alignement="debut" enCours={enCours} libelleAttente="Envoi…">
+            Envoyer la demande
+          </Bouton>
+        }
+      >
+        {/* D115 — `md:` et non `sm:`, la bascule que ce phase généralise. */}
+        <div className="grid gap-esp-4 md:grid-cols-2">
+          <Champ
+            label="Prénom (obligatoire)"
+            name="prenom"
+            required
+            value={prenom}
+            onChange={(evenement) => setPrenom(evenement.target.value)}
+          />
+          <Champ
+            label="Nom (obligatoire)"
+            name="nom"
+            required
+            value={nom}
+            onChange={(evenement) => setNom(evenement.target.value)}
+          />
+          <Champ
+            label="Téléphone"
+            name="telephone"
+            type="tel"
+            value={telephone}
+            onChange={(evenement) => setTelephone(evenement.target.value)}
+          />
+          <Champ
+            label="Ville"
+            name="ville"
+            value={ville}
+            onChange={(evenement) => setVille(evenement.target.value)}
+          />
         </div>
-
-        {etat.erreur ? (
-          <p role="alert" className="text-sm text-red-600">
-            {etat.erreur}
-          </p>
-        ) : null}
-
-        <button
-          type="submit"
-          disabled={enCours}
-          className="self-start rounded-md bg-neutral-900 px-4 py-2 font-medium text-white disabled:opacity-50"
-        >
-          {enCours ? 'Envoi…' : 'Envoyer la demande'}
-        </button>
-      </form>
+      </Formulaire>
     </main>
   )
 }

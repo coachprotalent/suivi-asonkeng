@@ -1,6 +1,9 @@
 'use client'
 
 import { useActionState, useEffect, useRef, useState } from 'react'
+import { Bouton } from '@/composants/ui/bouton'
+import { Champ } from '@/composants/ui/champ'
+import { Formulaire } from '@/composants/ui/formulaire'
 import { creerTypeEvenement, type EtatTypeEvenement } from './actions'
 
 const etatInitial: EtatTypeEvenement = { erreur: null }
@@ -38,41 +41,34 @@ export function FormulaireType() {
   }, [enCours, etat])
 
   return (
-    <form action={envoyer} className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-1 flex-col gap-1.5">
-          <span className="text-sm font-medium">Libellé</span>
-          <input
-            name="libelle"
-            required
-            value={libelle}
-            onChange={(evenement) => setLibelle(evenement.target.value)}
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          />
-        </label>
-        <label className="flex w-24 flex-col gap-1.5">
-          <span className="text-sm font-medium">Ordre</span>
-          <input
-            name="ordre"
-            type="number"
-            value={ordre}
-            onChange={(evenement) => setOrdre(evenement.target.value)}
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          />
-        </label>
-        <button
-          type="submit"
-          disabled={enCours}
-          className="rounded-md bg-neutral-900 px-4 py-2 text-white disabled:opacity-50"
-        >
+    <Formulaire
+      action={envoyer}
+      erreur={etat.erreur}
+      enCours={enCours}
+      actions={
+        <Bouton type="submit" alignement="debut" enCours={enCours}>
           Ajouter
-        </button>
+        </Bouton>
+      }
+    >
+      <div className="flex flex-wrap items-end gap-esp-3">
+        <Champ
+          label="Libellé"
+          name="libelle"
+          value={libelle}
+          onChange={(evenement) => setLibelle(evenement.target.value)}
+          required
+          largeur="flexible"
+        />
+        <Champ
+          label="Ordre"
+          name="ordre"
+          type="number"
+          value={ordre}
+          onChange={(evenement) => setOrdre(evenement.target.value)}
+          largeur="etroite"
+        />
       </div>
-      {etat.erreur ? (
-        <p role="alert" className="text-sm text-red-600">
-          {etat.erreur}
-        </p>
-      ) : null}
-    </form>
+    </Formulaire>
   )
 }

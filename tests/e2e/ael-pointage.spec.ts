@@ -381,8 +381,11 @@ test("réversibilité (D49) : repasser à prévue préserve le pointage, le comp
 
   await seConnecter(page, IDENT_MODERATEUR, MDP_MODERATEUR)
   await page.goto(`/ael/seances/${idSeance}`)
-  page.once('dialog', (dialogue) => dialogue.accept())
+  // Task 15 (D124) : window.confirm est remplacé par le <dialog> natif de Dialogue — le
+  // clic n'ouvre plus qu'un dialogue, il ne soumet plus rien tout seul. « Confirmer » est
+  // donc cliqué explicitement, à la place de l'ancien page.once('dialog', (d) => d.accept()).
   await page.getByRole('button', { name: 'Repasser à prévue' }).click()
+  await page.locator('dialog[open]').getByRole('button', { name: 'Confirmer' }).click()
 
   await expect(async () => {
     expect(await etatSeanceEnBase()).toBe('prevue')

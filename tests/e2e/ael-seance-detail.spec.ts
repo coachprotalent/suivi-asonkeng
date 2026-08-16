@@ -76,6 +76,16 @@ async function seConnecter(page: Page, identifiant: string) {
   await expect(page).toHaveURL(/\/tableau-de-bord/)
 }
 
+/**
+ * Task 15 (D124) — `window.confirm` est remplacé par le `<dialog>` natif de `Dialogue` :
+ * le clic déclencheur n'ouvre plus qu'un dialogue, il ne soumet plus rien tout seul.
+ * Accepte le dialogue OUVERT en cliquant son bouton « Confirmer » — l'équivalent de
+ * l'ancien `page.once('dialog', (d) => d.accept())` sur la boîte native.
+ */
+async function accepterDialogue(page: Page) {
+  await page.locator('dialog[open]').getByRole('button', { name: 'Confirmer' }).click()
+}
+
 /** Crée une séance `prevue` directement en base, avec l'enseignant donné (ou aucun). */
 async function creerSeance(options: {
   theme?: string | null
@@ -294,8 +304,8 @@ test('réversibilité : marquer tenue, repasser à prévue, puis annuler — le 
     expect(data!.etat).toBe('tenue')
   }).toPass()
 
-  page.once('dialog', (dialogue) => dialogue.accept())
   await page.getByRole('button', { name: 'Repasser à prévue' }).click()
+  await accepterDialogue(page)
 
   await expect(async () => {
     const { data } = await admin.from('seances_ael').select('etat, theme').eq('id', idSeance).single()
@@ -308,8 +318,8 @@ test('réversibilité : marquer tenue, repasser à prévue, puis annuler — le 
   await expect(page.getByLabel('Thème')).toHaveValue(`${PREFIXE}-theme-reversible`)
   await expect(page.getByRole('button', { name: 'Marquer tenue' })).toBeVisible()
 
-  page.once('dialog', (dialogue) => dialogue.accept())
   await page.getByRole('button', { name: 'Annuler la séance' }).click()
+  await accepterDialogue(page)
 
   await expect(async () => {
     const { data } = await admin.from('seances_ael').select('etat').eq('id', idSeance).single()
@@ -324,8 +334,8 @@ test('réversibilité : marquer tenue, repasser à prévue, puis annuler — le 
   // bouton soit OFFERT (sans quoi le clic échoue), que la base repasse à `prevue`, et
   // que le thème ait survécu aux TROIS transitions.
   await expect(page.getByRole('button', { name: 'Repasser à prévue' })).toBeVisible()
-  page.once('dialog', (dialogue) => dialogue.accept())
   await page.getByRole('button', { name: 'Repasser à prévue' }).click()
+  await accepterDialogue(page)
 
   await expect(async () => {
     const { data } = await admin.from('seances_ael').select('etat, theme').eq('id', idSeance).single()

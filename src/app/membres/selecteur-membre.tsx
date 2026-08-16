@@ -2,8 +2,26 @@
 
 import { useEffect, useId, useRef, useState, useTransition } from 'react'
 import type { MembreBref } from '@/lib/donnees/membres'
+import { Bouton } from '@/composants/ui/bouton'
+import { CLASSES_CHAMP } from '@/composants/ui/champ'
 import { chercherMembres } from './recherche-action'
 
+/*
+  ═══ POURQUOI CE WIDGET N'ADOPTE PAS `Champ` TEL QUEL ═══
+
+  `Champ` (D111) rend label + input + aide comme UN SEUL BLOC, dans cet ordre, sans fente
+  pour rien d'autre. Ce composant est un COMBOBOX composite : le membre déjà choisi
+  s'affiche ENTRE le label et le champ de recherche, et deux messages d'état (recherche en
+  cours, aucun résultat) s'affichent APRÈS l'aide — trois insertions que `Champ` n'a nulle
+  part où loger sans rompre l'ordre existant.
+
+  Le champ de recherche réutilise donc `CLASSES_CHAMP`, exactement la voie que `champ.tsx`
+  documente pour ce cas : « quelques sites ont besoin de l'APPARENCE d'un champ sans
+  pouvoir passer par le composant ». Même chose pour le libellé (`libelle-champ text-petit
+  text-encre`, la classe que `Champ` applique au sien) et pour l'aide
+  (`text-petit text-encre-attenuee`) : mêmes jetons, mécanique locale, parce que la forme
+  du widget ne rentre pas dans le moule à trois pièces de `Champ`.
+*/
 type Props = {
   /** Nom du champ caché envoyé avec le formulaire. */
   nom: string
@@ -65,24 +83,20 @@ export function SelecteurMembre({ nom, label, aide, valeur, surChoix, exclureId 
   }
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-esp-1">
       <input type="hidden" name={nom} value={valeur?.id ?? ''} />
-      <label htmlFor={idSaisie} className="text-sm font-medium">
+      <label htmlFor={idSaisie} className="libelle-champ text-petit text-encre">
         {label}
       </label>
 
       {valeur ? (
-        <p className="flex items-center gap-3 text-sm">
-          <span className="rounded-md border border-neutral-300 px-3 py-2">
+        <p className="flex items-center gap-esp-3">
+          <span className={CLASSES_CHAMP}>
             {valeur.prenom ? `${valeur.prenom} ${valeur.nom}` : valeur.nom}
           </span>
-          <button
-            type="button"
-            onClick={() => retenir(null)}
-            className="text-sm underline underline-offset-4"
-          >
+          <Bouton type="button" variante="lien" onClick={() => retenir(null)}>
             Détacher
-          </button>
+          </Bouton>
         </p>
       ) : null}
 
@@ -93,22 +107,22 @@ export function SelecteurMembre({ nom, label, aide, valeur, surChoix, exclureId 
         onChange={(evenement) => setTerme(evenement.target.value)}
         placeholder="Chercher par nom ou prénom"
         aria-describedby={idAide}
-        className="rounded-md border border-neutral-300 px-3 py-2"
+        className={CLASSES_CHAMP}
       />
-      <span id={idAide} className="text-xs text-neutral-500">
+      <span id={idAide} className="text-petit text-encre-attenuee">
         {aide}
       </span>
 
-      {enCours ? <p className="text-xs text-neutral-500">Recherche…</p> : null}
+      {enCours ? <p className="text-petit text-encre-attenuee">Recherche…</p> : null}
 
       {resultatsAffiches.length > 0 ? (
-        <ul className="divide-y divide-neutral-200 rounded-md border border-neutral-300">
+        <ul className="divide-y divide-filet rounded-bord border border-bord-carte bg-surface">
           {resultatsAffiches.map((membre) => (
             <li key={membre.id}>
               <button
                 type="button"
                 onClick={() => retenir(membre)}
-                className="w-full px-3 py-2 text-left text-sm hover:bg-neutral-50"
+                className="cible-tactile w-full px-esp-3 py-esp-2 text-left text-petit text-encre hover:bg-fond"
               >
                 {membre.prenom} {membre.nom}
               </button>
@@ -123,7 +137,7 @@ export function SelecteurMembre({ nom, label, aide, valeur, surChoix, exclureId 
         partie, et l'utilisateur retape indéfiniment le même nom.
       */}
       {!enCours && terme.trim().length > 0 && resultatsAffiches.length === 0 ? (
-        <p className="text-xs text-neutral-500">Aucun membre actif ne correspond.</p>
+        <p className="text-petit text-encre-attenuee">Aucun membre actif ne correspond.</p>
       ) : null}
     </div>
   )

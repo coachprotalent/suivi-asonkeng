@@ -53,3 +53,21 @@ export function pageDemandee(brut: string | undefined): number {
   const valeur = Number.parseInt(brut ?? '1', 10)
   return Number.isFinite(valeur) && valeur > 0 ? valeur : 1
 }
+
+/**
+ * Nombre de pages d'un ensemble filtré. **Toujours au moins 1**, même pour un total nul.
+ *
+ * CE `Math.max(1, …)` N'EST PAS UNE COQUETTERIE : c'est ce qui rend le bornage de page
+ * NON BOUCLANT. La cible de la redirection est `pages` lui-même ; si `pages` pouvait valoir
+ * 0 sur une liste vide, la page rechargée porterait `page=0`, que `pageDemandee` ramène à
+ * 1, qui redéclenche `1 > 0` — et l'écran tournerait en rond. Les six écrans paginés du
+ * dépôt écrivent tous ce `Math.max(1, …)` à la main, et chacun l'explique en commentaire.
+ *
+ * PAS de `import 'server-only'` ici, comme dans tout ce module : ces outils ne touchent ni
+ * cookies ni clé de service, et `tests/rls/` doit pouvoir faire tourner EXACTEMENT ce code
+ * hors de Next.js. C'est aussi ce qui rend cette fonction testable dans l'environnement
+ * `node` de `vitest.config.ts`.
+ */
+export function nombreDePages(total: number, taillePage: number): number {
+  return Math.max(1, Math.ceil(total / taillePage))
+}

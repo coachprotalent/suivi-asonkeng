@@ -1,9 +1,14 @@
 'use client'
 
 import Link from 'next/link'
-import { useState, useTransition, type FormEvent } from 'react'
+import { useRef, useState, useTransition, type FormEvent } from 'react'
 import type { DemandeListe } from '@/lib/donnees/demandes'
 import type { MembreBref } from '@/lib/donnees/membres'
+import { Bouton } from '@/composants/ui/bouton'
+import { Champ } from '@/composants/ui/champ'
+import { Dialogue } from '@/composants/ui/dialogue'
+import { LigneListe } from '@/composants/ui/ligne-liste'
+import { Refus } from '@/composants/ui/refus'
 import { SelecteurMembre } from '@/app/membres/selecteur-membre'
 import {
   rejeterDemande,
@@ -31,7 +36,13 @@ export function LigneDemandeAdmin({
   dirigeantInitial: MembreBref | null
 }) {
   const [ficheRattachement, setFicheRattachement] = useState<MembreBref | null>(null)
+  // ⚠️ UN SEUL REFUS PARTAGÉ PAR TROIS CHEMINS (validation directe, rattachement, rejet) —
+  // c'est pourquoi ce fichier NE PASSE PAS par `Formulaire` (qui rendrait un `<Refus>` par
+  // `<form>`, à un endroit différent selon le chemin qui a échoué). Le bandeau reste rendu
+  // UNE SEULE FOIS, en bas de la ligne, comme avant cette migration : `Refus` est employé
+  // nu, sans le `<form>` qui l'enveloppe ailleurs.
   const [erreur, setErreur] = useState<string | null>(null)
+  const [motif, setMotif] = useState('')
   const [enCours, demarrer] = useTransition()
 
   // Les trois actions RETOURNENT leur refus, elles ne le lèvent plus
@@ -72,128 +83,131 @@ export function LigneDemandeAdmin({
    * `etat = 'en_attente'` mais aussi une demande `en_attente`, l'annulation est refusée, et
    * le membre n'est pas supprimable. Aucun geste de l'application ne rattrape ce cas. La
    * confirmation le DIT, au lieu de le laisser découvrir après coup.
+   *
+   * ═══ D124 — voir le commentaire de tête de `comptes/ligne-compte.tsx` sur
+   * `evenement.currentTarget` ═══ Ce site capturait DÉJÀ `formulaire` dans une variable
+   * avant le `window.confirm`, ce qui l'aurait mis à l'abri du défaut — mais la `FormData`
+   * elle-même est construite ici plus tôt encore, dans le clic, pour rester dans le MÊME
+   * style que les deux sites de `ligne-compte.tsx` qui, eux, en avaient besoin.
    */
+  const nomComplet = `${demande.membrePrenom ?? ''} ${demande.membreNom ?? ''}`.trim()
+  const consequenceRejet =
+    demande.origine === 'conversion_participant'
+      ? "Cette personne a été convertie depuis un évènement : sa fiche restera « en attente » DÉFINITIVEMENT, et aucun geste de l'application ne pourra plus l'activer ni la supprimer."
+      : 'Le demandeur en sera notifié avec le motif saisi.'
+  const messageRejet = `Rejeter la demande concernant ${nomComplet} ? ${consequenceRejet}`
+
+  const [confirmationRejetDemandee, setConfirmationRejetDemandee] = useState(false)
+  const donneesRejetEnAttente = useRef<FormData | null>(null)
+
   function soumettreRejet(evenement: FormEvent<HTMLFormElement>) {
     evenement.preventDefault()
-    const formulaire = evenement.currentTarget
-    const nomComplet = `${demande.membrePrenom ?? ''} ${demande.membreNom ?? ''}`.trim()
-    const consequence =
-      demande.origine === 'conversion_participant'
-        ? "Cette personne a été convertie depuis un évènement : sa fiche restera « en attente » DÉFINITIVEMENT, et aucun geste de l'application ne pourra plus l'activer ni la supprimer."
-        : 'Le demandeur en sera notifié avec le motif saisi.'
-    if (!window.confirm(`Rejeter la demande concernant ${nomComplet} ? ${consequence}`)) return
-    appeler(rejeterDemande, new FormData(formulaire))
+    donneesRejetEnAttente.current = new FormData(evenement.currentTarget)
+    setConfirmationRejetDemandee(true)
   }
 
   return (
-    <li className="py-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <span className="font-medium">
-          {demande.membrePrenom} {demande.membreNom}
-        </span>
-        <span className="text-sm text-neutral-500">
+    <LigneListe
+      principal={`${demande.membrePrenom} ${demande.membreNom}`}
+      meta={
+        <>
           {LIBELLE_ORIGINE[demande.origine]} · par {demande.demandeurNom}
-        </span>
-      </div>
+        </>
+      }
+      complement={
+        <div className="flex flex-col gap-esp-3">
+          {demande.origine === 'auto_inscription' ? (
+            <div className="flex flex-col gap-esp-3">
+              <Bouton type="button" onClick={validerNouvellePersonne} enCours={enCours} alignement="debut">
+                Valider comme nouvelle personne
+              </Bouton>
 
-      {demande.origine === 'auto_inscription' ? (
-        <div className="mt-3 flex flex-col gap-3">
-          <button
-            type="button"
-            onClick={validerNouvellePersonne}
-            disabled={enCours}
-            className="self-start rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white disabled:opacity-50"
-          >
-            Valider comme nouvelle personne
-          </button>
-
-          <form onSubmit={soumettreRattachement} className="flex flex-wrap items-end gap-3">
-            <div className="min-w-64 flex-1">
-              <SelecteurMembre
-                nom="membreExistantId"
-                label="Ou rattacher à une fiche existante"
-                aide="La fiche en_attente créée à l'inscription sera supprimée."
-                valeur={ficheRattachement}
-                surChoix={setFicheRattachement}
-                exclureId={demande.membreId}
-              />
+              <form onSubmit={soumettreRattachement} className="flex flex-wrap items-end gap-esp-3">
+                <div className="min-w-64 flex-1">
+                  <SelecteurMembre
+                    nom="membreExistantId"
+                    label="Ou rattacher à une fiche existante"
+                    aide="La fiche en_attente créée à l'inscription sera supprimée."
+                    valeur={ficheRattachement}
+                    surChoix={setFicheRattachement}
+                    exclureId={demande.membreId}
+                  />
+                </div>
+                <Bouton type="submit" variante="secondaire" disabled={!ficheRattachement} enCours={enCours}>
+                  Rattacher
+                </Bouton>
+              </form>
             </div>
-            <button
-              type="submit"
-              disabled={enCours || !ficheRattachement}
-              className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-50"
-            >
-              Rattacher
-            </button>
+          ) : demande.origine === 'demande_suivi' ? (
+            <FormulaireValidationSuivi
+              demandeId={demande.id}
+              membreId={demande.membreId ?? ''}
+              dirigeantInitial={dirigeantInitial}
+            />
+          ) : (
+            // D66 — origine `conversion_participant`. LE BOUTON DE VALIDATION, SEUL.
+            //
+            // PAS le formulaire de rattachement (§7.3 de la 2b le réserve à auto_inscription),
+            // PAS `FormulaireValidationSuivi` : ce dernier poserait le DEMANDEUR comme faiseur
+            // de disciple, et le demandeur est ici l'administrateur qui a converti — il n'est
+            // pas le faiseur de disciple de la personne convertie.
+            //
+            // MAIS LA VALIDATION, OUI, ET ELLE EST INDISPENSABLE : c'est LE SEUL GESTE DE TOUTE
+            // L'APPLICATION qui passe une fiche `en_attente` à `actif`. Sans elle, la fiche née
+            // du chemin 1 resterait invisible de tout compte ordinaire, son historique de
+            // séminaire n'apparaîtrait nulle part, et la conversion serait irréversible ET
+            // inachevable. Pour cette origine, la validation écrit `etat = 'actif'` ET RIEN
+            // D'AUTRE — aucun faiseur de disciple n'est posé.
+            <div className="flex flex-col gap-esp-2">
+              <Bouton type="button" onClick={validerNouvellePersonne} enCours={enCours} alignement="debut">
+                Valider comme nouvelle personne
+              </Bouton>
+              <p className="text-petit text-encre-attenuee">
+                Fiche créée par conversion d&apos;un participant externe. La validation la fait
+                passer à l&apos;état actif, sans lui donner de faiseur de disciple : rattachez-la
+                ensuite depuis{' '}
+                <Link href={`/membres/${demande.membreId}/arbre`} className="underline underline-offset-4">
+                  son arborescence
+                </Link>
+                . Le rejet, lui, ne défait pas la conversion : la fiche resterait en attente,
+                sans plus aucun geste pour l&apos;activer.
+              </p>
+            </div>
+          )}
+
+          <form onSubmit={soumettreRejet} className="flex flex-wrap items-end gap-esp-3">
+            <input type="hidden" name="demandeId" value={demande.id} />
+            {/* `demandeurProfilId` N'EST PLUS TRANSMIS (I6 de la revue finale) :
+                `rejeterDemande` le relit depuis `demandes_membre`. Le laisser ici
+                laisserait croire que le serveur s'en sert, et rouvrirait la porte à
+                un formulaire falsifié qui ferait partir le motif de rejet vers le
+                compte d'un tiers. */}
+            <Champ
+              label="Motif de rejet"
+              name="motif"
+              required
+              value={motif}
+              onChange={(evenement) => setMotif(evenement.target.value)}
+              largeur="flexible"
+            />
+            <Bouton type="submit" variante="bordure-danger" enCours={enCours}>
+              Rejeter
+            </Bouton>
           </form>
-        </div>
-      ) : demande.origine === 'demande_suivi' ? (
-        <FormulaireValidationSuivi
-          demandeId={demande.id}
-          membreId={demande.membreId ?? ''}
-          dirigeantInitial={dirigeantInitial}
-        />
-      ) : (
-        // D66 — origine `conversion_participant`. LE BOUTON DE VALIDATION, SEUL.
-        //
-        // PAS le formulaire de rattachement (§7.3 de la 2b le réserve à auto_inscription),
-        // PAS `FormulaireValidationSuivi` : ce dernier poserait le DEMANDEUR comme faiseur
-        // de disciple, et le demandeur est ici l'administrateur qui a converti — il n'est
-        // pas le faiseur de disciple de la personne convertie.
-        //
-        // MAIS LA VALIDATION, OUI, ET ELLE EST INDISPENSABLE : c'est LE SEUL GESTE DE TOUTE
-        // L'APPLICATION qui passe une fiche `en_attente` à `actif`. Sans elle, la fiche née
-        // du chemin 1 resterait invisible de tout compte ordinaire, son historique de
-        // séminaire n'apparaîtrait nulle part, et la conversion serait irréversible ET
-        // inachevable. Pour cette origine, la validation écrit `etat = 'actif'` ET RIEN
-        // D'AUTRE — aucun faiseur de disciple n'est posé.
-        <div className="mt-3 flex flex-col gap-2">
-          <button
-            type="button"
-            onClick={validerNouvellePersonne}
-            disabled={enCours}
-            className="self-start rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white disabled:opacity-50"
-          >
-            Valider comme nouvelle personne
-          </button>
-          <p className="text-sm text-neutral-600">
-            Fiche créée par conversion d&apos;un participant externe. La validation la fait
-            passer à l&apos;état actif, sans lui donner de faiseur de disciple : rattachez-la
-            ensuite depuis{' '}
-            <Link href={`/membres/${demande.membreId}/arbre`} className="underline underline-offset-4">
-              son arborescence
-            </Link>
-            . Le rejet, lui, ne défait pas la conversion : la fiche resterait en attente,
-            sans plus aucun geste pour l&apos;activer.
-          </p>
-        </div>
-      )}
 
-      <form onSubmit={soumettreRejet} className="mt-3 flex flex-wrap items-end gap-3">
-        <input type="hidden" name="demandeId" value={demande.id} />
-        {/* `demandeurProfilId` N'EST PLUS TRANSMIS (I6 de la revue finale) :
-            `rejeterDemande` le relit depuis `demandes_membre`. Le laisser ici
-            laisserait croire que le serveur s'en sert, et rouvrirait la porte à
-            un formulaire falsifié qui ferait partir le motif de rejet vers le
-            compte d'un tiers. */}
-        <label className="flex flex-1 flex-col gap-1.5">
-          <span className="text-sm font-medium">Motif de rejet</span>
-          <input name="motif" required className="rounded-md border border-neutral-300 px-3 py-2" />
-        </label>
-        <button
-          type="submit"
-          disabled={enCours}
-          className="rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-600 disabled:opacity-50"
-        >
-          Rejeter
-        </button>
-      </form>
+          <Dialogue
+            ouvert={confirmationRejetDemandee}
+            message={messageRejet}
+            surConfirmation={() => {
+              setConfirmationRejetDemandee(false)
+              if (donneesRejetEnAttente.current) appeler(rejeterDemande, donneesRejetEnAttente.current)
+            }}
+            surAnnulation={() => setConfirmationRejetDemandee(false)}
+          />
 
-      {erreur ? (
-        <p role="alert" className="mt-2 text-sm text-red-600">
-          {erreur}
-        </p>
-      ) : null}
-    </li>
+          <Refus message={erreur} />
+        </div>
+      }
+    />
   )
 }

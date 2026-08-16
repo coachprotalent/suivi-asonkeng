@@ -2,6 +2,8 @@
 
 import { useState, useTransition, type FormEvent } from 'react'
 import type { MembreBref } from '@/lib/donnees/membres'
+import { Bouton } from '@/composants/ui/bouton'
+import { Formulaire } from '@/composants/ui/formulaire'
 import { SelecteurMembre } from '@/app/membres/selecteur-membre'
 import { validerDemandeNouvellePersonne } from './actions'
 
@@ -41,33 +43,40 @@ export function FormulaireValidationSuivi({ demandeId, membreId, dirigeantInitia
   }
 
   return (
-    <form onSubmit={soumettre} className="mt-3 flex flex-col gap-3 rounded-md border border-neutral-200 p-3">
-      <input type="hidden" name="demandeId" value={demandeId} />
-      {/* `demandeurMembreId` N'EST PLUS TRANSMIS : `validerDemandeNouvellePersonne`
-          relit la fiche du demandeur depuis `profils`. C'est un FAIT, pas une
-          décision de l'administrateur ; le transmettre laissait un formulaire
-          falsifié écrire dans l'arbre une filiation qui n'a jamais eu lieu. */}
-      <input type="hidden" name="dirigeantForce" value={dirigeantForce ? '1' : '0'} />
-      <SelecteurMembre
-        nom="dirigeantId"
-        label="Dirigeant proposé"
-        aide="Dirigeant proposé à partir du demandeur : corrigeable avant validation. Le faiseur de disciple, lui, est fixé au demandeur et n'est jamais modifiable ici."
-        valeur={dirigeant}
-        surChoix={choisirDirigeant}
-        exclureId={membreId}
-      />
-      <button
-        type="submit"
-        disabled={enCours}
-        className="self-start rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white disabled:opacity-50"
+    <div className="rounded-bord border border-bord-carte p-esp-3">
+      <Formulaire
+        onSubmit={soumettre}
+        erreur={erreur}
+        enCours={enCours}
+        actions={
+          <Bouton type="submit" alignement="debut" enCours={enCours} libelleAttente="Validation…">
+            Valider comme nouvelle personne
+          </Bouton>
+        }
       >
-        {enCours ? 'Validation…' : 'Valider comme nouvelle personne'}
-      </button>
-      {erreur ? (
-        <p role="alert" className="text-sm text-red-600">
-          {erreur}
-        </p>
-      ) : null}
-    </form>
+        <input type="hidden" name="demandeId" value={demandeId} />
+        {/* `demandeurMembreId` N'EST PLUS TRANSMIS : `validerDemandeNouvellePersonne`
+            relit la fiche du demandeur depuis `profils`. C'est un FAIT, pas une
+            décision de l'administrateur ; le transmettre laissait un formulaire
+            falsifié écrire dans l'arbre une filiation qui n'a jamais eu lieu. */}
+        <input type="hidden" name="dirigeantForce" value={dirigeantForce ? '1' : '0'} />
+        {/*
+          ⚠️ LE RAIL DE FILIATION — l'un des CINQ sites légitimes (globals.css, D106). Ce
+          sélecteur affiche et corrige une PROPOSITION RÉELLE de discipulat, calculée
+          depuis l'arbre du demandeur (`dirigeantPropose`, `page.tsx`) : la relation
+          existe, le rail ne ment pas.
+        */}
+        <div className="rail-filiation">
+          <SelecteurMembre
+            nom="dirigeantId"
+            label="Dirigeant proposé"
+            aide="Dirigeant proposé à partir du demandeur : corrigeable avant validation. Le faiseur de disciple, lui, est fixé au demandeur et n'est jamais modifiable ici."
+            valeur={dirigeant}
+            surChoix={choisirDirigeant}
+            exclureId={membreId}
+          />
+        </div>
+      </Formulaire>
+    </div>
   )
 }

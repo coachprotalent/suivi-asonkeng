@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { compteurAelMembre } from '@/lib/donnees/ael'
-import { libelleFiche } from '@/lib/domaine/membre'
+import { libelleFiche, type EtatMembre } from '@/lib/domaine/membre'
 import { disciplesDe } from '@/lib/donnees/arbre'
 import { etatCompteLie } from '@/lib/donnees/comptes'
 import { seminairesAssistes } from '@/lib/donnees/evenements'
@@ -10,6 +10,11 @@ import { rolesDuProfil } from '@/lib/donnees/profils'
 import { statutsDuMembre } from '@/lib/donnees/statuts'
 import { formaterDateSeule } from '@/lib/format/date'
 import { aAutoriteSur, exigerProfilActif } from '@/lib/securite/garde'
+import { CLASSES_VARIANTE } from '@/composants/ui/bouton'
+import { Carte } from '@/composants/ui/carte'
+import { EnTetePage } from '@/composants/ui/en-tete-page'
+import { EtatBadge, type TonEtat } from '@/composants/ui/etat-badge'
+import { LigneListe, Liste } from '@/composants/ui/ligne-liste'
 import { archiverMembre, desarchiverMembre } from '../actions'
 import { BoutonArchiver } from './bouton-archiver'
 
@@ -17,6 +22,19 @@ const LIBELLE_SITUATION: Record<string, string> = {
   etudiant: 'Étudiant',
   travailleur: 'Travailleur',
   autre: 'Autre',
+}
+
+/** `EtatBadge` sert à `membre.etat`, et à lui seul (D126). */
+const TON_ETAT_MEMBRE: Record<EtatMembre, TonEtat> = {
+  actif: 'acquis',
+  en_attente: 'attente',
+  archive: 'refus',
+}
+
+const LIBELLE_ETAT_MEMBRE: Record<EtatMembre, string> = {
+  actif: 'Actif',
+  en_attente: 'En attente',
+  archive: 'Archivé',
 }
 
 export default async function PageFicheMembre({
@@ -80,47 +98,35 @@ export default async function PageFicheMembre({
     ['Compteur AEL', compteurAel !== null ? String(compteurAel) : '—'],
   ]
 
-  lignes.push(['Faiseur de disciple', libelleFiche(membre.faiseurDeDiscipleId, faiseur)])
+  const libelleFaiseur = libelleFiche(membre.faiseurDeDiscipleId, faiseur)
   const nomDirigeant = libelleFiche(membre.dirigeantId, dirigeant)
-  lignes.push([
-    'Dirigeant',
-    // `dirigeant_force` atteste seulement que la valeur n'a pas été saisie à la main —
-    // rien de plus. « Calculé » affirmerait que c'est ce que le calcul rendrait
-    // maintenant, ce que le commit 907bcf7 a jugé faux et corrigé sur l'écran de
-    // rattachement (un dirigeant « calculé » peut devenir périmé sans réécriture).
-    // On ne republie pas ce mensonge ici : l'absence de mention n'affirme rien, ce que
-    // le booléen soutient réellement.
-    nomDirigeant ? `${nomDirigeant}${membre.dirigeantForce ? ' (défini manuellement)' : ''}` : null,
-  ])
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-10">
-      <Link href="/membres" className="text-sm underline underline-offset-4">
-        Retour à l&apos;annuaire
-      </Link>
-
-      <header className="mt-4 mb-8 flex flex-wrap items-baseline justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">
-            {membre.prenom} {membre.nom}
-          </h1>
-          {/*
-            L'état vit en base et n'était affiché nulle part : une fiche archivée
-            était indiscernable d'une fiche active, et un administrateur arrivant
-            par un lien périmé pouvait la modifier en croyant suivre un membre actif.
-          */}
-          {membre.etat !== 'actif' ? (
-            <p className="mt-1 text-sm text-amber-700">
-              {membre.etat === 'archive'
-                ? "Fiche archivée — elle ne figure plus dans l'annuaire."
-                : 'Fiche en attente de validation.'}
-            </p>
-          ) : null}
-        </div>
-        <div className="flex items-center gap-4">
-          {estAdmin ? (
-            <>
-              <Link href={`/membres/${membre.id}/modifier`} className="text-sm underline underline-offset-4">
+    <main className="mx-auto max-w-3xl px-esp-6 py-esp-10">
+      <EnTetePage
+        retour={{ href: '/membres', libelle: "Retour à l'annuaire" }}
+        titre={`${membre.prenom} ${membre.nom}`}
+        soustitre={
+          <span className="inline-flex flex-wrap items-center gap-esp-2">
+            <EtatBadge ton={TON_ETAT_MEMBRE[membre.etat]} libelle={LIBELLE_ETAT_MEMBRE[membre.etat]} />
+            {/*
+              L'état vit en base et n'était affiché nulle part : une fiche archivée
+              était indiscernable d'une fiche active, et un administrateur arrivant
+              par un lien périmé pouvait la modifier en croyant suivre un membre actif.
+            */}
+            {membre.etat !== 'actif' ? (
+              <span>
+                {membre.etat === 'archive'
+                  ? "Fiche archivée — elle ne figure plus dans l'annuaire."
+                  : 'Fiche en attente de validation.'}
+              </span>
+            ) : null}
+          </span>
+        }
+        action={
+          estAdmin ? (
+            <div className="flex items-center gap-esp-4">
+              <Link href={`/membres/${membre.id}/modifier`} className={CLASSES_VARIANTE.lien}>
                 Modifier
               </Link>
               {/*
@@ -150,48 +156,83 @@ export default async function PageFicheMembre({
                   />
                 </form>
               ) : null}
-            </>
-          ) : null}
-        </div>
-      </header>
+            </div>
+          ) : null
+        }
+      />
 
       {archivageRefuse ? (
-        <p role="alert" className="mb-6 rounded-md bg-amber-50 p-3 text-sm text-amber-800">
-          Cette fiche ne peut pas être archivée : {archivageRefuse} en dépendent encore comme
-          faiseur de disciple. Rattachez ces personnes à quelqu&apos;un d&apos;autre, puis
-          recommencez.
-        </p>
+        <div className="mb-esp-6">
+          <Carte ton="avertissement" role="alert">
+            Cette fiche ne peut pas être archivée : {archivageRefuse} en dépendent encore comme
+            faiseur de disciple. Rattachez ces personnes à quelqu&apos;un d&apos;autre, puis
+            recommencez.
+          </Carte>
+        </div>
       ) : null}
 
       {archivageRefuseAdministrateur ? (
-        <p role="alert" className="mb-6 rounded-md bg-amber-50 p-3 text-sm text-amber-800">
-          Cette fiche ne peut pas être archivée : le compte qui lui est lié est le dernier
-          administrateur actif de l&apos;application. Archiver cette fiche le désactiverait et
-          laisserait l&apos;application sans administrateur. Donnez le rôle administrateur à
-          quelqu&apos;un d&apos;autre, sur l&apos;écran des comptes, puis recommencez.
-        </p>
+        <div className="mb-esp-6">
+          <Carte ton="avertissement" role="alert">
+            Cette fiche ne peut pas être archivée : le compte qui lui est lié est le dernier
+            administrateur actif de l&apos;application. Archiver cette fiche le désactiverait et
+            laisserait l&apos;application sans administrateur. Donnez le rôle administrateur à
+            quelqu&apos;un d&apos;autre, sur l&apos;écran des comptes, puis recommencez.
+          </Carte>
+        </div>
       ) : null}
 
       {desarchivageRefuse ? (
-        <p role="alert" className="mb-6 rounded-md bg-amber-50 p-3 text-sm text-amber-800">
-          Cette fiche ne peut pas être rétablie : {desarchivageRefuse} est archivé. Rattachez
-          cette fiche à un faiseur de disciple actif, ou rétablissez d&apos;abord{' '}
-          {desarchivageRefuse}, puis recommencez.
-        </p>
+        <div className="mb-esp-6">
+          <Carte ton="avertissement" role="alert">
+            Cette fiche ne peut pas être rétablie : {desarchivageRefuse} est archivé. Rattachez
+            cette fiche à un faiseur de disciple actif, ou rétablissez d&apos;abord{' '}
+            {desarchivageRefuse}, puis recommencez.
+          </Carte>
+        </div>
       ) : null}
 
-      <dl className="divide-y divide-neutral-200">
+      <dl className="divide-y divide-filet">
         {lignes.map(([intitule, valeur]) => (
-          <div key={intitule} className="flex justify-between gap-4 py-3">
-            <dt className="text-sm text-neutral-500">{intitule}</dt>
-            <dd className="text-sm">{valeur ?? '—'}</dd>
+          <div key={intitule} className="flex justify-between gap-esp-4 py-esp-3">
+            <dt className="text-petit text-encre-attenuee">{intitule}</dt>
+            <dd className="text-corps">{valeur ?? '—'}</dd>
           </div>
         ))}
+
+        {/*
+          ⚠️ MARQUE DE FILIATION (D106) — l'un des trois seuls emplacements légitimes de
+          cette fiche (voir globals.css) : c'est LA relation de discipulat de cette
+          personne. NULLE PART ailleurs sur ce `<dl>` — Antenne, Ville et Compteur AEL ne
+          sont pas des relations.
+        */}
+        <div className="rail-filiation flex justify-between gap-esp-4 py-esp-3">
+          <dt className="text-petit text-encre-attenuee">Faiseur de disciple</dt>
+          <dd className="text-corps">{libelleFaiseur ?? '—'}</dd>
+        </div>
+
+        {/*
+          `dirigeant_force` atteste seulement que la valeur n'a pas été saisie à la main —
+          rien de plus. « Calculé » affirmerait que c'est ce que le calcul rendrait
+          maintenant, ce que le commit 907bcf7 a jugé faux et corrigé sur l'écran de
+          rattachement (un dirigeant « calculé » peut devenir périmé sans réécriture).
+          On ne republie pas ce mensonge ici : l'absence de mention n'affirme rien, ce que
+          le booléen soutient réellement.
+
+          ⚠️ MARQUE DE FILIATION (D106), relation DÉRIVÉE de la précédente
+          (`proposerDirigeant`) — deuxième des trois seuls emplacements légitimes.
+        */}
+        <div className="rail-filiation flex justify-between gap-esp-4 py-esp-3">
+          <dt className="text-petit text-encre-attenuee">Dirigeant</dt>
+          <dd className="text-corps">
+            {nomDirigeant ? `${nomDirigeant}${membre.dirigeantForce ? ' (défini manuellement)' : ''}` : '—'}
+          </dd>
+        </div>
       </dl>
 
-      <section className="mt-8">
-        <div className="mb-3 flex items-baseline justify-between gap-4">
-          <h2 className="text-lg font-medium">Statuts</h2>
+      <section className="mt-esp-8">
+        <div className="mb-esp-3 flex items-baseline justify-between gap-esp-4">
+          <h2 className="text-section">Statuts</h2>
           {/*
             « Gérer » promettrait un pouvoir que ce compte n'a pas : sans autorité sur
             ce membre, il atteint le même écran mais n'y trouve ni formulaire
@@ -199,22 +240,25 @@ export default async function PageFicheMembre({
             journal — c'est ce dernier qui décrit le mieux ce que l'écran lui apporte
             de plus que cette fiche.
           */}
-          <Link href={`/membres/${membre.id}/statuts`} className="text-sm underline underline-offset-4">
+          <Link href={`/membres/${membre.id}/statuts`} className={CLASSES_VARIANTE.lien}>
             {peutEcrireStatuts ? 'Gérer' : 'Journal'}
           </Link>
         </div>
         {statuts.length === 0 ? (
-          <p className="text-sm text-neutral-600">Aucun statut attribué.</p>
+          <p className="text-petit text-encre-attenuee">Aucun statut attribué.</p>
         ) : (
-          <ul className="flex flex-wrap gap-2">
+          // ⚠️ PUCE DE CATALOGUE, PAS UN `EtatBadge` (voir C4) : `rounded-full border
+          // border-bord-carte`, SANS couleur. Un `EtatBadge` attribuerait une couleur
+          // d'état à un statut de catalogue, que la donnée ne porte pas.
+          <ul className="flex flex-wrap gap-esp-2">
             {statuts.map((statut) => (
               <li
                 key={statut.statutId}
-                className="rounded-full border border-neutral-300 px-3 py-1 text-sm"
+                className="rounded-full border border-bord-carte px-esp-3 py-esp-1 text-petit"
               >
                 {statut.libelle}
                 {statut.dateAcquisition ? (
-                  <span className="text-neutral-500"> · {formaterDateSeule(statut.dateAcquisition)}</span>
+                  <span className="text-encre-attenuee"> · {formaterDateSeule(statut.dateAcquisition)}</span>
                 ) : null}
               </li>
             ))}
@@ -222,8 +266,8 @@ export default async function PageFicheMembre({
         )}
       </section>
 
-      <section className="mt-8">
-        <h2 className="mb-3 text-lg font-medium">Séminaires assistés</h2>
+      <section className="mt-esp-8">
+        <h2 className="mb-esp-3 text-section">Séminaires assistés</h2>
         {/*
           Lue depuis la vue `seminaires_assistes` (D70, D71), la SEULE vue du projet en
           `security_invoker = false` : elle contourne délibérément la RLS de
@@ -244,20 +288,27 @@ export default async function PageFicheMembre({
           vide pour tout compte ordinaire, sans la moindre erreur (piège n°8 du design).
           AUCUN DÉSIR N'EST AFFICHÉ ICI, et la vue n'en expose aucun (D73) : ils restent
           réservés à l'administrateur et au modérateur, sur l'écran de l'évènement.
+
+          ⚠️ PAS DE MARQUE DE FILIATION ICI (piège n°6) : un séminaire n'est pas une
+          relation de discipulat.
         */}
         {seminaires.length === 0 ? (
-          <p className="text-sm text-neutral-600">Aucun séminaire enregistré.</p>
+          <p className="text-petit text-encre-attenuee">Aucun séminaire enregistré.</p>
         ) : (
-          <ul className="flex flex-wrap gap-2">
+          // ⚠️ PUCE DE CATALOGUE, PAS UN `EtatBadge` : même raison que ci-dessus.
+          <ul className="flex flex-wrap gap-esp-2">
             {seminaires.map((seminaire) => (
               <li
                 key={seminaire.evenementId}
-                className="rounded-full border border-neutral-300 px-3 py-1 text-sm"
+                className="rounded-full border border-bord-carte px-esp-3 py-esp-1 text-petit"
               >
-                <Link href={`/evenements/${seminaire.evenementId}`} className="underline underline-offset-4">
+                <Link
+                  href={`/evenements/${seminaire.evenementId}`}
+                  className="text-action underline underline-offset-4"
+                >
                   {seminaire.titre}
                 </Link>
-                <span className="text-neutral-500">
+                <span className="text-encre-attenuee">
                   {' '}
                   · {seminaire.type} · {formaterDateSeule(seminaire.dateDebut)}
                 </span>
@@ -267,18 +318,15 @@ export default async function PageFicheMembre({
         )}
       </section>
 
-      <section className="mt-8">
-        <div className="mb-3 flex items-baseline justify-between gap-4">
-          <h2 className="text-lg font-medium">Disciples actifs</h2>
-          <div className="flex items-center gap-4">
-            <Link href="/arborescence" className="text-sm underline underline-offset-4">
+      <section className="mt-esp-8">
+        <div className="mb-esp-3 flex items-baseline justify-between gap-esp-4">
+          <h2 className="text-section">Disciples actifs</h2>
+          <div className="flex items-center gap-esp-4">
+            <Link href="/arborescence" className={CLASSES_VARIANTE.lien}>
               Arborescence
             </Link>
             {estAdmin ? (
-              <Link
-                href={`/membres/${membre.id}/arbre`}
-                className="text-sm underline underline-offset-4"
-              >
+              <Link href={`/membres/${membre.id}/arbre`} className={CLASSES_VARIANTE.lien}>
                 Rattacher
               </Link>
             ) : null}
@@ -289,19 +337,24 @@ export default async function PageFicheMembre({
           membre peut avoir eu des disciples, tous archivés depuis, et se retrouver ici
           avec une liste vide. Sans qualificatif, « Aucun disciple rattaché » lirait
           comme « n'en a jamais eu », ce que la donnée ne dit pas.
+
+          ⚠️ MARQUE DE FILIATION (D106) — troisième et dernier des trois seuls
+          emplacements légitimes de cette fiche : la relation de discipulat, vue depuis
+          l'autre bout.
         */}
         {disciples.length === 0 ? (
-          <p className="text-sm text-neutral-600">Aucun disciple actif rattaché.</p>
+          <p className="text-petit text-encre-attenuee">Aucun disciple actif rattaché.</p>
         ) : (
-          <ul className="divide-y divide-neutral-200">
+          <Liste>
             {disciples.map((disciple) => (
-              <li key={disciple.id}>
-                <Link href={`/membres/${disciple.id}`} className="block py-2 text-sm">
-                  {disciple.prenom} {disciple.nom}
-                </Link>
-              </li>
+              <LigneListe
+                key={disciple.id}
+                lien={`/membres/${disciple.id}`}
+                principal={`${disciple.prenom} ${disciple.nom}`}
+                rail
+              />
             ))}
-          </ul>
+          </Liste>
         )}
       </section>
     </main>

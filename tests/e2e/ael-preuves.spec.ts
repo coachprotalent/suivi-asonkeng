@@ -1040,8 +1040,10 @@ test("détachement : n'affecte ni une présence ni un compteur, effet prospectif
     .locator('li')
     .filter({ hasText: `Test ${PREFIXE}-detache` })
   await expect(ligneDetache).toHaveCount(1)
-  page.once('dialog', (dialogue) => dialogue.accept())
+  // Task 15 (D124) : window.confirm est remplacé par le <dialog> natif de Dialogue — le
+  // clic n'ouvre plus qu'un dialogue, il ne soumet plus rien tout seul.
   await ligneDetache.getByRole('button', { name: 'Détacher' }).click()
+  await page.locator('dialog[open]').getByRole('button', { name: 'Confirmer' }).click()
 
   await expect(async () => {
     const { data } = await admin.from('membres').select('antenne_id').eq('id', idMembreDetachement).single()

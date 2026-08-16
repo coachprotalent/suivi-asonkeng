@@ -1,6 +1,9 @@
 'use client'
 
 import { useActionState, useEffect, useId, useRef, useState } from 'react'
+import { Bouton } from '@/composants/ui/bouton'
+import { Champ } from '@/composants/ui/champ'
+import { Formulaire } from '@/composants/ui/formulaire'
 import { ChampsDesirs, DESIRS_VIDES, type ValeursDesirs } from './champs-desirs'
 import { ajouterParticipantExterne, type EtatParticipation } from './participants-actions'
 
@@ -59,90 +62,72 @@ export function FormulaireParticipantExterne({ evenementId }: { evenementId: str
   }, [enCours, etat])
 
   return (
-    <form action={envoyer} className="flex flex-col gap-3">
+    <Formulaire
+      action={envoyer}
+      erreur={etat.erreur}
+      enCours={enCours}
+      actions={
+        <Bouton type="submit" alignement="debut" enCours={enCours}>
+          Ajouter ce participant externe
+        </Bouton>
+      }
+    >
       <input type="hidden" name="evenementId" value={evenementId} />
 
-      <div className="flex flex-wrap gap-3">
-        <label className="flex flex-1 flex-col gap-1.5">
-          <span className="text-sm font-medium">Nom</span>
-          <input
-            name="nom"
-            required
-            value={valeurs.nom}
-            onChange={(evenement) => definir('nom', evenement.target.value)}
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          />
-        </label>
-        <label className="flex flex-1 flex-col gap-1.5">
-          <span className="text-sm font-medium">Prénom</span>
-          <input
-            name="prenom"
-            value={valeurs.prenom}
-            onChange={(evenement) => definir('prenom', evenement.target.value)}
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          />
-        </label>
+      <div className="flex flex-wrap gap-esp-3">
+        <Champ
+          label="Nom"
+          name="nom"
+          required
+          value={valeurs.nom}
+          onChange={(evenement) => definir('nom', evenement.target.value)}
+          largeur="flexible"
+        />
+        <Champ
+          label="Prénom"
+          name="prenom"
+          value={valeurs.prenom}
+          onChange={(evenement) => definir('prenom', evenement.target.value)}
+          largeur="flexible"
+        />
       </div>
 
-      <div className="flex flex-wrap gap-3">
-        <label className="flex flex-1 flex-col gap-1.5">
-          <span className="text-sm font-medium">Téléphone</span>
-          <input
-            name="telephone"
-            value={valeurs.telephone}
-            onChange={(evenement) => definir('telephone', evenement.target.value)}
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          />
-        </label>
-        <label className="flex flex-1 flex-col gap-1.5">
-          <span className="text-sm font-medium">Courriel</span>
-          <input
-            name="email"
-            type="email"
-            value={valeurs.email}
-            onChange={(evenement) => definir('email', evenement.target.value)}
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          />
-        </label>
+      <div className="flex flex-wrap gap-esp-3">
+        <Champ
+          label="Téléphone"
+          name="telephone"
+          value={valeurs.telephone}
+          onChange={(evenement) => definir('telephone', evenement.target.value)}
+          largeur="flexible"
+        />
+        <Champ
+          label="Courriel"
+          name="email"
+          type="email"
+          value={valeurs.email}
+          onChange={(evenement) => definir('email', evenement.target.value)}
+          largeur="flexible"
+        />
       </div>
 
-      <div className="flex flex-wrap gap-3">
-        <label className="flex flex-1 flex-col gap-1.5">
-          <span className="text-sm font-medium">Ville</span>
-          <input
-            name="ville"
-            value={valeurs.ville}
-            onChange={(evenement) => definir('ville', evenement.target.value)}
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          />
-        </label>
-        <label className="flex flex-1 flex-col gap-1.5">
-          <span className="text-sm font-medium">Pays</span>
-          <input
-            name="pays"
-            value={valeurs.pays}
-            onChange={(evenement) => definir('pays', evenement.target.value)}
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          />
-        </label>
+      <div className="flex flex-wrap gap-esp-3">
+        <Champ
+          label="Ville"
+          name="ville"
+          value={valeurs.ville}
+          onChange={(evenement) => definir('ville', evenement.target.value)}
+          largeur="flexible"
+        />
+        <Champ
+          label="Pays"
+          name="pays"
+          value={valeurs.pays}
+          onChange={(evenement) => definir('pays', evenement.target.value)}
+          largeur="flexible"
+        />
       </div>
 
       <ChampsDesirs prefixe={prefixe} valeurs={desirs} onChange={setDesirs} />
-
-      <div className="flex items-center gap-4">
-        <button
-          type="submit"
-          disabled={enCours}
-          className="self-start rounded-md bg-neutral-900 px-4 py-2 text-white disabled:opacity-50"
-        >
-          Ajouter ce participant externe
-        </button>
-        {etat.erreur ? (
-          <p role="alert" className="text-sm text-red-600">
-            {etat.erreur}
-          </p>
-        ) : null}
-      </div>
-    </form>
+    </Formulaire>
   )
 }

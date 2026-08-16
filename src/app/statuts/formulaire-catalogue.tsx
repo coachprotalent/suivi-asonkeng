@@ -1,6 +1,10 @@
 'use client'
 
-import { useActionState } from 'react'
+import { useActionState, useState } from 'react'
+import { Bouton } from '@/composants/ui/bouton'
+import { Champ } from '@/composants/ui/champ'
+import { Formulaire } from '@/composants/ui/formulaire'
+import { Selecteur } from '@/composants/ui/selecteur'
 import type { GroupeStatut } from '@/lib/donnees/statuts'
 import { creerGroupe, creerStatut, type EtatCatalogue } from './actions'
 
@@ -8,80 +12,91 @@ const etatInitial: EtatCatalogue = { erreur: null }
 
 export function FormulaireGroupe() {
   const [etat, envoyer, enCours] = useActionState(creerGroupe, etatInitial)
+  const [nom, setNom] = useState('')
+  /*
+    ⚠️ LA SEULE CASE À COCHER DU DÉPÔT RÉELLEMENT EXPOSÉE AU PIÈGE DE REMISE À ZÉRO
+    (D111, D112). Neuf cases à cocher vivent dans ce dépôt (Task 3, commentaire de tête
+    de `champ.tsx`) ; les huit autres sont dans des `<form onSubmit>` (pointage AEL,
+    profil de compte, désirs de participation, séance manuelle), où la remise à zéro
+    AUTOMATIQUE que React applique à un `<form action>` après complétion ne se produit
+    jamais. `exclusif` est la SEULE case dans un `<form action>` — ce `Formulaire`
+    (D112) — donc la seule que ce piège atteint réellement.
+
+    `Champ` exclut les cases à cocher par construction (`defaultChecked?: never`,
+    voir son commentaire de tête) : elle reste un `<input type="checkbox">` nu,
+    contrôlée à la main par `checked` + `onChange`.
+  */
+  const [exclusif, setExclusif] = useState(false)
 
   return (
-    <form action={envoyer} className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-1 flex-col gap-1.5">
-          <span className="text-sm font-medium">Nom du groupe</span>
-          <input name="nom" required className="rounded-md border border-neutral-300 px-3 py-2" />
-        </label>
-        <label className="flex items-center gap-2 py-2">
-          <input name="exclusif" type="checkbox" />
-          <span className="text-sm">Un seul statut à la fois</span>
-        </label>
-        <button
-          type="submit"
-          disabled={enCours}
-          className="rounded-md bg-neutral-900 px-4 py-2 text-white disabled:opacity-50"
-        >
+    <Formulaire
+      action={envoyer}
+      erreur={etat.erreur}
+      enCours={enCours}
+      actions={
+        <Bouton type="submit" alignement="debut" enCours={enCours}>
           Ajouter
-        </button>
+        </Bouton>
+      }
+    >
+      <div className="flex flex-wrap items-end gap-esp-3">
+        <Champ
+          label="Nom du groupe"
+          name="nom"
+          value={nom}
+          onChange={(evenement) => setNom(evenement.target.value)}
+          required
+          largeur="flexible"
+        />
+        <label className="cible-tactile flex items-center gap-esp-2">
+          <input
+            name="exclusif"
+            type="checkbox"
+            checked={exclusif}
+            onChange={(evenement) => setExclusif(evenement.target.checked)}
+          />
+          <span className="text-petit text-encre">Un seul statut à la fois</span>
+        </label>
       </div>
-      {etat.erreur ? (
-        <p role="alert" className="text-sm text-red-600">
-          {etat.erreur}
-        </p>
-      ) : null}
-    </form>
+    </Formulaire>
   )
 }
 
 export function FormulaireStatutCatalogue({ groupes }: { groupes: GroupeStatut[] }) {
   const [etat, envoyer, enCours] = useActionState(creerStatut, etatInitial)
+  const [libelle, setLibelle] = useState('')
+  const [groupeId, setGroupeId] = useState('')
 
   return (
-    <form action={envoyer} className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-end gap-3">
-        <label className="flex flex-1 flex-col gap-1.5">
-          <span className="text-sm font-medium">Libellé</span>
-          <input
-            name="libelle"
-            required
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          />
-        </label>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-sm font-medium">Groupe</span>
-          <select
-            name="groupeId"
-            required
-            defaultValue=""
-            className="rounded-md border border-neutral-300 px-3 py-2"
-          >
-            <option value="" disabled>
-              Choisir…
-            </option>
-            {groupes.map((groupe) => (
-              <option key={groupe.id} value={groupe.id}>
-                {groupe.nom}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button
-          type="submit"
-          disabled={enCours}
-          className="rounded-md bg-neutral-900 px-4 py-2 text-white disabled:opacity-50"
-        >
+    <Formulaire
+      action={envoyer}
+      erreur={etat.erreur}
+      enCours={enCours}
+      actions={
+        <Bouton type="submit" alignement="debut" enCours={enCours}>
           Ajouter
-        </button>
+        </Bouton>
+      }
+    >
+      <div className="flex flex-wrap items-end gap-esp-3">
+        <Champ
+          label="Libellé"
+          name="libelle"
+          value={libelle}
+          onChange={(evenement) => setLibelle(evenement.target.value)}
+          required
+          largeur="flexible"
+        />
+        <Selecteur
+          label="Groupe"
+          name="groupeId"
+          value={groupeId}
+          onChange={(evenement) => setGroupeId(evenement.target.value)}
+          required
+          optionVide={{ libelle: 'Choisir…', desactivee: true }}
+          options={groupes.map((groupe) => ({ valeur: groupe.id, libelle: groupe.nom }))}
+        />
       </div>
-      {etat.erreur ? (
-        <p role="alert" className="text-sm text-red-600">
-          {etat.erreur}
-        </p>
-      ) : null}
-    </form>
+    </Formulaire>
   )
 }
