@@ -127,8 +127,24 @@ de filiation, qui est l'élément signature de la direction.
 | `--etat-refus` | `#97402F` | archivé, refusé |
 | `--etat-neutre` | `#7E9A86` | repenti, sans état particulier |
 
-`--etat-refus` sert **aussi** au texte des bandeaux de refus, où il est employé comme couleur de
-texte sur `--surface` et non comme fond.
+**Deux emplois hors pastille sont autorisés, et ce sont les seuls** — amendement du 2026-08-16,
+après que la revue des tâches 5 à 7 eut relevé que le code employait déjà le second sans que
+rien ne l'autorise :
+
+1. `--etat-refus` **en couleur de texte** dans les bandeaux de refus, sur `--surface`, jamais en
+   fond.
+2. `--etat-attente` et `--etat-acquis` **en couleur de bordure** sur `Carte`, pour ses tons
+   « avertissement » et « succès ».
+
+**La règle qui gouverne ces emplois n'est pas « une pastille », c'est : la couleur n'est jamais
+le seul porteur du sens.** Je l'avais écrite sous sa forme la plus étroite — « uniquement en
+pastille » —, ce qui rendait fausse une utilisation par ailleurs légitime : une carte
+d'avertissement porte son sens dans son texte, la bordure ne fait que le signaler plus vite.
+Formuler une règle par son cas particulier au lieu de son principe, c'est produire une carte que
+le premier cas correct fait mentir.
+
+**Ce que la règle continue d'interdire, sans exception :** un ton porté par la seule couleur,
+sans texte ni libellé qui dise la même chose.
 
 ### 4.2 Typographie
 
