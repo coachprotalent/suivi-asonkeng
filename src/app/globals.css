@@ -211,7 +211,7 @@
     ce commentaire, pour que la Task 24 n'ait qu'à les décommenter.
   */
   /* --radius-*: initial; */
-  /* --radius-bord: var(--rayon); */
+  --radius-bord: var(--rayon);
 
   /*
     TROIS POINTS DE RUPTURE RÉELS (D115), et les autres n'existent plus. Le §3 de la
