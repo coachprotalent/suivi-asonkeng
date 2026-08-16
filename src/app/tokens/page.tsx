@@ -1,4 +1,5 @@
-import Link from 'next/link'
+import { EnTetePage } from '@/composants/ui/en-tete-page'
+import { Liste } from '@/composants/ui/ligne-liste'
 import { listerTokens } from '@/lib/donnees/tokens'
 import { exigerAdministrateur } from '@/lib/securite/garde'
 import { FormulaireGeneration } from './formulaire-generation'
@@ -9,22 +10,29 @@ export default async function PageTokens() {
   const tokens = await listerTokens()
 
   return (
-    <main className="mx-auto max-w-4xl px-6 py-10">
-      <Link href="/tableau-de-bord" className="text-sm underline underline-offset-4">
-        Retour au tableau de bord
-      </Link>
-      <h1 className="mt-4 mb-2 text-2xl font-semibold">Tokens d&apos;inscription</h1>
-      <p className="mb-8 text-sm text-neutral-500">
-        {tokens.length} token{tokens.length > 1 ? 's' : ''}
-      </p>
+    // ⚠️ PAS de `data-densite="compact"` ICI (D107) : `/tokens` n'est pas dans la liste des
+    // trois écrans denses, et l'y ajouter « par symétrie » avec `/comptes` serait une
+    // décision que personne n'a prise.
+    <main className="mx-auto max-w-4xl px-esp-6 py-esp-10">
+      <EnTetePage
+        retour={{ href: '/tableau-de-bord', libelle: 'Retour au tableau de bord' }}
+        titre="Tokens d'inscription"
+        soustitre={
+          <>
+            {tokens.length} token{tokens.length > 1 ? 's' : ''}
+          </>
+        }
+      />
 
-      <FormulaireGeneration />
+      <div className="mb-esp-10">
+        <FormulaireGeneration />
+      </div>
 
-      <ul className="divide-y divide-neutral-200">
+      <Liste>
         {tokens.map((token) => (
           <LigneToken key={token.id} token={token} />
         ))}
-      </ul>
+      </Liste>
     </main>
   )
 }

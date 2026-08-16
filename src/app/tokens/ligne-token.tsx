@@ -3,14 +3,29 @@
 import { useState, useTransition } from 'react'
 import { Bouton } from '@/composants/ui/bouton'
 import { Dialogue } from '@/composants/ui/dialogue'
+import { EtatBadge, type TonEtat } from '@/composants/ui/etat-badge'
+import { LigneListe } from '@/composants/ui/ligne-liste'
+import { Refus } from '@/composants/ui/refus'
 import type { TokenListe } from '@/lib/donnees/tokens'
 import { revoquerToken } from './actions'
 
+/*
+  `etatToken` rend DÉJÀ une chaîne composée (« Utilisé le … », « Révoqué le … », « Expiré »,
+  « Valide »). NE PAS LA DÉCOMPOSER : elle est assertée par `tests/e2e/tokens.spec.ts`. Une
+  seconde fonction rend le TON, à partir des mêmes champs (D126) — voir `tonToken` plus bas.
+*/
 function etatToken(token: TokenListe): string {
   if (token.utiliseLe) return `Utilisé le ${new Date(token.utiliseLe).toLocaleString('fr-FR')}`
   if (token.revoqueLe) return `Révoqué le ${new Date(token.revoqueLe).toLocaleString('fr-FR')}`
   if (new Date(token.expireLe) < new Date()) return 'Expiré'
   return 'Valide'
+}
+
+function tonToken(token: TokenListe): TonEtat {
+  if (token.utiliseLe) return 'acquis'
+  if (token.revoqueLe) return 'refus'
+  if (new Date(token.expireLe) < new Date()) return 'refus'
+  return 'attente'
 }
 
 export function LigneToken({ token }: { token: TokenListe }) {
@@ -45,47 +60,49 @@ export function LigneToken({ token }: { token: TokenListe }) {
   }
 
   return (
-    <li className="py-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <span className="font-medium">
-          {token.mode === 'nominatif' ? `Nominatif — ${token.membreNom ?? 'fiche inconnue'}` : 'Générique'}
-        </span>
-        <span className="text-sm text-neutral-500">{etatToken(token)}</span>
-      </div>
-      <p className="mt-1 text-sm text-neutral-600">
-        Créé le {new Date(token.creeLe).toLocaleString('fr-FR')}
-        {token.creeParNom ? ` par ${token.creeParNom}` : ''} · Expire le{' '}
-        {new Date(token.expireLe).toLocaleString('fr-FR')}
-        {token.utiliseParNom ? ` · Utilisé par ${token.utiliseParNom}` : ''}
-      </p>
-      {revocable ? (
-        <div className="mt-esp-2">
-          <Bouton
-            type="button"
-            variante="lien-danger"
-            enCours={enCours}
-            libelleAttente="Révocation…"
-            onClick={() => setConfirmationDemandee(true)}
-          >
-            Révoquer
-          </Bouton>
+    <LigneListe
+      principal={
+        token.mode === 'nominatif' ? `Nominatif — ${token.membreNom ?? 'fiche inconnue'}` : 'Générique'
+      }
+      meta={
+        <>
+          Créé le {new Date(token.creeLe).toLocaleString('fr-FR')}
+          {token.creeParNom ? ` par ${token.creeParNom}` : ''} · Expire le{' '}
+          {new Date(token.expireLe).toLocaleString('fr-FR')}
+          {token.utiliseParNom ? ` · Utilisé par ${token.utiliseParNom}` : ''}
+        </>
+      }
+      actions={<EtatBadge ton={tonToken(token)} libelle={etatToken(token)} />}
+      complement={
+        revocable || erreur ? (
+          <div className="flex flex-col gap-esp-2">
+            {revocable ? (
+              <div>
+                <Bouton
+                  type="button"
+                  variante="lien-danger"
+                  enCours={enCours}
+                  libelleAttente="Révocation…"
+                  onClick={() => setConfirmationDemandee(true)}
+                >
+                  Révoquer
+                </Bouton>
 
-          <Dialogue
-            ouvert={confirmationDemandee}
-            message={messageRevocation}
-            surConfirmation={() => {
-              setConfirmationDemandee(false)
-              executerRevocation()
-            }}
-            surAnnulation={() => setConfirmationDemandee(false)}
-          />
-        </div>
-      ) : null}
-      {erreur ? (
-        <p role="alert" className="mt-2 text-sm text-red-600">
-          {erreur}
-        </p>
-      ) : null}
-    </li>
+                <Dialogue
+                  ouvert={confirmationDemandee}
+                  message={messageRevocation}
+                  surConfirmation={() => {
+                    setConfirmationDemandee(false)
+                    executerRevocation()
+                  }}
+                  surAnnulation={() => setConfirmationDemandee(false)}
+                />
+              </div>
+            ) : null}
+            <Refus message={erreur} />
+          </div>
+        ) : undefined
+      }
+    />
   )
 }

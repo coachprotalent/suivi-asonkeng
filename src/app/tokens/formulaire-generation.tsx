@@ -1,8 +1,12 @@
 'use client'
 
-import { useActionState, useId, useState } from 'react'
+import { useActionState, useState } from 'react'
 import type { MembreBref } from '@/lib/donnees/membres'
 import { SelecteurMembre } from '@/app/membres/selecteur-membre'
+import { Bouton } from '@/composants/ui/bouton'
+import { Carte } from '@/composants/ui/carte'
+import { Champ } from '@/composants/ui/champ'
+import { Formulaire } from '@/composants/ui/formulaire'
 import { genererToken, type EtatToken } from './actions'
 import { VALIDITE_JOURS_DEFAUT } from './constantes'
 
@@ -12,15 +16,23 @@ export function FormulaireGeneration() {
   const [etat, envoyer, enCours] = useActionState(genererToken, etatInitial)
   const [mode, setMode] = useState<'nominatif' | 'generique'>('generique')
   const [membre, setMembre] = useState<MembreBref | null>(null)
-  const prefixe = useId()
-  const idJours = `${prefixe}-jours`
+  const [validiteJours, setValiditeJours] = useState(String(VALIDITE_JOURS_DEFAUT))
 
   return (
-    <div className="mb-10 flex flex-col gap-4">
-      <form action={envoyer} className="flex flex-col gap-4">
-        <fieldset className="flex flex-col gap-2">
-          <legend className="text-sm font-medium">Mode</legend>
-          <label className="flex items-center gap-2 text-sm">
+    <div className="flex flex-col gap-esp-4">
+      <Formulaire
+        action={envoyer}
+        erreur={etat.erreur}
+        enCours={enCours}
+        actions={
+          <Bouton type="submit" alignement="debut" enCours={enCours} libelleAttente="Génération…">
+            Générer le token
+          </Bouton>
+        }
+      >
+        <fieldset className="flex flex-col gap-esp-2">
+          <legend className="libelle-champ text-petit text-encre">Mode</legend>
+          <label className="cible-tactile flex items-center gap-esp-2 text-petit text-encre">
             <input
               type="radio"
               name="mode"
@@ -30,7 +42,7 @@ export function FormulaireGeneration() {
             />
             Générique — l&apos;inscrit renseigne lui-même sa fiche
           </label>
-          <label className="flex items-center gap-2 text-sm">
+          <label className="cible-tactile flex items-center gap-esp-2 text-petit text-encre">
             <input
               type="radio"
               name="mode"
@@ -53,51 +65,28 @@ export function FormulaireGeneration() {
           />
         ) : null}
 
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor={idJours} className="text-sm font-medium">
-            Validité (jours)
-          </label>
-          <input
-            id={idJours}
-            name="validiteJours"
-            type="number"
-            min={1}
-            step={1}
-            defaultValue={VALIDITE_JOURS_DEFAUT}
-            aria-describedby={`${idJours}-aide`}
-            className="w-32 rounded-md border border-neutral-300 px-3 py-2"
-          />
-          <span id={`${idJours}-aide`} className="text-xs text-neutral-500">
-            Proposée à {VALIDITE_JOURS_DEFAUT} jours, modifiable.
-          </span>
-        </div>
-
-        <button
-          type="submit"
-          disabled={enCours}
-          className="self-start rounded-md bg-neutral-900 px-4 py-2 font-medium text-white disabled:opacity-50"
-        >
-          {enCours ? 'Génération…' : 'Générer le token'}
-        </button>
-      </form>
-
-      {etat.erreur ? (
-        <p role="alert" className="text-sm text-red-600">
-          {etat.erreur}
-        </p>
-      ) : null}
+        <Champ
+          label="Validité (jours)"
+          name="validiteJours"
+          type="number"
+          min={1}
+          step={1}
+          value={validiteJours}
+          onChange={(evenement) => setValiditeJours(evenement.target.value)}
+          aide={`Proposée à ${VALIDITE_JOURS_DEFAUT} jours, modifiable.`}
+          largeur="etroite"
+        />
+      </Formulaire>
 
       {etat.codeGenere ? (
-        <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-4">
-          <p className="text-sm font-medium text-amber-900">Token généré.</p>
-          <p className="mt-2 text-sm text-amber-900">
+        <Carte ton="avertissement" role="alert">
+          <p className="text-corps">Token généré.</p>
+          <p className="mt-esp-2 text-corps">
             Code, à transmettre de vive voix ou par écrit sécurisé :{' '}
-            <code className="rounded bg-white px-2 py-1 font-mono">{etat.codeGenere}</code>
+            <code className="rounded-bord bg-fond px-esp-2 py-esp-1 font-mono">{etat.codeGenere}</code>
           </p>
-          <p className="mt-2 text-xs text-amber-800">
-            Il ne sera plus jamais affiché.
-          </p>
-        </div>
+          <p className="mt-esp-2 text-petit text-encre-attenuee">Il ne sera plus jamais affiché.</p>
+        </Carte>
       ) : null}
     </div>
   )

@@ -1,6 +1,10 @@
 'use client'
 
-import { useActionState, useId } from 'react'
+import { useActionState, useEffect, useRef, useState } from 'react'
+import { Bouton } from '@/composants/ui/bouton'
+import { Carte } from '@/composants/ui/carte'
+import { Champ } from '@/composants/ui/champ'
+import { Formulaire } from '@/composants/ui/formulaire'
 import { creerCompte, type EtatCompte } from './actions'
 
 const etatInitial: EtatCompte = {
@@ -9,76 +13,76 @@ const etatInitial: EtatCompte = {
   motDePasseTemporaire: null,
 }
 
+const VALEURS_VIDES = { identifiant: '', nomAffichage: '' }
+
 export function FormulaireCompte() {
   const [etat, envoyer, enCours] = useActionState(creerCompte, etatInitial)
-  const prefixe = useId()
-  const idIdentifiant = `${prefixe}-identifiant`
+  const [valeurs, setValeurs] = useState(VALEURS_VIDES)
+
+  // Vidé au SUCCÈS d'une VRAIE soumission, jamais au montage — même garde que
+  // `formulaire-type.tsx` : tester seulement `etat.erreur === null` serait aussi vrai pour
+  // `etatInitial`, et déclencherait l'effet dès le montage.
+  const enCoursPrecedent = useRef(enCours)
+  useEffect(() => {
+    if (enCoursPrecedent.current && !enCours && etat.erreur === null) {
+      setValeurs(VALEURS_VIDES)
+    }
+    enCoursPrecedent.current = enCours
+  }, [enCours, etat])
 
   return (
-    <div className="mb-10 flex flex-col gap-4">
-      <form action={envoyer} className="flex flex-wrap items-end gap-3">
-        {/* Champ AVEC texte d'aide : `htmlFor` explicite et aide sortie du <label>
-            (contrainte globale 7 : un texte d'aide ne vit jamais dans un <label>). */}
-        <div className="flex flex-1 flex-col gap-1.5">
-          <label htmlFor={idIdentifiant} className="text-sm font-medium">
-            Identifiant
-          </label>
-          <input
-            id={idIdentifiant}
+    <div className="flex flex-col gap-esp-4">
+      <Formulaire
+        action={envoyer}
+        erreur={etat.erreur}
+        enCours={enCours}
+        actions={
+          <Bouton type="submit" alignement="debut" enCours={enCours} libelleAttente="Création…">
+            Créer le compte
+          </Bouton>
+        }
+      >
+        <div className="flex flex-wrap gap-esp-3">
+          <Champ
+            label="Identifiant"
             name="identifiant"
             required
             autoCapitalize="none"
             spellCheck={false}
-            aria-describedby={`${idIdentifiant}-aide`}
-            className="rounded-md border border-neutral-300 px-3 py-2"
+            value={valeurs.identifiant}
+            onChange={(evenement) =>
+              setValeurs((precedent) => ({ ...precedent, identifiant: evenement.target.value }))
+            }
+            aide="3 à 32 caractères : lettres, chiffres, points ou tirets, commençant par une lettre."
+            largeur="flexible"
           />
-          <span id={`${idIdentifiant}-aide`} className="text-xs text-neutral-500">
-            3 à 32 caractères : lettres, chiffres, points ou tirets, commençant par une
-            lettre.
-          </span>
-        </div>
-
-        {/* Champ SANS aide : le <label> enveloppant suffit et donne un nom correct. */}
-        <label className="flex flex-1 flex-col gap-1.5">
-          <span className="text-sm font-medium">Nom d&apos;affichage</span>
-          <input
+          <Champ
+            label="Nom d'affichage"
             name="nomAffichage"
             required
-            className="rounded-md border border-neutral-300 px-3 py-2"
+            value={valeurs.nomAffichage}
+            onChange={(evenement) =>
+              setValeurs((precedent) => ({ ...precedent, nomAffichage: evenement.target.value }))
+            }
+            largeur="flexible"
           />
-        </label>
-
-        <button
-          type="submit"
-          disabled={enCours}
-          className="rounded-md bg-neutral-900 px-4 py-2 text-white disabled:opacity-50"
-        >
-          {enCours ? 'Création…' : 'Créer le compte'}
-        </button>
-      </form>
-
-      {etat.erreur ? (
-        <p role="alert" className="text-sm text-red-600">
-          {etat.erreur}
-        </p>
-      ) : null}
+        </div>
+      </Formulaire>
 
       {etat.motDePasseTemporaire ? (
-        <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-4">
-          <p className="text-sm font-medium text-amber-900">
-            Compte « {etat.identifiantCree} » créé.
-          </p>
-          <p className="mt-2 text-sm text-amber-900">
+        <Carte ton="avertissement" role="alert">
+          <p className="text-corps">Compte « {etat.identifiantCree} » créé.</p>
+          <p className="mt-esp-2 text-corps">
             Mot de passe temporaire, à transmettre de vive voix :{' '}
-            <code className="rounded bg-white px-2 py-1 font-mono">
+            <code className="rounded-bord bg-fond px-esp-2 py-esp-1 font-mono">
               {etat.motDePasseTemporaire}
             </code>
           </p>
-          <p className="mt-2 text-xs text-amber-800">
+          <p className="mt-esp-2 text-petit text-encre-attenuee">
             Il ne sera plus jamais affiché. La personne devra en choisir un autre à sa
             première connexion.
           </p>
-        </div>
+        </Carte>
       ) : null}
     </div>
   )
