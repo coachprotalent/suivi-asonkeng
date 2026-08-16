@@ -84,6 +84,16 @@ async function seConnecter(page: import('@playwright/test').Page) {
   await expect(page).toHaveURL(/\/tableau-de-bord/)
 }
 
+/**
+ * Task 15 (D124) — `window.confirm` est remplacé par le `<dialog>` natif de `Dialogue` :
+ * le clic déclencheur n'ouvre plus qu'un dialogue, il ne soumet plus rien tout seul.
+ * Cette fonction accepte le dialogue OUVERT en cliquant son bouton « Confirmer » —
+ * l'équivalent de l'ancien `page.once('dialog', (d) => d.accept())` sur la boîte native.
+ */
+async function accepterDialogue(page: import('@playwright/test').Page) {
+  await page.locator('dialog[open]').getByRole('button', { name: 'Confirmer' }).click()
+}
+
 async function choisirDansSelecteur(
   page: import('@playwright/test').Page,
   label: string,
@@ -251,8 +261,8 @@ test("archiver un faiseur de disciple est refusé, et la liste des disciples est
   await seConnecter(page)
   await page.goto(`/membres/${idEnfant}`)
 
-  page.once('dialog', (dialogue) => dialogue.accept())
   await page.getByRole('button', { name: 'Archiver' }).click()
+  await accepterDialogue(page)
 
   const alerte = page.locator(ALERTE)
   await expect(alerte).toContainText('ne peut pas être archivée')
@@ -278,8 +288,8 @@ test("archiver un faiseur de disciple est refusé, et la liste des disciples est
   }
 
   await page.goto(`/membres/${sansDisciple.id}`)
-  page.once('dialog', (dialogue) => dialogue.accept())
   await page.getByRole('button', { name: 'Archiver' }).click()
+  await accepterDialogue(page)
 
   // ═══ ATTENDRE LA FIN DE L'ACTION AVANT DE LIRE LA BASE ═══
   // `click()` rend la main dès la DÉPÊCHE de l'événement, pas à la fin de l'action.
@@ -334,8 +344,8 @@ test("le nom d'un disciple contenant des caractères à échapper traverse intac
     await seConnecter(page)
     await page.goto(`/membres/${idParentSpecial}`)
 
-    page.once('dialog', (dialogue) => dialogue.accept())
     await page.getByRole('button', { name: 'Archiver' }).click()
+    await accepterDialogue(page)
 
     const alerte = page.locator(ALERTE)
     // Le nom EXACT, apostrophe et esperluette comprises — pas seulement un extrait

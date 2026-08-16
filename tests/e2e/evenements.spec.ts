@@ -112,22 +112,27 @@ function extraireChampsCaches(formHtml: string): Record<string, string> {
  * contre « le refus vient de la forge, pas du garde » ; le second est le canari.
  */
 /**
- * M11 — la conversion porte désormais une confirmation `window.confirm`. Playwright
- * REJETTE automatiquement toute boîte de dialogue non gérée : sans ce branchement, le clic
- * sur « Convertir » serait annulé et le test échouerait sur l'assertion suivante, sans que
- * rien ne dise que c'est la confirmation qui l'a bloqué.
+ * M11 — la conversion porte une confirmation. Depuis la Task 15 (D124), ce n'est plus une
+ * boîte native mais le `<dialog>` de `Dialogue` : le clic sur « Convertir » n'ouvre que le
+ * dialogue, sans lui les appelants attendraient un message qui n'arrive jamais.
  *
  * Le message est CAPTURÉ ET RENDU, pas seulement accepté : l'appelant s'en sert comme
  * CONTRÔLE POSITIF de l'existence de la confirmation. Une confirmation retirée par
  * inadvertance laisserait sinon ces tests parfaitement verts — exactement le défaut que ce
  * fichier corrige par ailleurs.
+ *
+ * SIGNATURE ET FORME DE RETOUR INCHANGÉES (D124/Task 15 : seuls les gestionnaires de
+ * dialogue natif sont adaptés) : l'appelant continue d'appeler `capterConfirmation(page)`
+ * AVANT le clic déclencheur, puis de lire `confirmation.texte` par `expect.poll` — ce
+ * dernier reste nécessaire ici, la capture se faisant toujours en tâche de fond.
  */
 function capterConfirmation(page: Page): { texte: string | null } {
   const capture: { texte: string | null } = { texte: null }
-  page.once('dialog', async (dialogue) => {
-    capture.texte = dialogue.message()
-    await dialogue.accept()
-  })
+  void (async () => {
+    const dialogue = await page.waitForSelector('dialog[open]')
+    capture.texte = await dialogue.$eval('p', (p) => p.innerText)
+    await page.locator('dialog[open]').getByRole('button', { name: 'Confirmer' }).click()
+  })()
   return capture
 }
 

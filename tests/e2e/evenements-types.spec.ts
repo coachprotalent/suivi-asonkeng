@@ -159,8 +159,10 @@ test('un administrateur désactive puis réactive un type', async ({ page }) => 
   const ligne = page.locator('li').filter({ hasText: libelle })
   await expect(ligne).toBeVisible()
 
-  page.once('dialog', (d) => d.accept())
+  // Task 15 (D124) : window.confirm est remplacé par le <dialog> natif de Dialogue — le
+  // clic n'ouvre plus qu'un dialogue, il ne soumet plus rien tout seul.
   await ligne.getByRole('button', { name: 'Désactiver' }).click()
+  await page.locator('dialog[open]').getByRole('button', { name: 'Confirmer' }).click()
   await expect(ligne.getByText('(désactivé)')).toBeVisible()
   await expect(async () => {
     const { data, error } = await admin.from('types_evenement').select('actif').eq('libelle', libelle).single()
@@ -168,8 +170,8 @@ test('un administrateur désactive puis réactive un type', async ({ page }) => 
     expect(data.actif).toBe(false)
   }).toPass()
 
-  page.once('dialog', (d) => d.accept())
   await ligne.getByRole('button', { name: 'Réactiver' }).click()
+  await page.locator('dialog[open]').getByRole('button', { name: 'Confirmer' }).click()
   await expect(ligne.getByText('(désactivé)')).toHaveCount(0)
   await expect(async () => {
     const { data, error } = await admin.from('types_evenement').select('actif').eq('libelle', libelle).single()

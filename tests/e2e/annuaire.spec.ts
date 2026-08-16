@@ -179,13 +179,16 @@ test('une fiche archivée disparaît de l’annuaire', async ({ page }) => {
   // On retient le message du dialogue au lieu de simplement l'accepter : sans cette
   // assertion, le test resterait vert si la confirmation venait à disparaître du
   // bouton, et rien ne protégerait plus contre un archivage en un seul clic.
-  let messageConfirmation: string | null = null
-  page.once('dialog', (dialogue) => {
-    messageConfirmation = dialogue.message()
-    return dialogue.accept()
-  })
-
+  //
+  // Task 15 (D124) : `window.confirm` est remplacé par le `<dialog>` natif de
+  // `Dialogue` — le clic n'ouvre plus qu'un dialogue, il ne soumet plus rien tout seul.
+  // Le message est lu dans le DOM (`<p>` du dialogue OUVERT) au lieu de
+  // `dialogue.message()`, puis « Confirmer » est cliqué explicitement.
   await page.getByRole('button', { name: 'Archiver' }).click()
+  const dialogueOuvert = page.locator('dialog[open]')
+  const messageConfirmation = await dialogueOuvert.locator('p').first().innerText()
+  await dialogueOuvert.getByRole('button', { name: 'Confirmer' }).click()
+
   await expect(page).toHaveURL(/\/membres$/)
   expect(messageConfirmation).toContain('Archiver la fiche')
   expect(messageConfirmation).toContain("rien n'est supprimé")

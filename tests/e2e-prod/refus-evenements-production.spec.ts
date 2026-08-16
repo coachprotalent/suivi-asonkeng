@@ -227,16 +227,18 @@ test("le refus « fiche cible non active » — remonté d'un MARQUEUR POSTGRES 
   // MESSAGE_FICHE_CIBLE_OBLIGATOIRE, et le test échouerait sur l'assertion suivante SANS
   // qu'on sache que c'est la forge qui a raté, pas le refus qui manque.
   await expect(champCache).toHaveValue(idMembreArchive)
-  // M11 — la conversion porte désormais une confirmation `window.confirm`, et Playwright
-  // REJETTE d'office toute boîte non gérée : sans ce branchement, le clic serait annulé et
-  // ce test échouerait sur l'absence du refus, en donnant à croire que le refus a disparu.
-  // Le message est asséré, ce qui en fait aussi le contrôle positif de la confirmation.
-  let texteConfirmation: string | null = null
-  page.once('dialog', async (dialogue) => {
-    texteConfirmation = dialogue.message()
-    await dialogue.accept()
-  })
+  // M11 — la conversion porte une confirmation. Depuis la Task 15 (D124), ce n'est plus une
+  // boîte native mais le `<dialog>` de `Dialogue` : le clic sur « Convertir » n'ouvre que le
+  // dialogue, sans lui ce test échouerait sur l'absence du refus, en donnant à croire que le
+  // refus a disparu. Le message est asséré, ce qui en fait aussi le contrôle positif de la
+  // confirmation.
   await ligne.getByRole('button', { name: 'Convertir' }).click()
+  const dialogueOuvert = page.locator('dialog[open]')
+  const texteConfirmation = await dialogueOuvert.locator('p').first().innerText()
+  await dialogueOuvert.getByRole('button', { name: 'Confirmer' }).click()
+  // `expect.poll` inchangé bien que la valeur soit déjà résolue : ne pas modifier la forme
+  // de l'assertion elle-même (Task 15, D124 — seuls les gestionnaires de dialogue natif
+  // sont adaptés).
   await expect.poll(() => texteConfirmation).toContain('DÉFINITIVE')
 
   await expect(ligne.getByRole('alert')).toContainText(MESSAGE_FICHE_CIBLE_NON_ACTIVE)

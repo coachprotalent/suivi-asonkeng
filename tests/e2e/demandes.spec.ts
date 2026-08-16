@@ -126,6 +126,16 @@ async function connecter(page: Page, identifiant: string) {
 }
 
 /**
+ * Task 15 (D124) — `window.confirm` est remplacé par le `<dialog>` natif de `Dialogue` :
+ * le clic déclencheur n'ouvre plus qu'un dialogue, il ne soumet plus rien tout seul.
+ * Accepte le dialogue OUVERT en cliquant son bouton « Confirmer » — l'équivalent de
+ * l'ancien `page.once('dialog', (d) => d.accept())` sur la boîte native.
+ */
+async function accepterDialogue(page: Page) {
+  await page.locator('dialog[open]').getByRole('button', { name: 'Confirmer' }).click()
+}
+
+/**
  * Le bouton « Se déconnecter » ne vit que sur `/tableau-de-bord`
  * (src/app/tableau-de-bord/page.tsx) — ni `/demandes` ni `/demandes/nouvelle`
  * ne le rendent. On y navigue explicitement plutôt que de supposer sa présence
@@ -364,8 +374,8 @@ test("un compte ordinaire propose une personne, la voit dans « mes demandes »,
     .single()
   idsDemandeCreees.push(demandeA!.id)
 
-  page.once('dialog', (dialogue) => dialogue.accept())
   await page.getByRole('button', { name: 'Annuler' }).click()
+  await accepterDialogue(page)
   await expect(page.getByText('Annulée')).toBeVisible()
 
   // ÉTAT FINAL en base, pas seulement l'affichage : la fiche a disparu, la
@@ -547,18 +557,20 @@ test(
     await page.goto('/demandes')
     const ligne = page.locator('li', { hasText: `${PREFIXE_MEMBRE}-rejet` })
     await ligne.getByLabel('Motif de rejet').fill('Doublon suspecté')
-    // M12 — le rejet porte désormais une confirmation, et Playwright REJETTE d'office toute
-    // boîte non gérée : sans ce branchement, le clic serait annulé et le test échouerait sur
-    // l'assertion suivante sans dire pourquoi. Le message est asséré, ce qui en fait le
-    // CONTRÔLE POSITIF de l'existence de la confirmation — retirée par inadvertance, elle
-    // laisserait sinon ce test parfaitement vert.
-    let texteConfirmation: string | null = null
-    page.once('dialog', async (dialogue) => {
-      texteConfirmation = dialogue.message()
-      await dialogue.accept()
-    })
+    // M12 — le rejet porte une confirmation. Depuis la Task 15 (D124), ce n'est plus une
+    // boîte native mais le `<dialog>` de `Dialogue` : le clic sur « Rejeter » n'ouvre que
+    // le dialogue, sans lui la ligne suivante attendrait un message qui n'arrive jamais.
+    // Le message est asséré, ce qui en fait le CONTRÔLE POSITIF de l'existence de la
+    // confirmation — retirée par inadvertance, elle laisserait sinon ce test parfaitement
+    // vert.
     await ligne.getByRole('button', { name: 'Rejeter' }).click()
+    const dialogueOuvert = page.locator('dialog[open]')
+    const texteConfirmation = await dialogueOuvert.locator('p').first().innerText()
+    await dialogueOuvert.getByRole('button', { name: 'Confirmer' }).click()
     // Origine `demande_suivi` ici : c'est la branche NON définitive du message.
+    // `expect.poll` inchangé bien que la valeur soit déjà résolue : ne pas modifier la
+    // forme de l'assertion elle-même (Task 15, D124 — seuls les gestionnaires de
+    // dialogue natif sont adaptés).
     await expect.poll(() => texteConfirmation).toContain('notifié avec le motif saisi')
     await expect(page.getByText(`${PREFIXE_MEMBRE}-rejet`)).toHaveCount(0)
     await deconnecter(page)
@@ -623,13 +635,15 @@ test(
 
     // La soumission légitime est CAPTURÉE PUIS AVORTÉE : le rejet ne doit avoir
     // lieu qu'une fois, par la requête falsifiée ci-dessous.
-    // M12 — la confirmation doit être ACCEPTÉE pour que la requête parte et soit capturable ;
-    // rejetée (comportement par défaut de Playwright), aucune requête n'existerait et
-    // `capturerRequeteAbandonnee` attendrait dans le vide.
-    page.once('dialog', (dialogue) => dialogue.accept())
-    const requete = await capturerRequeteAbandonnee(page, '**/demandes', () =>
-      ligne.getByRole('button', { name: 'Rejeter' }).click(),
-    )
+    // M12 — la confirmation doit être ACCEPTÉE pour que la requête parte et soit capturable.
+    // Depuis la Task 15 (D124), ce n'est plus une boîte native mais le `<dialog>` de
+    // `Dialogue` : le clic déclencheur n'ouvre que le dialogue, il faut ENSUITE cliquer
+    // « Confirmer » pour que la requête parte — les deux clics sont donc dans le callback
+    // que `capturerRequeteAbandonnee` attend.
+    const requete = await capturerRequeteAbandonnee(page, '**/demandes', async () => {
+      await ligne.getByRole('button', { name: 'Rejeter' }).click()
+      await accepterDialogue(page)
+    })
     const corpsTampere = ajouterChampMultipart(
       requete.postData,
       requete.headers,

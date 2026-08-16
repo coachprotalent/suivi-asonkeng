@@ -141,18 +141,30 @@ async function seConnecter(page: import('@playwright/test').Page) {
   await expect(page).toHaveURL(/\/tableau-de-bord/)
 }
 
+/**
+ * Task 15 (D124) — `window.confirm` est remplacé par le `<dialog>` natif de `Dialogue` :
+ * le clic déclencheur n'ouvre plus qu'un dialogue, il ne soumet plus rien tout seul.
+ * Accepte le dialogue OUVERT en cliquant son bouton « Confirmer » — l'équivalent de
+ * l'ancien `page.once('dialog', (d) => d.accept())` sur la boîte native.
+ */
+async function accepterDialogue(page: import('@playwright/test').Page) {
+  await page.locator('dialog[open]').getByRole('button', { name: 'Confirmer' }).click()
+}
+
+/** Idem, mais lit le message AVANT de confirmer — remplace `dialogue.message()`. */
+async function messageDialogueOuvert(page: import('@playwright/test').Page): Promise<string> {
+  return page.locator('dialog[open]').locator('p').first().innerText()
+}
+
 test("archiver une fiche à compte lié actif avertit, puis désactive réellement ce compte", async ({
   page,
 }) => {
   await seConnecter(page)
   await page.goto(`/membres/${idMembreCible}`)
 
-  let messageDialogue = ''
-  page.once('dialog', (dialogue) => {
-    messageDialogue = dialogue.message()
-    dialogue.accept()
-  })
   await page.getByRole('button', { name: 'Archiver' }).click()
+  const messageDialogue = await messageDialogueOuvert(page)
+  await accepterDialogue(page)
 
   // L'HONNÊTETÉ DE L'INTERFACE (D24) : un bouton qui révoque aussi l'accès de
   // quelqu'un doit le dire AVANT qu'on clique, pas après.
@@ -178,12 +190,9 @@ test("rétablir une fiche dont le compte lié est désactivé avertit que ce com
   await seConnecter(page)
   await page.goto(`/membres/${idMembreRetablir}`)
 
-  let messageDialogue = ''
-  page.once('dialog', (dialogue) => {
-    messageDialogue = dialogue.message()
-    dialogue.accept()
-  })
   await page.getByRole('button', { name: 'Rétablir' }).click()
+  const messageDialogue = await messageDialogueOuvert(page)
+  await accepterDialogue(page)
 
   expect(messageDialogue).toContain('reste désactivé')
   expect(messageDialogue).not.toContain('sera désactivé')
@@ -222,8 +231,8 @@ test("archiver la fiche d'un administrateur n'est pas refusé quand un autre adm
   await seConnecter(page)
   await page.goto(`/membres/${idMembreAdminSecondaire}`)
 
-  page.once('dialog', (dialogue) => dialogue.accept())
   await page.getByRole('button', { name: 'Archiver' }).click()
+  await accepterDialogue(page)
 
   await expect(page.locator(ALERTE)).toHaveCount(0)
   await expect(page.getByText('dernier administrateur actif')).toHaveCount(0)
