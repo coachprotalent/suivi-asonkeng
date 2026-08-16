@@ -1,11 +1,12 @@
-import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { membreParId } from '@/lib/donnees/membres'
 import { journalDuMembre, listerCatalogue, statutsDuMembre } from '@/lib/donnees/statuts'
 import { formaterDateHeure, formaterDateSeule } from '@/lib/format/date'
 import { aAutoriteSur, exigerProfilActif } from '@/lib/securite/garde'
-import { retirerStatut } from './actions'
-import { BoutonRetirerStatut } from './bouton-retirer-statut'
+import { Carte } from '@/composants/ui/carte'
+import { EnTetePage } from '@/composants/ui/en-tete-page'
+import { LigneListe, Liste } from '@/composants/ui/ligne-liste'
+import { FormulaireRetraitStatut } from './formulaire-retrait-statut'
 import { FormulaireStatut } from './formulaire-statut'
 
 export default async function PageStatuts({ params }: { params: Promise<{ id: string }> }) {
@@ -29,105 +30,106 @@ export default async function PageStatuts({ params }: { params: Promise<{ id: st
   const groupes = peutEcrire ? await listerCatalogue() : []
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-10">
-      <Link href={`/membres/${membre.id}`} className="text-sm underline underline-offset-4">
-        Retour à la fiche
-      </Link>
+    <main className="mx-auto max-w-3xl px-esp-6 py-esp-10">
+      <EnTetePage
+        retour={{ href: `/membres/${membre.id}`, libelle: 'Retour à la fiche' }}
+        titre={`Statuts de ${membre.prenom} ${membre.nom}`}
+      />
 
-      <header className="mt-4 mb-8">
-        <h1 className="text-2xl font-semibold">
-          Statuts de {membre.prenom} {membre.nom}
-        </h1>
-        {membre.etat !== 'actif' ? (
-          <p className="mt-1 text-sm text-amber-700">
+      {membre.etat !== 'actif' ? (
+        <div className="mb-esp-6">
+          <Carte ton="avertissement" role="alert">
             {membre.etat === 'archive'
               ? "Fiche archivée — elle ne figure plus dans l'annuaire."
               : 'Fiche en attente de validation.'}
-          </p>
-        ) : null}
-      </header>
+          </Carte>
+        </div>
+      ) : null}
 
-      <section className="mb-10">
-        <h2 className="mb-4 text-lg font-medium">Statuts actuels</h2>
+      <section className="mb-esp-10">
+        <h2 className="mb-esp-4 text-section">Statuts actuels</h2>
         {statuts.length === 0 ? (
-          <p className="text-neutral-600">Aucun statut attribué pour l&apos;instant.</p>
+          <p className="text-petit text-encre-attenuee">Aucun statut attribué pour l&apos;instant.</p>
         ) : (
-          <ul className="divide-y divide-neutral-200">
+          <Liste>
             {statuts.map((statut) => (
-              <li key={statut.statutId} className="flex items-start justify-between gap-4 py-3">
-                <div>
-                  <p className="font-medium">{statut.libelle}</p>
-                  <p className="text-sm text-neutral-500">
+              <LigneListe
+                key={statut.statutId}
+                principal={statut.libelle}
+                meta={
+                  <>
                     {statut.groupeNom}
-                    {statut.dateAcquisition ? ` · depuis le ${formaterDateSeule(statut.dateAcquisition)}` : ''}
-                  </p>
-                  {statut.note ? <p className="mt-1 text-sm">{statut.note}</p> : null}
-                </div>
-                {peutEcrire ? (
-                  <form action={retirerStatut} className="flex items-start gap-2">
-                    <input type="hidden" name="membreId" value={membre.id} />
-                    <input type="hidden" name="statutId" value={statut.statutId} />
-                    {/*
-                      `maxLength` n'est pas décoratif : `retirerStatut` n'a aucun canal
-                      pour renvoyer un message de validation, et un motif trop long y
-                      serait journalisé puis remplacé par null — le retrait réussirait
-                      sans le motif, sans un mot à l'utilisateur. La limite se voit
-                      donc au moment où l'on écrit, pas après coup.
-                    */}
-                    <input
-                      type="text"
-                      name="motif"
-                      maxLength={500}
-                      placeholder="Motif du retrait (facultatif)"
-                      aria-label={`Motif du retrait du statut « ${statut.libelle} »`}
-                      className="w-56 rounded border border-neutral-300 px-2 py-1 text-sm"
+                    {statut.dateAcquisition
+                      ? ` · depuis le ${formaterDateSeule(statut.dateAcquisition)}`
+                      : ''}
+                    {statut.note ? <span className="block">{statut.note}</span> : null}
+                  </>
+                }
+                actions={
+                  peutEcrire ? (
+                    <FormulaireRetraitStatut
+                      membreId={membre.id}
+                      statutId={statut.statutId}
+                      libelle={statut.libelle}
                     />
-                    <BoutonRetirerStatut libelle={statut.libelle} />
-                  </form>
-                ) : null}
-              </li>
+                  ) : undefined
+                }
+              />
             ))}
-          </ul>
+          </Liste>
         )}
       </section>
 
       {peutEcrire ? (
-        <section className="mb-10">
-          <h2 className="mb-4 text-lg font-medium">Attribuer un statut</h2>
+        <section className="mb-esp-10">
+          <h2 className="mb-esp-4 text-section">Attribuer un statut</h2>
           <FormulaireStatut membreId={membre.id} groupes={groupes} />
         </section>
       ) : null}
 
       <section>
-        <h2 className="mb-1 text-lg font-medium">Journal</h2>
-        <p className="mb-4 text-sm text-neutral-500">
+        <h2 className="mb-esp-1 text-section">Journal</h2>
+        <p className="mb-esp-4 text-petit text-encre-attenuee">
           Chaque ajout et chaque retrait est conservé : c&apos;est la seule trace de ces mouvements.
         </p>
         {journal.length === 0 ? (
-          <p className="text-neutral-600">Aucun mouvement enregistré.</p>
+          <p className="text-petit text-encre-attenuee">Aucun mouvement enregistré.</p>
         ) : (
-          <ul className="divide-y divide-neutral-200">
+          <Liste>
             {journal.map((entree) => (
-              <li key={entree.id} className="py-3 text-sm">
-                <span className={entree.action === 'ajout' ? 'text-green-700' : 'text-red-700'}>
-                  {entree.action === 'ajout' ? 'Ajouté' : 'Retiré'}
-                </span>{' '}
-                — {entree.libelle}
-                <span className="text-neutral-500">
-                  {' '}
-                  · {formaterDateHeure(entree.le)}
-                  {/*
-                    Le nom de l'auteur est capturé à l'écriture depuis la migration
-                    20260813160000 et ne devrait plus manquer pour une nouvelle
-                    entrée. Un `null` reste possible sur une ligne antérieure à cette
-                    migration : on le dit plutôt que de l'omettre en silence.
-                  */}
-                  · par {entree.parNomAffichage ?? 'auteur inconnu'}
-                </span>
-                {entree.motif ? <p className="text-neutral-600">{entree.motif}</p> : null}
-              </li>
+              <LigneListe
+                key={entree.id}
+                principal={
+                  <>
+                    <span
+                      className={entree.action === 'ajout' ? 'text-etat-acquis' : 'text-etat-refus'}
+                    >
+                      {entree.action === 'ajout' ? 'Ajouté' : 'Retiré'}
+                    </span>{' '}
+                    — {entree.libelle}
+                  </>
+                }
+                meta={
+                  <>
+                    {formaterDateHeure(entree.le)}
+                    {/*
+                      Le nom de l'auteur est capturé à l'écriture depuis la migration
+                      20260813160000 et ne devrait plus manquer pour une nouvelle
+                      entrée. Un `null` reste possible sur une ligne antérieure à
+                      cette migration : on le dit plutôt que de l'omettre en silence.
+                    */}
+                    {' · par '}
+                    {entree.parNomAffichage ?? 'auteur inconnu'}
+                  </>
+                }
+                complement={
+                  entree.motif ? (
+                    <p className="text-petit text-encre-attenuee">{entree.motif}</p>
+                  ) : undefined
+                }
+              />
             ))}
-          </ul>
+          </Liste>
         )}
       </section>
     </main>

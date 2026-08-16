@@ -2,6 +2,8 @@
 
 import { useActionState, useState } from 'react'
 import type { MembreBref } from '@/lib/donnees/membres'
+import { Bouton } from '@/composants/ui/bouton'
+import { Formulaire } from '@/composants/ui/formulaire'
 import { SelecteurMembre } from '../../membres/selecteur-membre'
 import { definirAntenneMembre, type EtatRattachement } from './actions'
 
@@ -12,7 +14,22 @@ export function FormulaireRattachement({ antenneId }: { antenneId: string }) {
   const [membre, setMembre] = useState<MembreBref | null>(null)
 
   return (
-    <form action={envoyer} className="flex flex-col gap-3">
+    <Formulaire
+      action={envoyer}
+      erreur={etat.erreur}
+      enCours={enCours}
+      actions={
+        <Bouton
+          type="submit"
+          alignement="debut"
+          disabled={!membre}
+          enCours={enCours}
+          libelleAttente="Rattachement…"
+        >
+          Rattacher
+        </Bouton>
+      }
+    >
       <input type="hidden" name="antenneId" value={antenneId} />
       <input type="hidden" name="pageAntenneId" value={antenneId} />
       <SelecteurMembre
@@ -23,20 +40,6 @@ export function FormulaireRattachement({ antenneId }: { antenneId: string }) {
         surChoix={setMembre}
         exclureId={null}
       />
-
-      {etat.erreur ? (
-        <p role="alert" className="text-sm text-red-600">
-          {etat.erreur}
-        </p>
-      ) : null}
-
-      <button
-        type="submit"
-        disabled={enCours || !membre}
-        className="self-start rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-      >
-        {enCours ? 'Rattachement…' : 'Rattacher'}
-      </button>
-    </form>
+    </Formulaire>
   )
 }

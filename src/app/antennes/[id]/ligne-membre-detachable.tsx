@@ -1,9 +1,10 @@
 'use client'
 
-import Link from 'next/link'
 import { useActionState, useRef, useState } from 'react'
 import { Bouton } from '@/composants/ui/bouton'
 import { Dialogue } from '@/composants/ui/dialogue'
+import { LigneListe } from '@/composants/ui/ligne-liste'
+import { Refus } from '@/composants/ui/refus'
 import type { MembreBref } from '@/lib/donnees/membres'
 import { definirAntenneMembre, type EtatRattachement } from './actions'
 
@@ -12,9 +13,12 @@ const etatInitial: EtatRattachement = { erreur: null }
 /**
  * ═══ D124 — `window.confirm` BLOQUE, UN `<dialog>` NE BLOQUE PAS ═══
  * Voir le commentaire de tête de `antennes/bouton-bascule-antenne.tsx`, le gabarit des dix
- * confirmations de famille A. LE MESSAGE NE CHANGE PAS D'UN OCTET (D117). `disabled={enCours}`
- * devient `enCours={enCours}` sur `Bouton`, avec `libelleAttente="Détachement…"` — le libellé
- * basculait déjà ainsi, ce n'est pas un texte neuf.
+ * confirmations de famille A (site A4, CETTE CONVERSION N'EST PAS RETOUCHÉE À LA TASK 22).
+ * LE MESSAGE NE CHANGE PAS D'UN OCTET (D117). `disabled={enCours}` devient `enCours={enCours}`
+ * sur `Bouton`, avec `libelleAttente="Détachement…"` — le libellé basculait déjà ainsi, ce
+ * n'est pas un texte neuf.
+ *
+ * ⚠️ PAS DE RAIL DE FILIATION (D106) : voir `page.tsx`.
  */
 export function LigneMembreDetachable({
   membre,
@@ -34,11 +38,10 @@ export function LigneMembreDetachable({
     'de présence reste intact.'
 
   return (
-    <li className="flex flex-col gap-1 py-2">
-      <div className="flex items-center justify-between gap-4">
-        <Link href={`/membres/${membre.id}`} className="text-sm">
-          {membre.prenom} {membre.nom}
-        </Link>
+    <LigneListe
+      principal={`${membre.prenom} ${membre.nom}`}
+      lien={`/membres/${membre.id}`}
+      actions={
         <form action={envoyer}>
           <input type="hidden" name="membreId" value={membre.id} />
           <input type="hidden" name="pageAntenneId" value={antenneId} />
@@ -70,12 +73,8 @@ export function LigneMembreDetachable({
             surAnnulation={() => setConfirmationDemandee(false)}
           />
         </form>
-      </div>
-      {etat.erreur ? (
-        <p role="alert" className="text-xs text-red-600">
-          {etat.erreur}
-        </p>
-      ) : null}
-    </li>
+      }
+      complement={etat.erreur ? <Refus message={etat.erreur} /> : undefined}
+    />
   )
 }

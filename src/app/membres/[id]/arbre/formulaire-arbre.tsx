@@ -2,6 +2,8 @@
 
 import { useActionState, useRef, useState, useTransition } from 'react'
 import type { MembreBref } from '@/lib/donnees/membres'
+import { Bouton } from '@/composants/ui/bouton'
+import { Formulaire } from '@/composants/ui/formulaire'
 import { SelecteurMembre } from '../../selecteur-membre'
 import { definirArbre, proposerDirigeant, type EtatArbre } from './actions'
 
@@ -44,6 +46,13 @@ export function FormulaireArbre({
   const [proposition, setProposition] = useState(propositionInitiale)
   const [calculEnCours, demarrerCalcul] = useTransition()
 
+  /*
+    ⚠️ MOTIF ORIGINAL DU `useRef` DE SÉQUENCE (Task 22) — cité en commentaire par
+    `bloc-enrichissement.tsx:64` (« Motif repris tel quel de … formulaire-arbre.tsx »).
+    NE PAS LE FACTORISER : ce serait une correction de fond, hors périmètre de cette
+    tâche de présentation (D118, piège n°4). La logique ci-dessous n'est PAS modifiée,
+    seule la présentation autour d'elle l'est.
+  */
   // Miroir synchrone de `force`, lu par le rappel asynchrone de `changerFaiseur` : lire
   // l'état React `force` directement y capturerait sa valeur au moment où la fermeture a
   // été créée (rendu du clic sur le faiseur), pas sa valeur au moment où la réponse
@@ -132,59 +141,58 @@ export function FormulaireArbre({
   const afficherBoutonRevenir = force || proposeDiffere
 
   return (
-    <form action={envoyer} className="flex flex-col gap-6">
+    <Formulaire
+      action={envoyer}
+      erreur={etat.erreur}
+      enCours={enCours}
+      actions={
+        <Bouton type="submit" alignement="debut" enCours={enCours} libelleAttente="Enregistrement…">
+          Enregistrer le rattachement
+        </Bouton>
+      }
+    >
       <input type="hidden" name="membreId" value={membreId} />
       <input type="hidden" name="dirigeantForce" value={force ? '1' : '0'} />
 
-      <SelecteurMembre
-        nom="faiseurDeDiscipleId"
-        label="Faiseur de disciple"
-        aide="Laisser vide fait de ce membre une racine de l'arbre."
-        valeur={faiseur}
-        surChoix={changerFaiseur}
-        exclureId={membreId}
-      />
-
-      <div className="flex flex-col gap-1.5">
+      {/*
+        ⚠️ RAIL DE FILIATION (D106) — l'un des cinq seuls emplacements légitimes (voir
+        globals.css) : c'est ICI que se décide la relation de discipulat de ce membre.
+        `/antennes/[id]` N'EN PORTE PAS : le rattachement à une antenne n'est pas un
+        lien de discipulat.
+      */}
+      <div className="rail-filiation flex flex-col gap-esp-6">
         <SelecteurMembre
-          nom="dirigeantId"
-          label="Dirigeant"
-          aide="Proposé à partir du faiseur de disciple. Vous pouvez en choisir un autre."
-          valeur={dirigeant}
-          surChoix={changerDirigeant}
+          nom="faiseurDeDiscipleId"
+          label="Faiseur de disciple"
+          aide="Laisser vide fait de ce membre une racine de l'arbre."
+          valeur={faiseur}
+          surChoix={changerFaiseur}
           exclureId={membreId}
         />
-        <p className="text-xs text-neutral-500">
-          {calculEnCours ? 'Calcul de la proposition…' : mentionDirigeant()}
-          {!calculEnCours && afficherBoutonRevenir ? (
-            <>
-              {' '}
-              <button
-                type="button"
-                onClick={revenirAuCalcul}
-                className="underline underline-offset-4"
-              >
-                Revenir au dirigeant calculé
-              </button>
-              {` (${nomComplet(proposition)})`}
-            </>
-          ) : null}
-        </p>
+
+        <div className="flex flex-col gap-esp-1">
+          <SelecteurMembre
+            nom="dirigeantId"
+            label="Dirigeant"
+            aide="Proposé à partir du faiseur de disciple. Vous pouvez en choisir un autre."
+            valeur={dirigeant}
+            surChoix={changerDirigeant}
+            exclureId={membreId}
+          />
+          <p className="text-petit text-encre-attenuee">
+            {calculEnCours ? 'Calcul de la proposition…' : mentionDirigeant()}
+            {!calculEnCours && afficherBoutonRevenir ? (
+              <>
+                {' '}
+                <Bouton type="button" variante="lien" onClick={revenirAuCalcul}>
+                  Revenir au dirigeant calculé
+                </Bouton>
+                {` (${nomComplet(proposition)})`}
+              </>
+            ) : null}
+          </p>
+        </div>
       </div>
-
-      {etat.erreur ? (
-        <p role="alert" className="text-sm text-red-600">
-          {etat.erreur}
-        </p>
-      ) : null}
-
-      <button
-        type="submit"
-        disabled={enCours}
-        className="self-start rounded-md bg-neutral-900 px-4 py-2 font-medium text-white disabled:opacity-50"
-      >
-        {enCours ? 'Enregistrement…' : 'Enregistrer le rattachement'}
-      </button>
-    </form>
+    </Formulaire>
   )
 }

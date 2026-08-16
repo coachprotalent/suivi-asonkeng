@@ -1,8 +1,9 @@
-import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { listerAntennes } from '@/lib/donnees/antennes'
 import { membreParId } from '@/lib/donnees/membres'
 import { exigerAdministrateur } from '@/lib/securite/garde'
+import { Carte } from '@/composants/ui/carte'
+import { EnTetePage } from '@/composants/ui/en-tete-page'
 import { modifierMembre } from '../../actions'
 import { FormulaireMembre } from '../../formulaire-membre'
 
@@ -19,26 +20,27 @@ export default async function PageModifierMembre({
   }
 
   return (
-    <main className="mx-auto max-w-3xl px-6 py-10">
-      <Link href={`/membres/${membre.id}`} className="text-sm underline underline-offset-4">
-        Retour à la fiche
-      </Link>
-      <h1 className="mt-4 text-2xl font-semibold">
-        Modifier {membre.prenom} {membre.nom}
-      </h1>
+    <main className="mx-auto max-w-3xl px-esp-6 py-esp-10">
+      <EnTetePage
+        retour={{ href: `/membres/${membre.id}`, libelle: 'Retour à la fiche' }}
+        titre={`Modifier ${membre.prenom} ${membre.nom}`}
+      />
+
       {/*
-        Même bandeau que sur l'écran de consultation (tâche 9) : sans lui, un
+        Même bandeau que sur l'écran de consultation (Task 21) : sans lui, un
         administrateur arrivant par un lien périmé pouvait modifier une fiche
         archivée en croyant suivre un membre actif.
       */}
       {membre.etat !== 'actif' ? (
-        <p className="mt-1 text-sm text-amber-700">
-          {membre.etat === 'archive'
-            ? "Fiche archivée — elle ne figure plus dans l'annuaire."
-            : 'Fiche en attente de validation.'}
-        </p>
+        <div className="mb-esp-6">
+          <Carte ton="avertissement" role="alert">
+            {membre.etat === 'archive'
+              ? "Fiche archivée — elle ne figure plus dans l'annuaire."
+              : 'Fiche en attente de validation.'}
+          </Carte>
+        </div>
       ) : null}
-      <div className="mb-8" />
+
       <FormulaireMembre
         action={modifierMembre}
         antennes={antennes}

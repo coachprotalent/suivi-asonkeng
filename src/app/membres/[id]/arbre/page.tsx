@@ -1,9 +1,9 @@
-import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { dirigeantPropose } from '@/lib/domaine/arbre'
 import { maillonArbre } from '@/lib/donnees/arbre'
 import { membreBrefParId, membreParId } from '@/lib/donnees/membres'
 import { exigerAdministrateur } from '@/lib/securite/garde'
+import { EnTetePage } from '@/composants/ui/en-tete-page'
 import { FormulaireArbre } from './formulaire-arbre'
 
 export default async function PageArbre({ params }: { params: Promise<{ id: string }> }) {
@@ -32,17 +32,12 @@ export default async function PageArbre({ params }: { params: Promise<{ id: stri
   const proposition = proposeId ? await membreBrefParId(proposeId) : null
 
   return (
-    <main className="mx-auto max-w-2xl px-6 py-10">
-      <Link href={`/membres/${membre.id}`} className="text-sm underline underline-offset-4">
-        Retour à la fiche
-      </Link>
-      <h1 className="mt-4 mb-2 text-2xl font-semibold">
-        Rattachement de {membre.prenom} {membre.nom}
-      </h1>
-      <p className="mb-8 text-sm text-neutral-500">
-        Le faiseur de disciple place ce membre dans l&apos;arbre. Le dirigeant est proposé à
-        partir de lui, et reste modifiable.
-      </p>
+    <main className="mx-auto max-w-2xl px-esp-6 py-esp-10">
+      <EnTetePage
+        retour={{ href: `/membres/${membre.id}`, libelle: 'Retour à la fiche' }}
+        titre={`Rattachement de ${membre.prenom} ${membre.nom}`}
+        soustitre="Le faiseur de disciple place ce membre dans l'arbre. Le dirigeant est proposé à partir de lui, et reste modifiable."
+      />
 
       <FormulaireArbre
         membreId={membre.id}
