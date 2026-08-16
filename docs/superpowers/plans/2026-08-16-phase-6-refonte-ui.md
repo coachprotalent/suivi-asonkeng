@@ -242,6 +242,37 @@ identifié le commit fautif.
 
 Ces règles s'appliquent à **chaque** tâche.
 
+### 0. Deux commandes de ce plan étaient fausses — corrigées le 2026-08-16, après la tâche 2
+
+Elles se répétaient chacune plusieurs fois. Toutes deux **rendaient zéro sans rien mesurer** :
+c'est la forme de défaut que ce projet appelle une **mesure vraie à vide**, et elle est d'autant
+plus coûteuse ici qu'elle porte sur des commandes de **preuve**.
+
+**a) Le chemin du CSS compilé.** Le plan écrivait `.next/static/css/*.css`, qui est la sortie de
+**webpack**. Ce projet compile avec **Turbopack**, dont le CSS atterrit dans
+`.next/static/chunks/`. La commande littérale rendait donc `0` pour tout — **y compris pour son
+propre contrôle positif**, qui aurait dû l'alerter. Les cinq occurrences emploient désormais
+`$(find .next/static -name "*.css")`.
+
+Deux corollaires à retenir quand tu interroges ce CSS : les deux-points d'un préfixe Tailwind y
+sont **échappés** (`sm\:block`), donc un motif non échappé ne trouve rien ; et **un contrôle
+positif qui rend zéro n'est pas un résultat, c'est une panne de l'instrument**.
+
+**b) Le balayage « aucune valeur littérale sous `src/composants/` ».** Il rend **9**, pas `0`, et
+les neuf sont dans des **commentaires** — dont le texte historique que ce plan lui-même cite,
+avec d'anciens noms de classes. Le balayage doit donc **exclure les commentaires** avant de
+conclure, faute de quoi il rougit sur sa propre documentation :
+
+```bash
+grep -rEn "#[0-9a-fA-F]{3,8}|\b(bg|text|border|ring|divide)-(red|amber|green|blue|neutral|gray|slate|zinc|stone|white|black)(-[0-9]{2,3})?\b" src/composants/ \
+  | grep -v ':[0-9]*: *\(\*\|//\|/\*\)' \
+  | wc -l
+```
+
+Attendu : `0`. **Prouve d'abord que ta commande sait trouver quelque chose** — ajoute une couleur
+littérale dans un `className` d'un fichier témoin, vérifie qu'elle est vue, retire-la — avant
+qu'un zéro veuille dire une absence.
+
 ### 1. Le périmètre est déclaré VIDE côté base, et ce vide est une preuve (D118)
 
 **AUCUNE migration. AUCUNE politique RLS. AUCUN déclencheur. AUCUNE Server Action d'écriture
@@ -961,16 +992,16 @@ export function TemoinRupture() {
 Puis, après un `npm run build` :
 
 ```bash
-grep -rn "xl.inline" .next/static/css/*.css | wc -l
-grep -rn "2xl.table" .next/static/css/*.css | wc -l
+grep -rn "xl.inline" $(find .next/static -name "*.css") | wc -l
+grep -rn "2xl.table" $(find .next/static -name "*.css") | wc -l
 ```
 
 Attendu : **0** et **0**. Contrôle positif **obligatoire**, dans la même session — sans lui,
 un zéro ne prouve rien (une mesure vraie à vide a déjà été produite dans ce projet) :
 
 ```bash
-grep -rn "sm.block" .next/static/css/*.css | wc -l
-grep -rn "lg.grid" .next/static/css/*.css | wc -l
+grep -rn "sm.block" $(find .next/static -name "*.css") | wc -l
+grep -rn "lg.grid" $(find .next/static -name "*.css") | wc -l
 ```
 
 Attendu : **au moins 1** et **au moins 1**. Si l'un des deux rend zéro, la commande est
@@ -4045,7 +4076,7 @@ fonctionnelle est seulement plus courte. **Consigner laquelle des deux formes a 
 et **vérifier la sortie CSS** :
 
 ```bash
-npm run build && grep -c "retrait-4" .next/static/css/*.css
+npm run build && grep -c "retrait-4" $(find .next/static -name "*.css")
 ```
 
 Attendu : **au moins 1** — la classe est bien générée. Contrôle positif implicite : si elle
