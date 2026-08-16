@@ -2103,6 +2103,23 @@ export function Formulaire({ erreur, enCours, children, ...soumission }: Proprie
 }
 ```
 
+> **CORRECTION DU 2026-08-16, après la tâche 11 — les deux paragraphes qui suivent se
+> contredisaient, et le code a suivi le mauvais.**
+>
+> Rendre `<Refus>` après `children` ne le place « juste au-dessus du bouton » **que si le
+> bouton n'est pas dans `children`**. Or le paragraphe suivant prescrit exactement l'inverse.
+> Résultat mesuré sur le premier écran à employer `Formulaire` : **le bandeau de refus
+> s'affichait SOUS le bouton d'envoi**, contre la position qu'ont les 46 bandeaux du dépôt —
+> et **aucune porte ne pouvait le voir**, les preuves vérifiant le texte du bandeau et jamais
+> sa position.
+>
+> **`Formulaire` porte désormais une fente `actions` OBLIGATOIRE**, et rend dans l'ordre :
+> `children`, puis `<Refus>`, puis `actions`. L'ordre d'origine est restitué **par
+> construction** — une fente optionnelle rouvrait la porte, elle ne l'est donc pas. Une
+> assertion sur l'**ordre DOM** le prouve, et elle a été éprouvée par mutation.
+>
+> Lis les deux paragraphes ci-dessous comme l'énoncé du problème, pas comme la consigne.
+
 **Le `<Refus>` est rendu APRÈS `children`, jamais avant.** C'est la position qu'ont les 46
 bandeaux existants — juste au-dessus du bouton de soumission. La remonter en tête du
 formulaire déplacerait un élément visible sur vingt-cinq écrans sans qu'aucune décision ne
