@@ -3,6 +3,9 @@
 import { useEffect, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import type { MembreBref } from '@/lib/donnees/membres'
+import { Carte } from '@/composants/ui/carte'
+import { CLASSES_CHAMP } from '@/composants/ui/champ'
+import { LigneListe, Liste } from '@/composants/ui/ligne-liste'
 import { SelecteurMembre } from '../../../membres/selecteur-membre'
 import { pointerPresence } from './pointage-actions'
 
@@ -141,8 +144,8 @@ export function Pointage({ seanceId, membres, presencesInitiales, presencesHorsL
   }
 
   return (
-    <div className="flex flex-col gap-4">
-      <p className="text-sm text-neutral-600">
+    <div className="flex flex-col gap-esp-4">
+      <p className="text-petit text-encre-attenuee">
         {presentsCount} présent{presentsCount > 1 ? 's' : ''}.
       </p>
 
@@ -152,74 +155,92 @@ export function Pointage({ seanceId, membres, presencesInitiales, presencesHorsL
         onChange={(evenement) => setFiltre(evenement.target.value)}
         placeholder="Filtrer la liste affichée"
         aria-label="Filtrer la liste des membres"
-        className="rounded-md border border-neutral-300 px-3 py-2"
+        className={CLASSES_CHAMP}
       />
 
-      <ul className="divide-y divide-neutral-200">
+      <Liste>
         {membresAffiches.map((membre) => (
-          <li key={membre.id} className="flex items-center justify-between gap-4 py-2">
-            <label className="flex items-center gap-3 text-sm">
-              <input
-                type="checkbox"
-                checked={presences[membre.id] ?? false}
-                onChange={(evenement) => basculer(membre.id, evenement.target.checked)}
-              />
-              {membre.prenom} {membre.nom}
-            </label>
-            {erreurs[membre.id] ? (
-              <span role="alert" className="text-xs text-red-600">
-                {erreurs[membre.id]}
-              </span>
-            ) : null}
-          </li>
+          <LigneListe
+            key={membre.id}
+            principal={
+              <label className="cible-tactile flex items-center gap-esp-3">
+                <input
+                  type="checkbox"
+                  checked={presences[membre.id] ?? false}
+                  onChange={(evenement) => basculer(membre.id, evenement.target.checked)}
+                />
+                {membre.prenom} {membre.nom}
+              </label>
+            }
+            actions={
+              erreurs[membre.id] ? (
+                <span role="alert" className="text-petit text-etat-refus">
+                  {erreurs[membre.id]}
+                </span>
+              ) : undefined
+            }
+          />
         ))}
-      </ul>
+      </Liste>
       {membresAffiches.length === 0 ? (
-        <p className="text-sm text-neutral-600">Aucun membre ne correspond à ce filtre.</p>
+        <p className="text-petit text-encre-attenuee">Aucun membre ne correspond à ce filtre.</p>
       ) : null}
 
       {presencesHorsListe.length > 0 ? (
-        <section
-          aria-label="Présences hors de la liste courante"
-          className="flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50 p-3"
-        >
-          <h3 className="text-sm font-medium">Présences hors de la liste courante</h3>
-          {/*
-            Mineur 1 de la revue de la Task 19 : la phrase disait « Leur présence reste
-            comptée (D48) » de TOUTES les lignes de ce bloc, alors que `page.tsx` y range
-            aussi les identifiants dont la présence vaut `false` — quelqu'un qui a été
-            pointé puis dépointé, donc jamais compté. L'encadré affirmait donc une chose
-            fausse pour une partie de ce qu'il montrait. La phrase est rendue
-            CONDITIONNELLE plutôt que la ligne supprimée : une fiche archivée n'est plus
-            retrouvable par le sélecteur « Ajouter quelqu'un d'autre » (qui ne cherche que
-            parmi les membres ACTIFS), donc retirer sa ligne la rendrait DÉFINITIVEMENT
-            impossible à re-cocher après un décochage accidentel.
-          */}
-          <p className="text-xs text-neutral-600">
-            Pointées sur quelqu&apos;un qui n&apos;est plus dans la liste ci-dessus — ajouté hors
-            antenne, archivé depuis, ou rattaché à une autre antenne. Une case cochée ici reste
-            comptée (D48) ; une case décochée ne l&apos;est pas, et ces lignes restent le seul
-            endroit où la recocher.
-          </p>
-          <ul className="divide-y divide-amber-200">
-            {presencesHorsListe.map((entree) => (
-              <li key={entree.id} className="flex items-center justify-between gap-4 py-2">
-                <label className="flex items-center gap-3 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={presences[entree.id] ?? false}
-                    onChange={(evenement) => basculer(entree.id, evenement.target.checked)}
+        <section aria-label="Présences hors de la liste courante">
+          <Carte ton="avertissement">
+            <div className="flex flex-col gap-esp-2">
+              {/*
+                ⚠️ LE SEUL `<h3>` DU DÉPÔT (D109/D126, Task 23). Rien dans l'échelle de
+                cinq degrés n'est un « titre de niveau 3 » : `text-nom` (0.95 rem / 600)
+                est le plus proche, et il distingue ce titre d'un libellé de champ
+                (`text-petit`) sans ajouter un sixième degré. Substitution retenue en
+                revue de dimensionnement (Task 11) plutôt que découverte en relecture.
+              */}
+              <h3 className="text-nom">Présences hors de la liste courante</h3>
+              {/*
+                Mineur 1 de la revue de la Task 19 : la phrase disait « Leur présence reste
+                comptée (D48) » de TOUTES les lignes de ce bloc, alors que `page.tsx` y range
+                aussi les identifiants dont la présence vaut `false` — quelqu'un qui a été
+                pointé puis dépointé, donc jamais compté. L'encadré affirmait donc une chose
+                fausse pour une partie de ce qu'il montrait. La phrase est rendue
+                CONDITIONNELLE plutôt que la ligne supprimée : une fiche archivée n'est plus
+                retrouvable par le sélecteur « Ajouter quelqu'un d'autre » (qui ne cherche que
+                parmi les membres ACTIFS), donc retirer sa ligne la rendrait DÉFINITIVEMENT
+                impossible à re-cocher après un décochage accidentel.
+              */}
+              <p className="text-petit text-encre-attenuee">
+                Pointées sur quelqu&apos;un qui n&apos;est plus dans la liste ci-dessus — ajouté hors
+                antenne, archivé depuis, ou rattaché à une autre antenne. Une case cochée ici reste
+                comptée (D48) ; une case décochée ne l&apos;est pas, et ces lignes restent le seul
+                endroit où la recocher.
+              </p>
+              <Liste>
+                {presencesHorsListe.map((entree) => (
+                  <LigneListe
+                    key={entree.id}
+                    principal={
+                      <label className="cible-tactile flex items-center gap-esp-3">
+                        <input
+                          type="checkbox"
+                          checked={presences[entree.id] ?? false}
+                          onChange={(evenement) => basculer(entree.id, evenement.target.checked)}
+                        />
+                        {entree.libelle}
+                      </label>
+                    }
+                    actions={
+                      erreurs[entree.id] ? (
+                        <span role="alert" className="text-petit text-etat-refus">
+                          {erreurs[entree.id]}
+                        </span>
+                      ) : undefined
+                    }
                   />
-                  {entree.libelle}
-                </label>
-                {erreurs[entree.id] ? (
-                  <span role="alert" className="text-xs text-red-600">
-                    {erreurs[entree.id]}
-                  </span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
+                ))}
+              </Liste>
+            </div>
+          </Carte>
         </section>
       ) : null}
 

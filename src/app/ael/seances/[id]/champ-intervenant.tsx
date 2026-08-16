@@ -1,7 +1,8 @@
 'use client'
 
-import { useId, useState } from 'react'
+import { useState } from 'react'
 import type { MembreBref } from '@/lib/donnees/membres'
+import { Champ } from '@/composants/ui/champ'
 import { SelecteurMembre } from '../../../membres/selecteur-membre'
 
 type Props = {
@@ -32,6 +33,10 @@ type Props = {
  * sélecteur NI le champ libre : un simple champ caché portant la valeur d'ORIGINE. Le
  * champ libre est écarté avec le sélecteur parce que le remplir alors qu'un identifiant
  * de membre non nul repart heurterait `seances_ael_enseignant_exclusif` (D36).
+ *
+ * ⚠️ CE FICHIER N'A AUCUN CHAMP LIBRE (Task 23) : `libre` était déjà contrôlé
+ * (`value`/`onChange`) avant cette tâche. Le champ « intervenant extérieur » adopte
+ * `Champ` directement — il portait déjà un `<label>` visible, rien de nouveau à l'écran.
  */
 export function ChampIntervenant({
   nomChampMembre,
@@ -41,7 +46,6 @@ export function ChampIntervenant({
   membreInitial,
   libreInitial,
 }: Props) {
-  const idLibre = useId()
   const [membre, setMembre] = useState<MembreBref | null>(membreInitial)
   const [libre, setLibre] = useState(libreInitial ?? '')
 
@@ -70,10 +74,10 @@ export function ChampIntervenant({
     // libre ici : proposer de saisir un nom libre à côté d'un identifiant de membre
     // conservé heurterait la contrainte d'exclusivité (D36).
     return (
-      <fieldset className="flex flex-col gap-2">
-        <legend className="text-sm font-medium">{label}</legend>
+      <fieldset className="flex flex-col gap-esp-2">
+        <legend className="libelle-champ text-petit text-encre">{label}</legend>
         <input type="hidden" name={nomChampMembre} value={membreIdInitial} />
-        <p className="text-sm text-neutral-600">
+        <p className="text-petit text-encre-attenuee">
           Fiche non consultable — {label.toLowerCase()} conservé tel quel. Un administrateur
           peut le modifier.
         </p>
@@ -82,8 +86,8 @@ export function ChampIntervenant({
   }
 
   return (
-    <fieldset className="flex flex-col gap-2">
-      <legend className="text-sm font-medium">{label}</legend>
+    <fieldset className="flex flex-col gap-esp-2">
+      <legend className="libelle-champ text-petit text-encre">{label}</legend>
       <SelecteurMembre
         nom={nomChampMembre}
         label={`${label} (membre de l'équipe)`}
@@ -92,20 +96,13 @@ export function ChampIntervenant({
         surChoix={choisirMembre}
         exclureId={null}
       />
-      <div className="flex flex-col gap-1.5">
-        <label htmlFor={idLibre} className="text-sm text-neutral-500">
-          Ou un intervenant extérieur
-        </label>
-        <input
-          id={idLibre}
-          name={nomChampLibre}
-          type="text"
-          value={libre}
-          onChange={(evenement) => saisirLibre(evenement.target.value)}
-          placeholder="Nom, si ce n'est pas un membre"
-          className="rounded-md border border-neutral-300 px-3 py-2"
-        />
-      </div>
+      <Champ
+        label="Ou un intervenant extérieur"
+        name={nomChampLibre}
+        value={libre}
+        onChange={(evenement) => saisirLibre(evenement.target.value)}
+        placeholder="Nom, si ce n'est pas un membre"
+      />
     </fieldset>
   )
 }
