@@ -6,8 +6,9 @@ import { Champ } from '@/composants/ui/champ'
 import { Formulaire } from '@/composants/ui/formulaire'
 import { Selecteur } from '@/composants/ui/selecteur'
 import type { Antenne } from '@/lib/donnees/antennes'
-import type { MembreDetail } from '@/lib/donnees/membres'
+import type { MembreBref, MembreDetail } from '@/lib/donnees/membres'
 import type { EtatFormulaireMembre } from './actions'
+import { SelecteurMembre } from './selecteur-membre'
 
 const etatInitial: EtatFormulaireMembre = { erreur: null }
 
@@ -15,6 +16,14 @@ type Props = {
   action: (etat: EtatFormulaireMembre, donnees: FormData) => Promise<EtatFormulaireMembre>
   antennes: Antenne[]
   membre?: MembreDetail
+  /**
+   * Contact ACTUEL, DÉJÀ RÉSOLU par la page appelante (phase 7, D130).
+   *
+   * Une prop et non une lecture : ce composant est un composant client, il ne peut rien
+   * lire en base. `membre.contactId` ne porte qu'un identifiant ; le `SelecteurMembre` a
+   * besoin du nom pour l'afficher. Absent à la création, comme pour un membre sans contact.
+   */
+  contactInitial?: MembreBref | null
   libelleBouton: string
   /**
    * Bloc d'enrichissement rendu DANS le même `<form>`, juste avant la zone d'erreur.
@@ -32,6 +41,7 @@ export function FormulaireMembre({
   action,
   antennes,
   membre,
+  contactInitial,
   libelleBouton,
   children,
 }: Props) {
@@ -76,6 +86,11 @@ export function FormulaireMembre({
   const [reportInitialAel, setReportInitialAel] = useState(
     String(membre?.reportInitialAel ?? 0),
   )
+  // Contrôlé comme tout le reste (D85) : `SelecteurMembre` rend un `<input type="hidden">`
+  // dont la valeur vient de cet état, jamais du DOM. La saisie survit donc à un refus
+  // RETOURNÉ par l'action — un contact choisi puis perdu au premier message d'erreur
+  // obligerait à rechercher la personne une seconde fois.
+  const [contact, setContact] = useState<MembreBref | null>(contactInitial ?? null)
 
   // L'antenne actuelle du membre doit figurer dans la liste même si elle a été désactivée
   // depuis. Sans cela, sa valeur n'existerait pas parmi les options : le navigateur
@@ -214,6 +229,35 @@ export function FormulaireMembre({
           aide="Avant la mise en service de l'application."
         />
       </div>
+
+      {/*
+        ═══ LE CONTACT (phase 7, D130) ═══
+
+        HORS DE LA GRILLE À DEUX COLONNES, et ce n'est pas un choix esthétique :
+        `SelecteurMembre` est un COMPOSITE — libellé, membre retenu avec son bouton
+        « Détacher », champ de recherche, aide, puis liste de résultats — qui ne tient pas
+        dans une demi-colonne sur mobile.
+
+        ⚠️ IL EST DANS CE FORMULAIRE, ET PAS DANS `BlocEnrichissement` (D130). Ce bloc-là
+        porte « Place dans l'arbre » : le faiseur de disciple et le dirigeant, écrits par
+        `public.definir_arbre` et son verrou anti-cycle. Le contact est une COLONNE DE LA
+        FICHE, écrite par le même `update` que le téléphone. L'y ranger le ferait passer
+        pour une relation d'arbre, et — conséquence pratique — le priverait de l'écran de
+        MODIFICATION, où `BlocEnrichissement` ne remonte pas (D89).
+
+        `exclureId` : à la création il n'existe aucun identifiant à exclure ; en
+        modification, `membres_pas_son_propre_contact` refuserait de toute façon. Cette
+        exclusion sert le CONFORT, pas la sûreté — même mise en garde que sur
+        `rechercherMembres`.
+      */}
+      <SelecteurMembre
+        nom="contactId"
+        label="Contact"
+        aide="Facultatif. Une personne en bonne relation avec ce membre. N'accorde aucun droit sur sa fiche."
+        valeur={contact}
+        surChoix={setContact}
+        exclureId={membre?.id ?? null}
+      />
 
       {children}
     </Formulaire>

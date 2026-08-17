@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation'
 import { listerAntennes } from '@/lib/donnees/antennes'
-import { membreParId } from '@/lib/donnees/membres'
+import { membreBrefParId, membreParId } from '@/lib/donnees/membres'
 import { exigerAdministrateur } from '@/lib/securite/garde'
 import { Carte } from '@/composants/ui/carte'
 import { EnTetePage } from '@/composants/ui/en-tete-page'
@@ -18,6 +18,12 @@ export default async function PageModifierMembre({
   if (!membre) {
     notFound()
   }
+
+  // Le formulaire est un composant client : il ne peut pas résoudre lui-même le nom du
+  // contact à partir de son identifiant. Cette lecture est donc EN SÉRIE, après celles
+  // ci-dessus, et non dans leur `Promise.all` : elle dépend de `membre.contactId`, qu'on ne
+  // connaît pas avant. `null` si aucun contact n'est désigné — aucune requête dans ce cas.
+  const contact = membre.contactId ? await membreBrefParId(membre.contactId) : null
 
   return (
     <main className="mx-auto max-w-3xl px-esp-6 py-esp-10">
@@ -45,6 +51,7 @@ export default async function PageModifierMembre({
         action={modifierMembre}
         antennes={antennes}
         membre={membre}
+        contactInitial={contact}
         libelleBouton="Enregistrer les modifications"
       />
     </main>

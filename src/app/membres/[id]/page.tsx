@@ -66,6 +66,7 @@ export default async function PageFicheMembre({
     compteLie,
     compteurAel,
     seminaires,
+    contact,
   ] = await Promise.all([
     rolesDuProfil(profil.id),
     statutsDuMembre(membre.id),
@@ -78,6 +79,7 @@ export default async function PageFicheMembre({
     etatCompteLie(membre.id),
     compteurAelMembre(membre.id),
     seminairesAssistes(membre.id),
+    membre.contactId ? membreBrefParId(membre.contactId) : Promise.resolve(null),
   ])
   const estAdmin = roles.includes('administrateur')
 
@@ -88,7 +90,12 @@ export default async function PageFicheMembre({
     ['Situation', membre.situation ? LIBELLE_SITUATION[membre.situation] : null],
     ["Domaine d'étude", membre.domaineEtude],
     ['Téléphone', membre.telephone],
-    ['Contact', membre.emailContact],
+    // « Adresse de contact » et non « Contact » (phase 7, D133). Ce libellé était déjà
+    // celui du formulaire de saisie ; la fiche disait « Contact » pour la MÊME donnée. Le
+    // mot seul revient désormais à la PERSONNE de contact, plus bas — sans cet arbitrage,
+    // cette fiche porterait deux lignes nommées « Contact » désignant deux choses
+    // différentes.
+    ['Adresse de contact', membre.emailContact],
     // Le TOTAL calculé (D4, D44), pas le seul report initial : `compteurAel` vaut
     // `null` si la ligne de la vue `compteurs_ael` n'est pas visible par ce compte —
     // en pratique jamais atteignable ici, puisque la vue part de `membres` et que
@@ -205,6 +212,13 @@ export default async function PageFicheMembre({
           cette fiche (voir globals.css) : c'est LA relation de discipulat de cette
           personne. NULLE PART ailleurs sur ce `<dl>` — Antenne, Ville et Compteur AEL ne
           sont pas des relations.
+
+          ⚠️ LE CONTACT, ajouté en phase 7 juste après le bloc « Dirigeant », N'EN FAIT PAS
+          PARTIE et NE PORTE PAS le rail (D134). Ce n'est pas un oubli : le contact dit
+          « qui a une bonne relation avec cette personne », pas « qui la forme ». Il ne
+          confère aucun droit (D132) et n'est parcouru par aucune remontée d'arbre (D131).
+          Lui donner le rail ferait de la marque un simple ornement de « lien vers une autre
+          fiche », et les TROIS emplacements deviendraient quatre, puis n'importe lesquels.
         */}
         <div className="rail-filiation flex justify-between gap-esp-4 py-esp-3">
           <dt className="text-petit text-encre-attenuee">Faiseur de disciple</dt>
@@ -227,6 +241,20 @@ export default async function PageFicheMembre({
           <dd className="text-corps">
             {nomDirigeant ? `${nomDirigeant}${membre.dirigeantForce ? ' (défini manuellement)' : ''}` : '—'}
           </dd>
+        </div>
+
+        {/*
+          ⚠️ AUCUNE MARQUE DE FILIATION ICI (D134), ET C'EST DÉLIBÉRÉ — voir l'encadré D106
+          plus haut, qui l'énonce pour que personne ne prenne cette absence pour un oubli.
+
+          `libelleFiche` et non `membre.contactId` brut : un identifiant présent dont la
+          fiche n'est pas lisible affiche « Fiche non consultable », jamais « — » (D98,
+          D100). Confondre les deux ferait dire à l'écran « personne » là où la vérité est
+          « quelqu'un que vous n'avez pas le droit de voir ».
+        */}
+        <div className="flex justify-between gap-esp-4 py-esp-3">
+          <dt className="text-petit text-encre-attenuee">Contact</dt>
+          <dd className="text-corps">{libelleFiche(membre.contactId, contact) ?? '—'}</dd>
         </div>
       </dl>
 
