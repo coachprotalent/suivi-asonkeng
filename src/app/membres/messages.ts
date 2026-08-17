@@ -45,6 +45,31 @@ export const MESSAGE_FAISEUR_NON_ACTIF =
   "Le faiseur de disciple choisi n'est pas un membre actif : ce rattachement n'est pas autorisé."
 
 /**
+ * Le contact désigné n'existe pas (phase 7, D136).
+ *
+ * ═══ PRODUIT PAR UN CONTRÔLE AMONT, JAMAIS PAR LA VIOLATION DE CLÉ ÉTRANGÈRE ═══
+ * PostgREST ne rend le nom de la contrainte `membres_contact_id_fkey` que dans
+ * `error.message`, de la prose anglaise de Postgres — et la contrainte globale du projet
+ * interdit de discriminer sur la prose. D'où le contrôle amont de `actions.ts`.
+ *
+ * Comme partout dans ce dépôt : le contrôle amont EXPLIQUE, la clé étrangère PROTÈGE. Une
+ * suppression concurrente de la fiche contact, entre la vérification et l'écriture,
+ * passerait ici et serait arrêtée par la contrainte, avec le message générique. C'est le
+ * partage voulu, pas une faiblesse.
+ *
+ * ═══ IL NE VÉRIFIE PAS QUE LE CONTACT EST ACTIF, ET C'EST DÉLIBÉRÉ (D136) ═══
+ * Le faiseur de disciple l'exige parce qu'une chaîne de discipulat rattachée à une fiche
+ * archivée est cassée — d'où le déclencheur `membres_faiseur_de_disciple_archive`. Le
+ * contact ne porte aucun invariant de ce genre : il ne confère rien (D132) et n'est
+ * parcouru par rien (D131). Exiger « actif » dans l'application sans l'exiger en base
+ * INVENTERAIT UNE RÈGLE QUE LA BASE NE TIENT PAS : un appel forgé la contournerait sans que
+ * rien ne s'y oppose, et cette phrase-ci serait fausse. Un contact archivé s'affiche par
+ * `libelleFiche`, comme n'importe quelle fiche non consultable.
+ */
+export const MESSAGE_CONTACT_INCONNU =
+  "La personne choisie comme contact est introuvable. Choisissez-en une autre, puis recommencez."
+
+/**
  * Refus du couple exclusif NOMMÉ, produit par le contrôle amont `statutsIncompatibles`
  * (D84). C'est le chemin normal : il EXPLIQUE, là où la passerelle PROTÈGE.
  */

@@ -448,7 +448,9 @@ describe('le contact à la création (D130)', () => {
     // Une vérification manuelle dans `pg_proc` aurait répondu une fois, le jour de la
     // migration. Celle-ci répond à chaque exécution de la suite.
     const avant = await compterMembresDuPrefixe()
-    const { p_contact: _ignore, ...ancienneSignature } = argumentsCreation()
+    const ancienneSignature = Object.fromEntries(
+      Object.entries(argumentsCreation()).filter(([cle]) => cle !== 'p_contact'),
+    )
     const { error } = await admin.rpc('creer_membre_enrichi', ancienneSignature)
     expect(error).not.toBeNull()
     // `PGRST202` : aucune fonction ne correspond à ce jeu d'arguments nommés.
