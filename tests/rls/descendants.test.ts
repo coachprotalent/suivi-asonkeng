@@ -1,6 +1,11 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { identifiantVersEmail } from '@/lib/domaine/identifiant'
+// Import depuis `mes-membres-lots`, PAS depuis `mes-membres` : ce dernier porte
+// `import 'server-only'`, qui lève inconditionnellement hors du bundler Next. Le module de
+// lots est délibérément séparé pour que cette suite fasse tourner EXACTEMENT le code de
+// production contre la vraie base, avec une taille de page abaissée.
+import { descendanceParPage, membresParRelation } from '@/lib/donnees/mes-membres-lots'
 
 /**
  * Phase 7, D141 / D148 — les preuves de `descendants_membre` et de `compter_descendants`.
@@ -289,6 +294,76 @@ describe('compter_descendants : le repli', () => {
     expect(error).toBeNull()
     expect(Number(data)).toBe(2)
     expect(await descendants(ids.a, { profondeurMin: 2 })).toHaveLength(2)
+  })
+})
+
+describe('le code de production : descendanceParPage et membresParRelation', () => {
+  /*
+    Ces preuves appellent LE CODE DE L'APPLICATION, pas la fonction SQL directement. Elles
+    éprouvent ce que le SQL seul ne peut pas dire : la composition des deux clients, le repli
+    de total sur une page vide, et le fait qu'aucun nom lu avec la clé de service n'atteint
+    l'appelant.
+
+    `taillePage` est abaissée à 2 pour franchir une VRAIE frontière de page avec trois
+    descendants, au lieu des centaines de fiches qu'il faudrait créer en base de PRODUCTION.
+    Même méthode que `tests/rls/arborescence.test.ts` et `tests/rls/membres.test.ts`.
+  */
+
+  it('franchit une frontière de page sans perdre ni dupliquer personne', async () => {
+    // `descendanceParPage` exclut le niveau 1 : sous A, elle rend C et D.
+    const page1 = await descendanceParPage(admin, clientSimple, ids.a, { page: 1, taillePage: 1 })
+    const page2 = await descendanceParPage(admin, clientSimple, ids.a, { page: 2, taillePage: 1 })
+    expect(page1.lignes).toHaveLength(1)
+    expect(page2.lignes).toHaveLength(1)
+    // Chaque page porte le MÊME total, celui de l'ensemble.
+    expect(page1.total).toBe(2)
+    expect(page2.total).toBe(2)
+    const reunion = [...page1.lignes, ...page2.lignes].map((l) => l.membre.id)
+    expect(new Set(reunion)).toEqual(new Set([ids.c, ids.d]))
+  })
+
+  it('rend le bon total sur une page hors bornes, par le repli et non par la longueur', async () => {
+    // ═══ SANS LE REPLI, CETTE PAGE ANNONCERAIT « 0 DESCENDANT » ═══
+    // Une page vide ne porte aucune ligne, donc aucun `count(*) over ()`. Retomber sur
+    // `lignes.length` ferait dire à l'écran que la personne n'a aucun disciple de disciple,
+    // et le nombre de pages calculé par l'appelant s'effondrerait à 1 — l'utilisateur ne
+    // pourrait plus revenir en arrière.
+    const horsBornes = await descendanceParPage(admin, clientSimple, ids.a, {
+      page: 99,
+      taillePage: 2,
+    })
+    expect(horsBornes.lignes).toEqual([])
+    expect(horsBornes.total).toBe(2)
+  })
+
+  it('nomme les descendants et leur parent, en une seule lecture sous RLS', async () => {
+    const page = await descendanceParPage(admin, clientSimple, ids.a, { page: 1, taillePage: 25 })
+    const d = page.lignes.find((l) => l.membre.id === ids.d)
+    expect(d).toBeDefined()
+    expect(d!.membre.nom).toBe(NOM_D)
+    // Le parent est NOMMÉ, pas seulement identifié : c'est ce qui permet la mention
+    // « via X » sans seconde remontée.
+    expect(d!.parentId).toBe(ids.c)
+    expect(d!.parent?.nom).toBe(NOM_C)
+    expect(d!.profondeur).toBe(3)
+  })
+
+  it('membresParRelation rend les disciples directs, et jamais une fiche archivée', async () => {
+    const disciples = await membresParRelation(clientSimple, 'faiseur_de_disciple_id', ids.b)
+    // B a deux disciples en base — C (actif) et E (archivé) — et la lecture n'en rend qu'un.
+    expect(disciples.total).toBe(1)
+    expect(disciples.lignes.map((l) => l.id)).toEqual([ids.c])
+  })
+
+  it('membresParRelation lit les trois colonnes de relation', async () => {
+    // Les trois passent par la même fonction : ce test établit que le paramètre `colonne`
+    // est bien appliqué, et pas ignoré au profit d'une valeur en dur.
+    for (const colonne of ['dirigeant_id', 'contact_id'] as const) {
+      const page = await membresParRelation(clientSimple, colonne, ids.a)
+      // Le décor ne pose ni dirigeant ni contact : zéro, sans erreur.
+      expect(page.total).toBe(0)
+      expect(page.lignes).toEqual([])
+    }
   })
 })
 
