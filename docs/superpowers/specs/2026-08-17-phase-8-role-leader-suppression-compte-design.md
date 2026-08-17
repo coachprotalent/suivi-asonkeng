@@ -264,7 +264,21 @@ notifications le sont (D162).
 | Lot | RLS | E2E |
 |-----|-----|-----|
 | A | un leader a autorité sur un membre hors de sa descendance ; il n'en a pas plus sur la lecture (fiche archivée toujours invisible) ; `definir_roles` écrit et retire le rôle ; l'ancienne signature n'existe plus (`PGRST202`) | attribution du rôle depuis `/comptes` ; un leader voit « Gérer » et attribue un statut à quelqu'un dont il n'est ni ancêtre ni dirigeant |
-| B | les trois refus ; une demande **survit** à la suppression de son auteur, avec son nom ; les notifications disparaissent ; la fiche membre **subsiste** | suppression avec confirmation, et le compte disparaît de `/comptes` |
+| B | le refus du compte racine ; une demande **survit** à la suppression de son auteur, avec son nom ; les notifications disparaissent ; la fiche membre **subsiste** ; le nom du demandeur figé à l'insertion, sans écrasement d'une valeur fournie | suppression avec confirmation, et le compte disparaît de `/comptes` |
+
+> **Un refus n'est PAS éprouvé, et il faut le dire.** Celui du **dernier administrateur actif**
+> porte sur `prive.compter_administrateurs_actifs(old.id) = 0`, qui compte tous les
+> administrateurs actifs de la base — **y compris les comptes réels du projet**. Tant qu'il en
+> existe un, ce compte n'est jamais nul, et le refus est inatteignable depuis la suite. Le
+> rendre atteignable exigerait de **désactiver les administrateurs réels** sur une base qui
+> sert aussi de production ; une suite interrompue avant son `finally` laisserait le projet
+> sans aucun administrateur actif. Le prix est sans commune mesure avec le bénéfice.
+>
+> Ce que cette lacune n'ouvre PAS : la **même condition, sur la même primitive**, est déjà
+> éprouvée pour `public.definir_roles` et `public.definir_actif_compte`
+> (`tests/rls/comptes.test.ts`, `tests/rls/archivage-comptes.test.ts`), là où elle est
+> atteignable sans toucher aux autres comptes. On ne prétend pas que cela remplace la preuve
+> manquante — on dit exactement ce qui est couvert et ce qui ne l'est pas.
 
 **Portes** : Vitest à chaque commit ; `npm run test:rls` à la fin de chaque tâche SQL ;
 **e2e et `build` une fois par lot**, conformément à la politique du projet.
