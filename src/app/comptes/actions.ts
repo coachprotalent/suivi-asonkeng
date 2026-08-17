@@ -188,6 +188,10 @@ export async function definirRoles(donnees: FormData): Promise<void> {
     p_profil: profilId,
     p_administrateur: donnees.get('administrateur') === 'on',
     p_moderateur: donnees.get('moderateur') === 'on',
+    // Phase 8, D154. La passerelle n'a plus qu'UNE signature, à quatre paramètres : omettre
+    // celui-ci ne retomberait pas sur un défaut, PostgREST refuserait l'appel (PGRST202).
+    // C'est voulu — une case cochée sans effet serait pire qu'un échec visible.
+    p_leader: donnees.get('leader') === 'on',
   })
 
   if (error) {

@@ -41,6 +41,12 @@ import {
 const LIBELLE_ROLE: Record<string, string> = {
   administrateur: 'Administrateur',
   moderateur: 'Modérateur',
+  // Phase 8, D149. Ce `Record<string, string>` est PERMISSIF, contrairement à son jumeau de
+  // `/profil` qui est typé `Record<RoleApp, string>` : l'appelant ici fait déjà
+  // `LIBELLE_ROLE[role] ?? role`, un repli qui vaut mieux qu'une page en erreur sur un rôle
+  // inconnu — mais qui n'aurait signalé l'oubli de « leader » par AUCUN moyen. C'est le
+  // typage strict de l'autre fichier qui l'a fait tomber.
+  leader: 'Leader',
 }
 
 const etatInitial: EtatCompte = {
@@ -173,6 +179,7 @@ export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: b
   const prefixe = useId()
   const idAdmin = `${prefixe}-administrateur`
   const idModerateur = `${prefixe}-moderateur`
+  const idLeader = `${prefixe}-leader`
 
   return (
     <LigneListe
@@ -276,6 +283,21 @@ export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: b
                   defaultChecked={compte.roles.includes('moderateur')}
                 />
                 Modérateur
+              </label>
+              {/*
+                Phase 8, D149. Le leader a autorité sur TOUS les membres — concrètement, il
+                peut attribuer et retirer un statut à n'importe qui (D152). Il ne gagne AUCUN
+                pouvoir de modérateur : l'AEL, le rattachement d'antenne et les participants
+                à traiter restent aux deux cases précédentes. Les trois rôles sont cumulables.
+              */}
+              <label htmlFor={idLeader} className="cible-tactile flex items-center gap-esp-2 text-petit text-encre">
+                <input
+                  id={idLeader}
+                  name="leader"
+                  type="checkbox"
+                  defaultChecked={compte.roles.includes('leader')}
+                />
+                Leader
               </label>
             </fieldset>
           </Formulaire>

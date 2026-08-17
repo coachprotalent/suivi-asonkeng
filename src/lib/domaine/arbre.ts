@@ -33,10 +33,19 @@ export function dirigeantPropose(faiseurDeDisciple: MaillonArbre | null): string
   return faiseurDeDisciple.faiseurDeDiscipleId
 }
 
-/** Qui demande : son membre lié (null pour le compte racine), et son rôle. */
+/** Qui demande : son membre lié (null pour le compte racine), et ses rôles. */
 export type ContexteAutorite = {
   membreLieId: string | null
   estAdmin: boolean
+  /**
+   * Phase 8, D150 — le rôle « leader », c'est-à-dire « dirigeant de tout ».
+   *
+   * Autorité sur TOUT membre, sans place dans l'arbre et SANS lecture élargie : le leader
+   * ne voit pas plus de fiches qu'un compte ordinaire (`prive.peut_lire_membre` n'a pas été
+   * touchée). Autorité et visibilité sont donc DÉCOUPLÉES pour ce rôle — voir D153, qui le
+   * dit plutôt que de laisser croire à une fermeture totale.
+   */
+  estLeader: boolean
 }
 
 /** Sur qui : la fiche visée, ses ancêtres et son dirigeant désigné. */
@@ -55,7 +64,25 @@ export type CibleAutorite = {
  * la rend testable sans base, comme l'annonce le §8 de la spécification.
  */
 export function peutModifier(contexte: ContexteAutorite, cible: CibleAutorite): boolean {
-  if (contexte.estAdmin) {
+  // ═══ DEUX RÔLES COURT-CIRCUITENT L'ARBRE, ET ILS SONT AU MÊME RANG (D150) ═══
+  // L'administrateur depuis la 1c, le LEADER depuis la phase 8. Leur pouvoir ne vient PAS
+  // de leur place dans l'arbre — c'est pourquoi ce court-circuit est AVANT le contrôle
+  // `membreLieId === null` plus bas : un leader dont le compte n'est relié à aucune fiche
+  // garde son autorité, sans quoi le rôle dépendrait d'une liaison qui n'a rien à voir
+  // avec lui.
+  //
+  // CONSÉQUENCE ASSUMÉE : tous deux ont autorité sur LEUR PROPRE fiche, là où un dirigeant
+  // ordinaire ne l'a jamais (« nul n'est son propre ancêtre », plus bas). On ne crée pas
+  // une troisième règle pour un troisième rôle.
+  //
+  // ⚠️ CE QUE LE LEADER PEUT RÉELLEMENT FAIRE (D152, MESURÉ ET NON SUPPOSÉ) :
+  // `exigerAutoriteSur` n'a que DEUX appelants dans tout le dépôt — `attribuerStatut` et
+  // `retirerStatut` (`src/app/membres/[id]/statuts/actions.ts`). Le leader gagne donc
+  // EXACTEMENT un pouvoir : attribuer et retirer un statut à n'importe quel membre. Créer,
+  // modifier, archiver une fiche et définir l'arbre restent réservés à l'administrateur par
+  // `exigerAdministrateur`, que la phase 8 ne touche pas. Si un troisième appelant
+  // d'`exigerAutoriteSur` apparaît un jour, il élargira ce rôle sans le dire : le vérifier.
+  if (contexte.estAdmin || contexte.estLeader) {
     return true
   }
 
