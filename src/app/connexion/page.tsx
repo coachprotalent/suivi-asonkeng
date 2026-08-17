@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { EmblemeMission } from '@/composants/identite/embleme-mission'
 import { Carte } from '@/composants/ui/carte'
 import { EnTetePage } from '@/composants/ui/en-tete-page'
 import { FormulaireConnexion } from './formulaire-connexion'
@@ -24,10 +25,15 @@ export default async function PageConnexion({
   const { inscrit } = await searchParams
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center px-esp-6">
-      <EnTetePage titre="Suivi Asonkeng" soustitre="Connectez-vous pour continuer." />
+    <main className="page-auth mx-auto flex min-h-screen w-full max-w-sm flex-col justify-center px-esp-6 py-esp-10">
+      <div className="auth-identite">
+        <EmblemeMission />
+        <p className="surtitre-mission">Notre feuille de route · La Bible</p>
+      </div>
+      <div className="panneau-mission">
+        <EnTetePage titre="Mission Asonkeng" soustitre="Connectez-vous pour continuer la mission." />
 
-      {inscrit === '1' ? (
+        {inscrit === '1' ? (
         <div className="mb-esp-6">
           <Carte ton="succes" role="status">
             {MESSAGE_INSCRIPTION_REUSSIE}
@@ -35,7 +41,7 @@ export default async function PageConnexion({
         </div>
       ) : null}
 
-      <FormulaireConnexion />
+        <FormulaireConnexion />
 
       {/* LA PAGE PUBLIQUE D'INSCRIPTION N'ÉTAIT ATTEIGNABLE PAR AUCUN LIEN DU DÉPÔT
           (`grep -rn 'href="/inscription"' src/` rendait ZÉRO occurrence). Toute la phase 2b
@@ -53,12 +59,13 @@ export default async function PageConnexion({
 
           Les deux routes sont déjà publiques dans le middleware (`ROUTE_CONNEXION` et
           `ROUTE_INSCRIPTION`, comparaison par segment entier) : rien à y changer. */}
-      <p className="mt-esp-8 text-petit text-encre-attenuee">
+        <p className="mt-esp-8 text-petit text-encre-attenuee">
         Vous avez reçu un code d&apos;inscription ?{' '}
         <Link href="/inscription" className="cible-tactile text-action underline underline-offset-4">
           Créer votre compte
         </Link>
-      </p>
+        </p>
+      </div>
     </main>
   )
 }

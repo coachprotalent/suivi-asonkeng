@@ -32,14 +32,14 @@
     ── Couleur (§4.1). Les neutres portent un BIAIS VERT, choisi et non hérité : un gris
     pur jurerait avec le rail de filiation, qui est l'élément signature de la direction.
   */
-  --fond: #F2F4F1;
+  --fond: #F6F2E8;
   --surface: #FFFFFF;
-  --encre: #1C2321;
-  --encre-attenuee: #626F68;
-  --filet: #DCE3DD;
-  --bord-carte: #E3E9E3;
-  --filiation: #7E9A86;
-  --action: #2F5D46;
+  --encre: #102A37;
+  --encre-attenuee: #5C6B6F;
+  --filet: #DED8C9;
+  --bord-carte: #E6DFD0;
+  --filiation: #D6A94F;
+  --action: #075E68;
   --sur-action: #FFFFFF;
 
   /*
@@ -56,10 +56,10 @@
     qui se disait exhaustive. JAMAIS EN FOND, en revanche : aucun jeton de fond d'état
     n'existe, et en inventer un serait une décision que personne n'a prise.
   */
-  --etat-acquis: #3F6B52;
+  --etat-acquis: #26705A;
   --etat-attente: #C08A2E;
   --etat-refus: #97402F;
-  --etat-neutre: #7E9A86;
+  --etat-neutre: #76939A;
 
   /*
     ── Typographie (§4.2). AUCUNE POLICE N'EST CHARGÉE : la pile système est CHOISIE, pas
@@ -113,7 +113,7 @@
     différent. Une seule survit, et la classe `rounded-bord` est la seule que ce fichier
     expose (voir le reset de namespace plus bas).
   */
-  --rayon: 0.25rem;
+  --rayon: 0.75rem;
 
   /*
     ── Cible tactile : 44 PX DE HAUTEUR MINIMALE pour tout élément interactif, y compris
@@ -158,7 +158,7 @@
     esthétique : c'est la seule chose qui rende l'application utilisable au clavier, et elle
     est absente.
   */
-  --anneau-focus: #2F5D46;
+  --anneau-focus: #075E68;
   --anneau-focus-epaisseur: 2px;
   --anneau-focus-retrait: 2px;
 
@@ -321,6 +321,19 @@
     font-family: var(--pile-texte);
   }
 
+  ::selection {
+    background: color-mix(in srgb, var(--filiation) 45%, white);
+    color: var(--encre);
+  }
+
+  a, button {
+    transition: color 160ms ease, background-color 160ms ease, border-color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
+  }
+
+  button:not(:disabled):hover, a:hover {
+    transform: translateY(-1px);
+  }
+
   /*
     ═══ D114 — L'ANNEAU DE FOCUS EST DÉFINI ICI, UNE FOIS, ET NULLE PART AILLEURS ═══
 
@@ -354,6 +367,63 @@
       scroll-behavior: auto !important;
     }
   }
+}
+
+.app-shell {
+  background-image:
+    radial-gradient(circle at 10% 0%, color-mix(in srgb, var(--filiation) 16%, transparent) 0, transparent 28rem),
+    radial-gradient(circle at 100% 30%, color-mix(in srgb, var(--action) 10%, transparent) 0, transparent 34rem);
+}
+
+.hero-mission {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--esp-8);
+  overflow: hidden;
+  padding: clamp(1.75rem, 5vw, 4rem);
+  border: 1px solid color-mix(in srgb, var(--filiation) 38%, transparent);
+  border-radius: calc(var(--rayon) * 2);
+  color: var(--sur-action);
+  background:
+    linear-gradient(90deg, rgba(4, 27, 37, .97) 0%, rgba(4, 38, 48, .88) 42%, rgba(4, 38, 48, .3) 100%),
+    url('/images/carte-mission-mondiale.webp') center / cover no-repeat;
+  box-shadow: 0 24px 60px rgba(16, 42, 55, 0.18);
+}
+
+.hero-mission::after {
+  content: '';
+  position: absolute;
+  inset: auto -5rem -8rem auto;
+  width: 20rem;
+  height: 20rem;
+  border: 1px solid rgba(255, 255, 255, .14);
+  border-radius: 999px;
+}
+
+.hero-mission-contenu { position: relative; z-index: 1; max-width: 39rem; padding-block: var(--esp-6); }
+.surtitre-mission { margin-bottom: var(--esp-3); color: #E8C66F; font-size: .75rem; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; }
+.titre-mission { max-width: 13ch; font-size: clamp(2.25rem, 7vw, 4.5rem); font-weight: 750; line-height: .98; letter-spacing: -.045em; text-wrap: balance; }
+.promesse-mission { max-width: 38rem; margin-top: var(--esp-6); color: rgba(255, 255, 255, .82); font-size: clamp(1rem, 2vw, 1.15rem); line-height: 1.65; }
+.embleme-mission { position: relative; z-index: 1; flex: 0 0 auto; width: clamp(8rem, 20vw, 13rem); color: #E8C66F; opacity: .82; }
+.embleme-mission svg { width: 100%; stroke: currentColor; stroke-width: 1.25; }
+.embleme-mission .embleme-croix { stroke: white; stroke-width: 2.5; }
+.embleme-mission .embleme-rayon { stroke-width: 2; }
+.panneau-mission { padding: clamp(1.25rem, 4vw, 2.5rem); border: 1px solid var(--bord-carte); border-radius: calc(var(--rayon) * 1.5); background: color-mix(in srgb, var(--surface) 94%, transparent); box-shadow: 0 18px 50px rgba(16, 42, 55, .08); }
+.grille-navigation { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--esp-3); }
+.grille-navigation > li { padding: 0; border: 1px solid var(--bord-carte); border-radius: var(--rayon); background: var(--surface); box-shadow: 0 4px 16px rgba(16, 42, 55, .04); }
+.grille-navigation > li:hover { border-color: var(--filiation); box-shadow: 0 10px 28px rgba(16, 42, 55, .1); }
+.grille-navigation > li > div > a { padding: var(--esp-4); }
+.grille-navigation > li > div > a::after { content: '→'; margin-left: auto; color: var(--action); font-size: 1.2rem; }
+.auth-identite { display: flex; flex-direction: column; align-items: center; margin-bottom: var(--esp-6); text-align: center; }
+.auth-identite .embleme-mission { width: 5rem; margin-bottom: var(--esp-3); color: var(--action); }
+.page-auth .panneau-mission { box-shadow: 0 24px 70px rgba(16, 42, 55, .12); }
+
+@media (max-width: 47.99rem) {
+  .hero-mission { align-items: flex-start; }
+  .hero-mission .embleme-mission { width: 5.5rem; opacity: .55; }
+  .grille-navigation { grid-template-columns: 1fr; }
 }
 
 /* ════════════════════════════════════════════════════════════════════════════

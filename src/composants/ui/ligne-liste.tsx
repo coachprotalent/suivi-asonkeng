@@ -34,8 +34,14 @@ import type { ReactNode } from 'react'
   HTML, et le clic sur le bouton naviguerait en plus d'agir. `lien` n'enveloppe donc que le
   bloc `principal` + `meta` ; `actions` reste dehors, toujours.
 */
-export function Liste({ children }: { children: ReactNode }) {
-  return <ul className="divide-y divide-filet">{children}</ul>
+export function Liste({
+  children,
+  variante = 'standard',
+}: {
+  children: ReactNode
+  variante?: 'standard' | 'navigation'
+}) {
+  return <ul className={variante === 'navigation' ? 'grille-navigation' : 'divide-y divide-filet'}>{children}</ul>
 }
 
 export type ProprietesLigneListe = {

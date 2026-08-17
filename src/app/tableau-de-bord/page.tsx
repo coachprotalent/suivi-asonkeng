@@ -1,6 +1,7 @@
 import { seDeconnecter } from '@/app/connexion/actions'
 import { rolesDuProfil } from '@/lib/donnees/profils'
 import { exigerProfilActif } from '@/lib/securite/garde'
+import { EmblemeMission } from '@/composants/identite/embleme-mission'
 import { Bouton } from '@/composants/ui/bouton'
 import { EnTetePage } from '@/composants/ui/en-tete-page'
 import { LigneListe, Liste } from '@/composants/ui/ligne-liste'
@@ -12,13 +13,27 @@ export default async function PageTableauDeBord() {
   const estModerateur = roles.includes('moderateur')
 
   return (
-    <main className="mx-auto max-w-3xl px-esp-6 py-esp-10">
-      {/*
+    <main className="mx-auto w-full max-w-5xl px-esp-6 py-esp-10">
+      <section className="hero-mission mb-esp-8" aria-labelledby="mission-titre">
+        <div className="hero-mission-contenu">
+          <p className="surtitre-mission">Notre feuille de route · La Bible</p>
+          <h1 id="mission-titre" className="titre-mission">
+            Gagner les âmes. Former. Envoyer.
+          </h1>
+          <p className="promesse-mission">
+            Un mouvement évangélique de bâtisseurs mobilisés pour porter l&apos;Évangile de
+            Jésus dans toutes les nations.
+          </p>
+        </div>
+        <EmblemeMission />
+      </section>
+      <div className="panneau-mission">
+        {/*
         LE SEUL ÉCRAN QUI AFFICHE L'ÉTAT DE SESSION (Task 24) — c'est le hub, pas une
         destination de retour : `EnTetePage` SANS `retour`.
       */}
-      <EnTetePage
-        titre="Suivi Asonkeng"
+        <EnTetePage
+        titre="Pilotage de la mission"
         soustitre={`Connecté en tant que ${profil.nomAffichage} (${profil.identifiant})`}
         action={
           <form action={seDeconnecter}>
@@ -33,7 +48,7 @@ export default async function PageTableauDeBord() {
         Les libellés ne changent pas d'un octet (D117) : un modérateur ne voit toujours
         pas /antennes, /statuts, /comptes, /tokens.
       */}
-      <Liste>
+        <Liste variante="navigation">
         <LigneListe lien="/membres" principal="Consulter l'annuaire" />
         <LigneListe lien="/arborescence" principal="Parcourir l'arborescence" />
         <LigneListe lien="/demandes/nouvelle" principal="Proposer une personne à suivre" />
@@ -49,7 +64,8 @@ export default async function PageTableauDeBord() {
         {estAdmin ? (
           <LigneListe lien="/tokens" principal="Générer des tokens d'inscription" />
         ) : null}
-      </Liste>
+        </Liste>
+      </div>
     </main>
   )
 }

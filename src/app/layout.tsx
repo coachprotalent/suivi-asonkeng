@@ -3,7 +3,7 @@ import { Cloche } from './notifications/cloche'
 import './globals.css'
 
 export const metadata: Metadata = {
-  title: 'Suivi Asonkeng',
+  title: 'Mission Asonkeng',
   description: "Application de suivi des jeunes croyants de l'équipe Asonkeng.",
 }
 
@@ -29,7 +29,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<'/'>) {
   return (
     <html lang="fr" className="h-full antialiased">
-      <body className="flex min-h-full flex-col bg-fond text-encre">
+      <body className="app-shell flex min-h-full flex-col bg-fond text-encre">
         <Cloche />
         {children}
       </body>
