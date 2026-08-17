@@ -244,9 +244,23 @@ Chacune a été posée en question fermée pendant le cadrage du 2026-08-17, ave
   rend le total par `count(*) over ()`. Une page vide (décalage au-delà de la fin) ne portant
   aucun total, un repli `public.compter_descendants` le fournit — même partage que
   `disciplesParPage` / `compterDisciples`.
-  Elle filtre `etat = 'actif'` **sur ses lignes rendues, jamais sur son parcours** : filtrer le
-  parcours amputerait la branche sous le premier membre archivé, et ses disciples actifs
-  disparaîtraient de l'écran sans le moindre signal.
+  Elle filtre `etat = 'actif'` **sur ses lignes rendues, et non sur son parcours** — la
+  sémantique correcte : le parcours décrit la *forme* de l'arbre, le filtre décide de ce qu'on
+  *affiche*.
+
+  **RECTIFICATIF, mesuré à l'implémentation.** Cette décision annonçait d'abord que filtrer le
+  parcours « amputerait la branche sous le premier membre archivé, dont les disciples actifs
+  disparaîtraient sans le moindre signal ». **C'est faux : cet état est inatteignable.** En
+  tentant de construire le décor de la preuve, la base l'a refusé — « Ce membre est encore
+  faiseur de disciple de 1 personne(s) active(s). » Trois barrières maintiennent ensemble
+  l'invariant *un membre non actif n'a jamais de disciple actif* : le refus d'archiver un
+  membre ayant des disciples actifs (`disciples_a_reaffecter`), le refus de rétablir un membre
+  dont le faiseur est archivé (`membres_faiseur_de_disciple_archive`), et le refus de rattacher
+  un disciple à un faiseur non actif (`definir_arbre`, `faiseur_de_disciple_inactif`).
+
+  Le placement retenu reste juste si l'invariant venait à être assoupli, mais **il ne protège
+  aujourd'hui contre aucun défaut atteignable**. `tests/rls/descendants.test.ts` éprouve donc
+  l'invariant lui-même plutôt que de mettre en scène un état que la base interdit.
 
 ---
 
