@@ -1,7 +1,11 @@
 import 'server-only'
 import { clientAdmin } from '@/lib/supabase/admin'
 import { clientServeur } from '@/lib/supabase/serveur'
-import { descendanceParPage, membresParRelation } from './mes-membres-lots'
+import {
+  descendanceParPage,
+  membresParRelation,
+  type LigneDescendance,
+} from './mes-membres-lots'
 import type { MembreBref } from './membres'
 import type { PageLue } from './pagination'
 
@@ -50,6 +54,6 @@ export async function mesContactsPage(
 export async function maDescendancePage(
   membreId: string,
   page: number,
-): Promise<PageLue<import('./mes-membres-lots').LigneDescendance>> {
+): Promise<PageLue<LigneDescendance>> {
   return descendanceParPage(clientAdmin(), await clientServeur(), membreId, { page })
 }
