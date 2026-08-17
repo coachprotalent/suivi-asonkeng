@@ -36,6 +36,10 @@ const IDENT_ADMIN_B = 'test.rls.suppression.adminb'
 // Compte marqué `est_racine` FABRIQUÉ PAR LA SUITE : le vrai compte racine n'est jamais visé.
 // Voir l'encadré du test correspondant pour pourquoi cette règle existe.
 const IDENT_RACINE_FACTICE = 'test.rls.suppression.racine'
+// Compte DÉDIÉ à la preuve du journal (D164) : il en écrit une ligne, et doit rester
+// supprimable malgré elle. Un identifiant à lui, pour que sa suppression ne perturbe aucune
+// autre preuve de ce fichier.
+const IDENT_JOURNAL = 'test.rls.suppression.journal'
 
 const FAMILLE = 'ZZSuppression-'
 const SUFFIXE = crypto.randomUUID().slice(0, 8)
@@ -90,6 +94,20 @@ async function creerCompte(
   return id
 }
 
+/**
+ * Un statut ACTIF quelconque du catalogue, lu en base et jamais deviné : le catalogue amorcé
+ * peut changer, et un libellé écrit en dur ferait tomber la preuve pour une raison étrangère
+ * à ce qu'elle mesure.
+ */
+async function unStatutActif(): Promise<string> {
+  const { data, error } = await admin.from('statuts').select('id').eq('actif', true).limit(1)
+  if (error) throw new Error(`lecture du catalogue impossible : ${error.message}`)
+  if (!data || data.length === 0) {
+    throw new Error('aucun statut actif en base : la preuve du journal ne peut rien mesurer')
+  }
+  return data[0].id as string
+}
+
 /** Le profil existe-t-il encore ? Lu à la clé de service, `error` vérifié. */
 async function profilExiste(id: string): Promise<boolean> {
   const { data, error } = await admin.from('profils').select('id').eq('id', id).maybeSingle()
@@ -98,7 +116,7 @@ async function profilExiste(id: string): Promise<boolean> {
 }
 
 beforeAll(async () => {
-  for (const identifiant of [IDENT_AUTEUR, IDENT_ADMIN_A, IDENT_ADMIN_B, IDENT_RACINE_FACTICE]) {
+  for (const identifiant of [IDENT_AUTEUR, IDENT_ADMIN_A, IDENT_ADMIN_B, IDENT_RACINE_FACTICE, IDENT_JOURNAL]) {
     await supprimerCompte(identifiant)
   }
   await admin.from('membres').delete().like('nom', `${FAMILLE}%`)
@@ -115,7 +133,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
-  for (const identifiant of [IDENT_AUTEUR, IDENT_ADMIN_A, IDENT_ADMIN_B, IDENT_RACINE_FACTICE]) {
+  for (const identifiant of [IDENT_AUTEUR, IDENT_ADMIN_A, IDENT_ADMIN_B, IDENT_RACINE_FACTICE, IDENT_JOURNAL]) {
     await supprimerCompte(identifiant)
   }
   // Les demandes du décor ne portent plus de profil (c'est le but de la suite) : on les
@@ -311,6 +329,61 @@ describe('les refus de suppression (D160)', () => {
     const { error } = await admin.auth.admin.deleteUser(idAdminA)
     expect(error).toBeNull()
     expect(await profilExiste(idAdminA)).toBe(false)
+  })
+
+  it("SUPPRIME un compte qui a écrit au JOURNAL DES STATUTS (D164)", async () => {
+    /*
+      ═══ LA PREUVE D'UNE CONTRADICTION LEVÉE, ET ELLE DOIT RESTER ═══
+
+      Deux règles justes séparément se contredisaient depuis la phase 1b :
+        • `journal_statuts.par_profil_id` était en `on delete set null` — donc un UPDATE ;
+        • `journal_statuts` interdit TOUTE réécriture (`journal_statuts_sans_reecriture`).
+
+      Ensemble, elles rendaient **indestructible tout compte ayant écrit une seule ligne au
+      journal**. Personne ne l'avait vu : rien ne supprimait de compte avant la phase 8. Le
+      message rendu — « Le journal des statuts ne se réécrit pas. » — arrivait enveloppé par
+      GoTrue en « Database error deleting user », donc parfaitement opaque.
+
+      D164 a retiré la clé étrangère : `par_profil_id` est désormais une donnée HISTORIQUE.
+      Cette preuve mesure les DEUX moitiés du résultat — le compte part, et la ligne de
+      journal reste, avec son auteur intact. Reposer la clé étrangère ferait tomber la
+      première ; assouplir le déclencheur ferait tomber la seconde.
+    */
+    const idAuteurJournal = await creerCompte(IDENT_JOURNAL, 'Test auteur journal', [])
+
+    // Une ligne de journal écrite par ce compte, via la passerelle réelle.
+    const { error: erreurStatut } = await admin.rpc('attribuer_statut', {
+      p_membre: idMembre,
+      p_statut: await unStatutActif(),
+      p_date: null,
+      p_note: null,
+      p_par: idAuteurJournal,
+    })
+    expect(erreurStatut).toBeNull()
+
+    const { data: avant, error: erreurAvant } = await admin
+      .from('journal_statuts')
+      .select('id, par_profil_id, par_nom_affichage')
+      .eq('par_profil_id', idAuteurJournal)
+    expect(erreurAvant).toBeNull()
+    // PRÉMISSE : sans ligne de journal, cette preuve ne mesurerait rien.
+    expect(avant ?? [], 'le compte doit avoir écrit au journal').not.toHaveLength(0)
+
+    const { error } = await admin.auth.admin.deleteUser(idAuteurJournal)
+    expect(error, 'un compte ayant écrit au journal doit rester supprimable').toBeNull()
+    expect(await profilExiste(idAuteurJournal)).toBe(false)
+
+    // LA SECONDE MOITIÉ : la trace SURVIT, et garde son auteur — identifiant historique ET
+    // nom figé. `on delete set null` aurait effacé le premier.
+    const { data: apres, error: erreurApres } = await admin
+      .from('journal_statuts')
+      .select('par_profil_id, par_nom_affichage')
+      .eq('id', avant![0].id)
+      .maybeSingle()
+    expect(erreurApres).toBeNull()
+    expect(apres).not.toBeNull()
+    expect(apres!.par_profil_id).toBe(idAuteurJournal)
+    expect(apres!.par_nom_affichage).toBe('Test auteur journal')
   })
 
   it('accepte la suppression d’un compte ordinaire', async () => {

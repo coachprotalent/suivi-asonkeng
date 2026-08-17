@@ -172,6 +172,36 @@ Chacune a été posée en question fermée, avec ses conséquences énoncées **
   adressée à une personne ; elle n'a aucun sens sans destinataire. C'est le SEUL `cascade` vers
   `profils` qu'on laisse agir, et il est nommé ici pour n'avoir pas à être redécouvert.
 
+- **D164 — Le journal des statuts cesse de dépendre de `public.profils`, et sa clé étrangère
+  est RETIRÉE.** *Décision ajoutée à l'implémentation, sur une contradiction MESURÉE et non
+  prévue au cadrage.*
+
+  Deux règles du projet, chacune juste séparément, se contredisaient depuis la phase 1b :
+  `journal_statuts.par_profil_id` était en `on delete set null` — donc un **`update`** — alors
+  que `journal_statuts` **interdit toute réécriture** (`journal_statuts_sans_reecriture`, dont
+  le commentaire de table annonce « aucune modification ni suppression ligne à ligne n'est
+  possible, par personne, pas même l'application »).
+
+  **Ensemble, elles rendaient indestructible tout compte ayant écrit une seule ligne au
+  journal** — c'est-à-dire tout compte ayant jamais attribué ou retiré un statut. Personne ne
+  l'avait vu : rien ne supprimait de compte avant cette phase. Le message rendu, « Le journal
+  des statuts ne se réécrit pas. », arrivait enveloppé par GoTrue en « Database error deleting
+  user », donc parfaitement opaque côté application.
+
+  **On retire la clé étrangère plutôt que d'assouplir le déclencheur**, parce que le projet a
+  déjà tranché cette question dans l'autre sens : la migration 20260813160000 a ajouté
+  `par_nom_affichage` en écrivant que le journal « devient autonome […] et survit à la
+  suppression du compte auteur ». Le journal était donc **déjà conçu** pour ne pas dépendre de
+  `profils` ; la clé étrangère était le vestige qui contredisait cette décision. Assouplir le
+  déclencheur aurait au contraire percé la garantie d'inaltérabilité pour une commodité.
+
+  **Ce que cela change, énoncé :** `par_profil_id` devient une donnée **historique** — elle
+  peut désigner un profil supprimé. Aucun code ne la joint à `profils` (l'affichage passe par
+  `par_nom_affichage` depuis la 1b) ; toute jointure future devra traiter l'absence. Le
+  journal en sort **plus complet** qu'avec `on delete set null`, qui effaçait cette
+  information. La garantie d'inaltérabilité, elle, n'est pas touchée : le déclencheur et le
+  `revoke delete` restent intacts.
+
 - **D163 — Tout le reste est déjà en `on delete set null`, et le restera.**
   Relevé exhaustif : `membres.cree_par`, `membre_statuts.attribue_par`,
   `journal_statuts.par_profil_id`, `tokens_inscription.cree_par` et `.utilise_par_profil_id`,

@@ -50,15 +50,47 @@ const NOM_ARCHIVEE = `${PREFIXE_FAMILLE}archivee-${SUFFIXE}`
 const ids: Record<string, string> = {}
 let idProfilLeader: string
 
+/**
+ * Supprime un compte de test, ET VÉRIFIE QUE C'EST FAIT.
+ *
+ * ═══ POURQUOI CETTE VERSION DIFFÈRE DE CELLE DES AUTRES SUITES ═══
+ * Le motif répandu dans le dépôt appelle `deleteUser` SANS regarder son erreur. Une
+ * défaillance passagère de GoTrue y passe donc inaperçue, et le compte de test survit —
+ * mesuré sur cette suite précisément : après une exécution complète, `test.e2e.leader.porteur`
+ * subsistait avec `membre_id` à `null`, preuve que la suppression avait échoué en silence
+ * PUIS que le nettoyage des fiches l'avait détaché. Une seconde tentative, à la main, a
+ * réussi immédiatement — donc bien un aléa, pas un refus.
+ *
+ * UNE REPRISE PLUTÔT QU'UN ÉCHEC SEC : lever à la première erreur rendrait la suite instable
+ * pour un aléa réseau. Lever à la SECONDE distingue l'aléa du vrai refus, et transforme une
+ * fuite silencieuse en échec visible.
+ */
 async function supprimerCompte(identifiant: string) {
-  const { data } = await admin.from('profils').select('id').eq('identifiant', identifiant).maybeSingle()
-  if (data) {
-    await admin.auth.admin.deleteUser(data.id)
-    return
+  for (const tentative of [1, 2]) {
+    const { data } = await admin
+      .from('profils')
+      .select('id')
+      .eq('identifiant', identifiant)
+      .maybeSingle()
+    if (data) {
+      const { error } = await admin.auth.admin.deleteUser(data.id)
+      if (!error) return
+      if (tentative === 2) {
+        throw new Error(`suppression de ${identifiant} impossible : ${error.message}`)
+      }
+      continue
+    }
+    // Rattrapage par email : un compte auth créé sans fiche profil resterait introuvable
+    // par la requête ci-dessus.
+    const { data: comptes } = await admin.auth.admin.listUsers()
+    const orphelin = comptes?.users.find((u) => u.email === identifiantVersEmail(identifiant))
+    if (!orphelin) return
+    const { error } = await admin.auth.admin.deleteUser(orphelin.id)
+    if (!error) return
+    if (tentative === 2) {
+      throw new Error(`suppression de l'orphelin ${identifiant} impossible : ${error.message}`)
+    }
   }
-  const { data: comptes } = await admin.auth.admin.listUsers()
-  const orphelin = comptes?.users.find((u) => u.email === identifiantVersEmail(identifiant))
-  if (orphelin) await admin.auth.admin.deleteUser(orphelin.id)
 }
 
 async function creerMembre(nom: string): Promise<string> {
@@ -148,6 +180,16 @@ test.afterAll(async () => {
     .like('nom', `${PREFIXE_FAMILLE}%`)
   if (error) throw new Error(`comptage de contrôle impossible : ${error.message}`)
   expect(count).toBe(0)
+
+  // CONTRÔLE DES COMPTES, et pas seulement des fiches. C'est l'assertion qui manquait :
+  // sans elle, un compte de test survivant à `supprimerCompte` restait invisible, et
+  // `test.e2e.leader.porteur` a réellement traversé une exécution complète.
+  const { data: residus, error: erreurResidus } = await admin
+    .from('profils')
+    .select('identifiant')
+    .in('identifiant', [IDENT_ADMIN, IDENT_LEADER, IDENT_SIMPLE])
+  if (erreurResidus) throw new Error(`lecture des profils résiduels : ${erreurResidus.message}`)
+  expect(residus ?? [], 'comptes de test résiduels').toHaveLength(0)
 })
 
 test('un administrateur attribue le rôle leader depuis /comptes', async ({ page }) => {
