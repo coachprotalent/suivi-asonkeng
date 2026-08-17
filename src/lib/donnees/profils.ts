@@ -8,6 +8,8 @@ export type Profil = {
   membreId: string | null
   estRacine: boolean
   actif: boolean
+  /** Date de création du compte, affichée par `/profil` (phase 7). */
+  creeLe: string
 }
 
 /**
@@ -36,7 +38,7 @@ export async function profilCourant(): Promise<Profil | null> {
 
   const { data, error } = await supabase
     .from('profils')
-    .select('id, identifiant, nom_affichage, membre_id, est_racine, actif')
+    .select('id, identifiant, nom_affichage, membre_id, est_racine, actif, cree_le')
     .eq('id', user.id)
     .eq('actif', true)
     .maybeSingle()
@@ -53,6 +55,7 @@ export async function profilCourant(): Promise<Profil | null> {
     membreId: data.membre_id,
     estRacine: data.est_racine,
     actif: data.actif,
+    creeLe: data.cree_le,
   }
 }
 

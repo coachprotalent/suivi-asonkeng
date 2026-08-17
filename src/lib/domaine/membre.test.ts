@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   FicheMembreInvalideError,
   LIBELLE_FICHE_NON_CONSULTABLE,
+  coordonneesPersonnellesDepuisFormData,
+  ficheMembreVersColonnes,
   libelleFiche,
   normaliserFicheMembre,
 } from './membre'
@@ -139,6 +141,125 @@ describe('normaliserFicheMembre - valeurs telles que les rend un formulaire', ()
     expect(() => normaliserFicheMembre({ ...minimal, ville: 42 })).toThrow(
       FicheMembreInvalideError,
     )
+  })
+})
+
+// Phase 7, D130 — le contact est une colonne ORDINAIRE de la fiche, pas une relation
+// d'arbre : il traverse la même normalisation que l'antenne, sans validation de format
+// (la clé étrangère en est juge), et ressort dans les mêmes colonnes.
+describe('normaliserFicheMembre - contact', () => {
+  it('lit un contact renseigné', () => {
+    expect(normaliserFicheMembre({ ...minimal, contactId: 'c1' }).contactId).toBe('c1')
+  })
+
+  it('ramène un contact vide à null', () => {
+    expect(normaliserFicheMembre({ ...minimal, contactId: '   ' }).contactId).toBeNull()
+  })
+
+  it('ramène un contact absent à null', () => {
+    expect(normaliserFicheMembre(minimal).contactId).toBeNull()
+  })
+
+  it("refuse un contact reçu sous une forme inattendue plutôt que de le perdre", () => {
+    expect(() => normaliserFicheMembre({ ...minimal, contactId: 42 })).toThrow(
+      FicheMembreInvalideError,
+    )
+  })
+
+  it('porte contact_id dans les colonnes destinées à la base', () => {
+    const colonnes = ficheMembreVersColonnes(normaliserFicheMembre({ ...minimal, contactId: 'c1' }))
+    expect(colonnes.contact_id).toBe('c1')
+  })
+})
+
+// Phase 7, D138 — la moitié APPLICATIVE de la liste blanche de l'auto-édition. L'autre
+// moitié, structurelle, est la signature de `public.modifier_mon_profil`.
+describe('coordonneesPersonnellesDepuisFormData', () => {
+  function formulaire(champs: Record<string, string>): FormData {
+    const donnees = new FormData()
+    for (const [cle, valeur] of Object.entries(champs)) donnees.set(cle, valeur)
+    return donnees
+  }
+
+  it('lit les six champs autorisés', () => {
+    expect(
+      coordonneesPersonnellesDepuisFormData(
+        formulaire({
+          telephone: '0600000000',
+          emailContact: 'jerome@example.com',
+          ville: 'Douala',
+          pays: 'Cameroun',
+          situation: 'etudiant',
+          domaineEtude: 'Informatique',
+        }),
+      ),
+    ).toEqual({
+      telephone: '0600000000',
+      emailContact: 'jerome@example.com',
+      ville: 'Douala',
+      pays: 'Cameroun',
+      situation: 'etudiant',
+      domaineEtude: 'Informatique',
+    })
+  })
+
+  it("efface le domaine d'étude hors situation étudiante, comme la fiche complète", () => {
+    expect(
+      coordonneesPersonnellesDepuisFormData(
+        formulaire({ situation: 'travailleur', domaineEtude: 'Informatique' }),
+      ).domaineEtude,
+    ).toBeNull()
+  })
+
+  it('refuse une adresse de contact mal formée, comme la fiche complète', () => {
+    expect(() =>
+      coordonneesPersonnellesDepuisFormData(formulaire({ emailContact: 'pas-un-email' })),
+    ).toThrow(FicheMembreInvalideError)
+  })
+
+  it('refuse une situation inconnue, comme la fiche complète', () => {
+    expect(() =>
+      coordonneesPersonnellesDepuisFormData(formulaire({ situation: 'retraite' })),
+    ).toThrow(FicheMembreInvalideError)
+  })
+
+  it('ramène les champs absents à null', () => {
+    expect(coordonneesPersonnellesDepuisFormData(formulaire({}))).toEqual({
+      telephone: null,
+      emailContact: null,
+      ville: null,
+      pays: null,
+      situation: null,
+      domaineEtude: null,
+    })
+  })
+
+  it('NE LIT AUCUN CHAMP FERMÉ, même présent dans le formulaire (D138)', () => {
+    // LA PREUVE CENTRALE DE CE BLOC. Un onglet forgé ou un appel direct peut poster
+    // n'importe quel champ ; ceux-ci ne sont pas « ignorés par prudence », ils ne sont
+    // JAMAIS LUS. La forme de l'assertion — l'ensemble EXACT des clés — est ce qui la rend
+    // capable de tomber : un champ ajouté un jour à cette fonction sans passer par la revue
+    // de sécurité du lot B ferait échouer ce test, ce qui est précisément le but.
+    const coordonnees = coordonneesPersonnellesDepuisFormData(
+      formulaire({
+        nom: 'Usurpateur',
+        prenom: 'Malveillant',
+        antenneId: 'a1',
+        contactId: 'c1',
+        faiseurDeDiscipleId: 'f1',
+        dirigeantId: 'd1',
+        reportInitialAel: '999',
+        etat: 'archive',
+      }),
+    )
+    expect(Object.keys(coordonnees).sort()).toEqual([
+      'domaineEtude',
+      'emailContact',
+      'pays',
+      'situation',
+      'telephone',
+      'ville',
+    ])
   })
 })
 

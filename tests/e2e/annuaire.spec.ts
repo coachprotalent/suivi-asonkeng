@@ -93,6 +93,35 @@ async function seConnecter(page: import('@playwright/test').Page) {
   await expect(page).toHaveURL(/\/tableau-de-bord/)
 }
 
+/**
+ * Ouvre l'annuaire FILTRÉ sur un terme, au lieu de lire sa première page.
+ *
+ * ═══ POURQUOI CE DÉTOUR EST NÉCESSAIRE, ET DEPUIS QUAND ═══
+ * Trois assertions de ce fichier faisaient `goto('/membres')` puis cherchaient la fiche
+ * `ZZAnnuaire-…` sur la page ainsi obtenue. Cela n'a JAMAIS été correct : l'annuaire pagine
+ * à `TAILLE_PAGE_ANNUAIRE` (50) et trie par nom, or un nom commençant par « ZZ » trie en
+ * DERNIER. Tant que la base comptait moins de cinquante membres actifs, la première page les
+ * contenait tous et personne ne pouvait le voir. La base réelle en compte désormais 72 : la
+ * fiche est en page 2, et les trois assertions se sont mises à mentir.
+ *
+ * ═══ DEUX DES TROIS ÉCHOUAIENT BRUYAMMENT. LA TROISIÈME ÉTAIT UN FAUX VERT ═══
+ * Après archivage, `expect(getByText(nom)).toHaveCount(0)` passait — non parce que la fiche
+ * avait disparu de l'annuaire, mais parce qu'elle n'avait jamais été sur la page regardée.
+ * L'assertion la plus importante du test (« une fiche archivée disparaît ») ne prouvait donc
+ * plus rien, et aurait continué à passer si l'archivage avait cessé de fonctionner.
+ *
+ * Ce correctif est ÉTRANGER à la phase 7 : il est fait ici parce que la porte du lot A l'a
+ * mis au jour, et qu'un test qui ne peut plus échouer ne vaut pas mieux que pas de test.
+ */
+async function ouvrirAnnuaireFiltre(page: import('@playwright/test').Page, terme: string) {
+  await page.goto('/membres')
+  await page.getByLabel('Rechercher').fill(terme)
+  await page.getByRole('button', { name: 'Filtrer' }).click()
+  // On attend que le filtre soit RÉELLEMENT appliqué avant d'asserter quoi que ce soit :
+  // sans cela, une assertion d'absence pourrait porter sur la page non filtrée.
+  await expect(page).toHaveURL(/recherche=/)
+}
+
 test("l'annuaire est protégé par la connexion", async ({ page }) => {
   await page.goto('/membres')
   await expect(page).toHaveURL(/\/connexion/)
@@ -122,7 +151,8 @@ test('un administrateur crée une fiche et la retrouve dans l’annuaire', async
   await expect(page.getByRole('heading', { name: `Jérôme ${NOM_MEMBRE}` })).toBeVisible()
 
   // Puis l'annuaire, pour la suite du test : c'est lui qui porte la recherche.
-  await page.goto('/membres')
+  // FILTRÉ sur le nom, et non la première page brute : voir `ouvrirAnnuaireFiltre`.
+  await ouvrirAnnuaireFiltre(page, NOM_MEMBRE)
   await expect(page.getByText(`Jérôme ${NOM_MEMBRE}`)).toBeVisible()
 
   // La recherche doit retrouver la fiche par sa ville, y compris quand le terme
@@ -172,7 +202,7 @@ test('le champ « AEL déjà suivis » porte un nom accessible propre', async ({
 test('une fiche archivée disparaît de l’annuaire', async ({ page }) => {
   await seConnecter(page)
 
-  await page.goto('/membres')
+  await ouvrirAnnuaireFiltre(page, NOM_MEMBRE)
   await page.getByText(`Jérôme ${NOM_MEMBRE}`).click()
   await expect(page.getByRole('heading', { name: `Jérôme ${NOM_MEMBRE}` })).toBeVisible()
 
@@ -192,7 +222,18 @@ test('une fiche archivée disparaît de l’annuaire', async ({ page }) => {
   await expect(page).toHaveURL(/\/membres$/)
   expect(messageConfirmation).toContain('Archiver la fiche')
   expect(messageConfirmation).toContain("rien n'est supprimé")
+
+  // ⚠️ L'ASSERTION LA PLUS IMPORTANTE DE CE TEST, ET ELLE ÉTAIT UN FAUX VERT.
+  // Elle portait sur la première page brute de l'annuaire, où cette fiche n'avait jamais
+  // figuré (nom en « ZZ », 72 membres actifs, 50 par page) : elle passait donc quoi qu'il
+  // arrive, et serait restée verte si l'archivage avait cessé de retirer la fiche.
+  // On la FILTRE désormais sur le nom — la recherche ne rend que les fiches ACTIVES, donc
+  // zéro résultat signifie réellement « archivée et sortie de l'annuaire ».
+  await ouvrirAnnuaireFiltre(page, NOM_MEMBRE)
   await expect(page.getByText(`Jérôme ${NOM_MEMBRE}`)).toHaveCount(0)
+  // Contrôle POSITIF du filtre : sans lui, un filtre cassé rendrait « aucun résultat » pour
+  // toute recherche, et l'assertion ci-dessus passerait pour la mauvaise raison.
+  await expect(page.getByText('Aucun membre ne correspond à cette recherche.')).toBeVisible()
 })
 
 test("l'annuaire pagine au-delà d'une page", async ({ page }) => {

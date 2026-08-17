@@ -162,7 +162,16 @@ async function genererTokenGenerique(page: Page): Promise<string> {
 
 test('un compte ordinaire ne voit pas le lien et /tokens le renvoie au tableau de bord', async ({ page }) => {
   await connecter(page, IDENT_SIMPLE)
-  await expect(page.getByRole('link', { name: /tokens/i })).toHaveCount(0)
+  // ⚠️ PAR `href`, ET NON PAR NOM ACCESSIBLE. Ce test cherchait `name: /tokens/i`, ce qui a
+  // cessé de convenir en phase 7 : le tableau de bord rend désormais l'état de session comme
+  // un LIEN vers `/profil`, et son libellé contient l'identifiant du compte — ici
+  // « test.e2e.tokens.simple », qui satisfait le motif. L'assertion tombait donc sur un lien
+  // parfaitement légitime, pour une raison sans aucun rapport avec ce qu'elle éprouve.
+  //
+  // La destination est d'ailleurs le critère JUSTE : ce qu'on veut établir, c'est qu'un
+  // compte ordinaire n'a aucun chemin vers `/tokens`, pas qu'aucun texte de la page ne
+  // contient le mot.
+  await expect(page.locator('a[href="/tokens"]')).toHaveCount(0)
   await page.goto('/tokens')
   await expect(page).toHaveURL(/\/tableau-de-bord/)
 })

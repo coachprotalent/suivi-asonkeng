@@ -16,7 +16,7 @@ import {
 } from '@/lib/domaine/statut'
 import { cheminArbre, disciplesDe } from '@/lib/donnees/arbre'
 import { compteLieEstDernierAdministrateurActif } from '@/lib/donnees/comptes'
-import { membreParId } from '@/lib/donnees/membres'
+import { membreBrefParId, membreParId } from '@/lib/donnees/membres'
 import { listerCatalogue } from '@/lib/donnees/statuts'
 import { exigerAdministrateur } from '@/lib/securite/garde'
 import { clientAdmin } from '@/lib/supabase/admin'
@@ -28,6 +28,7 @@ import {
 } from './[id]/arbre/messages'
 import { MESSAGE_STATUT_INCONNU } from './[id]/statuts/messages'
 import {
+  MESSAGE_CONTACT_INCONNU,
   MESSAGE_ECHEC_ENREGISTREMENT,
   MESSAGE_FAISEUR_NON_ACTIF,
   MESSAGE_STATUTS_EXCLUSIFS_PASSERELLE,
@@ -84,6 +85,28 @@ const MARQUEURS_CONNUS: ReadonlySet<string> = new Set([
 function champOuNull(donnees: FormData, champ: string): string | null {
   const valeur = donnees.get(champ)
   return typeof valeur === 'string' && valeur.length > 0 ? valeur : null
+}
+
+/**
+ * Le contact désigné est-il introuvable ? (phase 7, D136)
+ *
+ * Rend `true` quand il faut REFUSER — jamais l'inverse : `null` (aucun contact désigné) est
+ * un cas parfaitement légitime, le contact étant facultatif, et ne provoque aucune lecture.
+ *
+ * ═══ LU SOUS RLS, ET C'EST SANS CONSÉQUENCE ICI ═══
+ * Les DEUX appelants sont gardés par `exigerAdministrateur`, et `membres_lecture` ouvre
+ * toute fiche à l'administrateur. Un contact absent de cette lecture est donc réellement
+ * absent de la base, pas simplement caché. Si un jour un appelant NON administrateur
+ * atteignait cette fonction, elle refuserait des contacts qui existent — ce serait un refus
+ * excessif, jamais une ouverture, mais il faudrait le corriger.
+ *
+ * IL N'EST PAS LA BARRIÈRE : la clé étrangère `membres_contact_id_fkey` l'est. Ce contrôle
+ * EXPLIQUE, en donnant un message nommé plutôt que le message générique — voir
+ * `MESSAGE_CONTACT_INCONNU` pour pourquoi on ne discrimine pas sur la violation elle-même.
+ */
+async function contactIntrouvable(contactId: string | null): Promise<boolean> {
+  if (!contactId) return false
+  return (await membreBrefParId(contactId)) === null
 }
 
 export type EtatFormulaireMembre = { erreur: string | null }
@@ -181,6 +204,13 @@ export async function creerMembreEnrichi(
     }
   }
 
+  // D136 — le contrôle amont EXPLIQUE, la clé étrangère PROTÈGE. Placé APRÈS le contrôle
+  // d'exclusivité et AVANT l'appel : un seul aller-retour de plus, et seulement lorsqu'un
+  // contact est réellement désigné.
+  if (await contactIntrouvable(fiche.contactId)) {
+    return { erreur: MESSAGE_CONTACT_INCONNU }
+  }
+
   const faiseurId = champOuNull(donnees, 'faiseurDeDiscipleId')
   const dirigeantId = champOuNull(donnees, 'dirigeantId')
   const dirigeantForce = donnees.get('dirigeantForce') === '1'
@@ -199,6 +229,9 @@ export async function creerMembreEnrichi(
     p_situation: fiche.situation,
     p_domaine_etude: fiche.domaineEtude,
     p_report_initial_ael: fiche.reportInitialAel,
+    // Phase 7, D130 : une colonne de la FICHE. Rangée avec les colonnes de fiche, et non
+    // avec les trois paramètres d'arbre qui suivent — c'est aussi l'ordre de la signature.
+    p_contact: fiche.contactId,
     p_faiseur_de_disciple: faiseurId,
     p_dirigeant: dirigeantId,
     p_dirigeant_force: dirigeantForce,
@@ -337,15 +370,24 @@ export async function modifierMembre(
     return { erreur: MESSAGE_ECHEC_ENREGISTREMENT }
   }
 
-  let colonnes
+  let fiche
   try {
-    colonnes = ficheMembreVersColonnes(ficheMembreDepuisFormData(donnees))
+    fiche = ficheMembreDepuisFormData(donnees)
   } catch (erreur) {
     return {
       erreur:
         erreur instanceof FicheMembreInvalideError ? erreur.message : MESSAGE_ECHEC_ENREGISTREMENT,
     }
   }
+
+  // D136 — même contrôle que dans `creerMembreEnrichi`, même raison, même message. La fiche
+  // normalisée est conservée (au lieu d'être passée directement à `ficheMembreVersColonnes`)
+  // précisément pour pouvoir lire `contactId` ici.
+  if (await contactIntrouvable(fiche.contactId)) {
+    return { erreur: MESSAGE_CONTACT_INCONNU }
+  }
+
+  const colonnes = ficheMembreVersColonnes(fiche)
 
   // `.select('id')` n'est pas décoratif : sans lui, une mise à jour qui ne touche
   // aucune ligne — identifiant inexistant ou forgé — ne renvoie **aucune erreur**,
