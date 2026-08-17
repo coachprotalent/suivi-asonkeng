@@ -1,8 +1,9 @@
+import Link from 'next/link'
 import { seDeconnecter } from '@/app/connexion/actions'
 import { rolesDuProfil } from '@/lib/donnees/profils'
 import { exigerProfilActif } from '@/lib/securite/garde'
 import { EmblemeMission } from '@/composants/identite/embleme-mission'
-import { Bouton } from '@/composants/ui/bouton'
+import { Bouton, CLASSES_VARIANTE } from '@/composants/ui/bouton'
 import { EnTetePage } from '@/composants/ui/en-tete-page'
 import { LigneListe, Liste } from '@/composants/ui/ligne-liste'
 
@@ -34,7 +35,14 @@ export default async function PageTableauDeBord() {
       */}
         <EnTetePage
         titre="Pilotage de la mission"
-        soustitre={`Connecté en tant que ${profil.nomAffichage} (${profil.identifiant})`}
+        // L'état de session devient la porte d'entrée du profil (phase 7) : c'est le seul
+        // endroit de l'application qui nomme déjà le compte connecté, et le lire donne
+        // naturellement envie d'aller voir ce qu'il contient.
+        soustitre={
+          <Link href="/profil" className={CLASSES_VARIANTE.lien}>
+            {`Connecté en tant que ${profil.nomAffichage} (${profil.identifiant})`}
+          </Link>
+        }
         action={
           <form action={seDeconnecter}>
             <Bouton type="submit" variante="secondaire">
@@ -49,6 +57,13 @@ export default async function PageTableauDeBord() {
         pas /antennes, /statuts, /comptes, /tokens.
       */}
         <Liste variante="navigation">
+        {/*
+          LES DEUX ÉCRANS PERSONNELS EN TÊTE, avant les écrans collectifs (phase 7) : c'est
+          par eux que la plupart des comptes entrent, et ils sont visibles de TOUT compte
+          actif — aucune condition de rôle, ce ne sont pas des écrans d'administration.
+        */}
+        <LigneListe lien="/mes-membres" principal="Mes membres" />
+        <LigneListe lien="/profil" principal="Mon profil" />
         <LigneListe lien="/membres" principal="Consulter l'annuaire" />
         <LigneListe lien="/arborescence" principal="Parcourir l'arborescence" />
         <LigneListe lien="/demandes/nouvelle" principal="Proposer une personne à suivre" />
