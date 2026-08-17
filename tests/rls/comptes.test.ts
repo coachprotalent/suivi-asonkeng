@@ -112,6 +112,8 @@ describe('protection du dernier administrateur', () => {
       p_profil: idAdminA,
       p_administrateur: false,
       p_moderateur: false,
+      // Phase 8, D154 : la passerelle n'a plus qu'UNE signature, à quatre paramètres.
+      p_leader: false,
     })
     expect(error).toBeNull()
 
@@ -164,6 +166,8 @@ describe('protection du dernier administrateur', () => {
       p_profil: idAdminB,
       p_administrateur: false,
       p_moderateur: false,
+      // Phase 8, D154 : la passerelle n'a plus qu'UNE signature, à quatre paramètres.
+      p_leader: false,
     })
     expect(error).not.toBeNull()
     expect(error?.details).toBe('dernier_administrateur')
@@ -230,6 +234,8 @@ describe('protection du dernier administrateur', () => {
       p_profil: idSimple,
       p_administrateur: false,
       p_moderateur: true,
+      // Phase 8, D154 : la passerelle n'a plus qu'UNE signature, à quatre paramètres.
+      p_leader: false,
     })
     expect(error).toBeNull()
 
@@ -247,6 +253,8 @@ describe('protection du dernier administrateur', () => {
       p_profil: idSimple,
       p_administrateur: true,
       p_moderateur: false,
+      // Phase 8, D154 : la passerelle n'a plus qu'UNE signature, à quatre paramètres.
+      p_leader: false,
     })
     expect(error).not.toBeNull()
     expect(error?.code).toBe('42501')

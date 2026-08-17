@@ -59,7 +59,15 @@ export async function profilCourant(): Promise<Profil | null> {
   }
 }
 
-export type RoleApp = 'administrateur' | 'moderateur'
+/**
+ * Rôles cumulables, miroir du type Postgres `public.role_app`.
+ *
+ * `leader` est arrivé en phase 8 (D149) : il donne autorité sur TOUS les membres, sans
+ * conférer aucun pouvoir de modérateur et sans élargir aucune lecture. La décision d'autorité
+ * elle-même vit dans `peutModifier` (`src/lib/domaine/arbre.ts`), pas en base : aucune
+ * politique RLS ne connaît ce rôle.
+ */
+export type RoleApp = 'administrateur' | 'moderateur' | 'leader'
 
 /** Rôles explicitement attribués. Les droits « Utilisateur » sont le socle implicite. */
 export async function rolesDuProfil(profilId: string): Promise<RoleApp[]> {

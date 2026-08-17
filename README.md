@@ -1172,3 +1172,128 @@ tant que la base comptait moins de cinquante membres actifs — elle en compte 7
 `toHaveCount(0)` passait parce que la fiche n'avait jamais été sur la page regardée, et
 l'assertion centrale du test aurait continué à passer si l'archivage avait cessé de
 fonctionner.
+
+---
+
+## Phase 8 : le rôle « leader » et la suppression d'un compte
+
+- **Un troisième rôle : `leader`** (D149), attribuable depuis `/comptes` et **cumulable** avec
+  les deux autres. Il signifie « dirigeant de tout » — autorité sur **tous** les membres.
+- **C'est une AUTORITÉ, pas une place dans l'arbre** (D150). Deux lectures de la demande
+  avaient été proposées : un rôle que `peutModifier` court-circuite, ou le rattachement
+  littéral de chaque racine au leader dans `membres.faiseur_de_disciple_id`. **La première a
+  été retenue** : la seconde aurait été une écriture de données massive, en collision frontale
+  avec l'anti-cycle et avec l'invariant « aucun membre actif n'a d'ancêtre non actif ».
+  **Aucune ligne de `membres` n'est touchée par cette phase.**
+- **Ce que le rôle donne EXACTEMENT, mesuré et non supposé** (D152) : `exigerAutoriteSur` n'a
+  que **deux appelants** dans tout le dépôt — `attribuerStatut` et `retirerStatut`. Le leader
+  gagne donc **un seul pouvoir : attribuer et retirer un statut à n'importe quel membre**.
+  Créer, modifier ou archiver une fiche, et définir l'arbre, restent réservés à
+  l'administrateur. *Si un troisième appelant d'`exigerAutoriteSur` apparaît un jour, il
+  élargira ce rôle sans le dire : le vérifier.*
+- **Il ne confère aucun pouvoir de modérateur, et n'élargit aucune lecture** (D151, D155).
+  L'utilisateur avait d'abord retenu l'inverse, puis est revenu dessus une fois établi que
+  cela rendrait le nom `prive.est_moderateur_ou_admin` **faux** et imposerait un renommage de
+  2 politiques et 16 fichiers. **Aucune politique RLS n'est touchée par cette phase**, et
+  aucune primitive `prive.est_leader()` n'est écrite : sans politique pour l'appeler, ce
+  serait une porte ouverte sans usage.
+- **Autorité et visibilité sont DÉCOUPLÉES pour ce rôle, et c'est écrit plutôt que tu**
+  (D153). Le leader a autorité sur tout membre mais ne peut **ouvrir** qu'une fiche active :
+  les écrans d'une fiche archivée lui rendent `notFound()`. Une requête forgée vers
+  `attribuerStatut` sur une telle fiche passerait néanmoins — un administrateur a la même
+  latitude, le leader l'a sans pouvoir regarder ce qu'il fait. **Si cela devient gênant, la
+  correction est de rendre `exigerAutoriteSur` dépendant de la lisibilité, pas d'élargir la
+  lecture du leader en douce.**
+- **La valeur d'énumération vit SEULE dans sa migration** (D149) : Postgres refuse d'employer
+  une valeur d'énumération dans la transaction qui l'ajoute, et `supabase db push` applique
+  chaque fichier dans sa propre transaction. Les fusionner casserait le déploiement sans
+  qu'aucune relecture ne le montre.
+- **`public.definir_roles` a été REMPLACÉE, pas modifiée** (D154) — même piège qu'en phase 7 :
+  sans `drop`, une **surcharge** aurait coexisté, PostgREST aurait choisi l'ancienne pour tout
+  appelant ne passant pas `p_leader`, et **une case « Leader » cochée serait restée sans
+  effet, en silence**, l'écran annonçant un succès.
+- **Un administrateur peut supprimer un compte créé par erreur.** La suppression passe par
+  `auth.admin.deleteUser`, **jamais** par un `delete from public.profils` : la cascade depuis
+  `auth.users` déclenche les refus **dans la même transaction**, et l'inverse laisserait un
+  compte d'authentification **orphelin** — ce n'est pas une hypothèse, un balayage de la
+  phase 7 en a trouvé un en base.
+- **Les DEMANDES survivent à leur auteur** (D157, D158). `demandeur_profil_id` passe de
+  `cascade` à `set null`, et le nom du demandeur est figé par un **déclencheur `before
+  insert`** — pas chez les appelants : le dépôt compte **trois** sites d'insertion, dont un
+  **en SQL** (`convertir_participant_externe`) qu'aucune modification applicative n'aurait
+  couvert.
+  L'utilisateur avait d'abord voulu *refuser* la suppression d'un compte ayant des demandes,
+  puis est revenu dessus une fois mesuré qu'**une demande n'est jamais supprimée** et que
+  **toute inscription par token en crée une** : ce refus aurait rendu **tout compte
+  auto-inscrit définitivement indestructible**, c'est-à-dire exactement le cas visé.
+- **Deux refus en base, un troisième dans l'action, et la différence est écrite** (D160). En
+  base : le compte **racine** et le **dernier administrateur actif**. Dans l'action seulement :
+  **l'auto-suppression** — le déclencheur ne peut pas voir qui supprime, `auth.uid()` valant
+  `null` derrière la clé de service. **Ce garde-là n'est donc pas une barrière**, et une
+  requête forgée par un administrateur contre lui-même passerait ; le cas catastrophique reste
+  tenu en base.
+- **La fiche membre n'est PAS supprimée, et la confirmation le dit** (D161) — compte et fiche
+  sont deux objets distincts. Les **notifications**, elles, disparaissent (D162) : elles lui
+  étaient adressées et n'ont aucun sens sans destinataire.
+
+### ⚠️ Un incident, et la règle qu'il a produite
+
+**Le compte racine du projet a été détruit pendant cette phase, par son propre test.** La
+première version du test « on ne peut pas supprimer le compte racine » visait le **vrai**
+compte racine, lu par `.eq('est_racine', true)`. Écrite en TDD, son étape « rouge » s'est
+exécutée **avant** que le déclencheur de protection n'existe : la suppression a réussi, sur une
+base qui sert aussi de production.
+
+Le compte a été recréé par `npm run amorcer:racine`. Les dégâts ont été mesurés et sont restés
+circonscrits — 73 fiches, 132 lignes de journal et 132 statuts intacts, aucune demande ni
+notification en base à ce moment-là — **mais c'est une chance, pas une garantie**.
+
+**La règle qui en découle, et qui vaut pour tout ce dépôt :** une étape « rouge » de TDD
+exécute le geste destructeur **par construction**. Un test de refus ne doit donc **jamais viser
+une donnée qu'il n'a pas lui-même créée** — sinon, entre l'écriture du test et celle de la
+protection, **il EST l'attaque qu'il prétend éprouver**. `tests/rls/suppression-compte.test.ts`
+fabrique désormais son propre compte marqué racine, et deux suites vérifient à chaque exécution
+que le vrai existe toujours.
+
+**Un refus n'est pas éprouvé, et il faut le dire :** celui du **dernier administrateur actif**
+porte sur `compter_administrateurs_actifs`, qui compte tous les administrateurs actifs de la
+base — **y compris les comptes réels**. Le rendre atteignable exigerait de les désactiver sur
+une base de production. La même condition, sur la même primitive, est déjà éprouvée pour
+`definir_roles` et `definir_actif_compte`, là où elle est atteignable sans risque ; on ne
+prétend pas que cela remplace la preuve manquante.
+
+### Une contradiction vieille de six phases, révélée par la suppression
+
+`journal_statuts.par_profil_id` était en `on delete set null` — **donc un `update`** — alors
+que `journal_statuts` **interdit toute réécriture** depuis la phase 1b, son commentaire de
+table annonçant « aucune modification ni suppression ligne à ligne n'est possible, par
+personne, pas même l'application ».
+
+**Ensemble, ces deux règles rendaient indestructible tout compte ayant jamais attribué ou
+retiré un statut.** Personne ne l'avait vu : rien ne supprimait de compte avant la phase 8. Le
+message rendu — « Le journal des statuts ne se réécrit pas. » — arrivait enveloppé par GoTrue
+en « Database error deleting user », donc parfaitement opaque.
+
+**La clé étrangère a été retirée plutôt que le déclencheur assoupli** (D164), parce que le
+projet avait déjà tranché dans l'autre sens : la migration 20260813160000 a ajouté
+`par_nom_affichage` en écrivant que le journal « devient autonome […] et survit à la
+suppression du compte auteur ». La clé étrangère était le vestige qui contredisait cette
+décision.
+
+`par_profil_id` est désormais une donnée **historique** : elle peut désigner un profil
+supprimé, aucun code ne la joint à `profils`, et toute jointure future devra traiter
+l'absence. Le journal en sort **plus complet** qu'avec `on delete set null`, qui effaçait cette
+information — et sa garantie d'inaltérabilité n'est pas touchée.
+
+### Le nettoyage des suites de test, conséquence de `set null`
+
+Deux suites **documentaient** s'appuyer sur l'ancienne cascade `demandeur_profil_id` pour se
+nettoyer : supprimer un compte de test effaçait ses demandes, et la cascade
+`notifications.demande_id` emportait les notifications — **y compris celles écrites sur les
+comptes administrateur réels** par `notifierAdministrateurs`.
+
+Le premier passage après le changement a laissé **23 demandes orphelines** — les deux clés
+étrangères à `null`, donc désignées par aucune clé — et **22 notifications** sur `aubinaso` et
+`racine`. Elles n'ont été retrouvables que par `demandeur_nom_affichage`, la colonne ajoutée
+par la même phase. Les suites suppriment désormais leurs demandes **en premier**, tant que leur
+demandeur existe (`tests/nettoyage-demandes.ts`).

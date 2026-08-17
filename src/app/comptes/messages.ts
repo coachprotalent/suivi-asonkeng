@@ -14,3 +14,21 @@ export const MESSAGE_COMPTE_INCONNU = "Ce compte n'existe plus."
 export const MESSAGE_ECHEC_ROLES = "Les rôles n'ont pas pu être enregistrés."
 export const MESSAGE_ECHEC_ACTIVATION = "L'état du compte n'a pas pu être changé."
 export const MESSAGE_ECHEC_REINITIALISATION = "Le mot de passe n'a pas pu être réinitialisé."
+
+export const MESSAGE_ECHEC_SUPPRESSION = "Ce compte n'a pas pu être supprimé."
+
+/**
+ * Un administrateur ne supprime pas son propre compte (phase 8, D160).
+ *
+ * ⚠️ CE REFUS N'EST PAS UNE BARRIÈRE DE BASE, ET LE DIRE IMPORTE. Le déclencheur
+ * `profils_refuser_suppression` ne peut pas voir QUI supprime : appelé derrière la clé de
+ * service, `auth.uid()` y vaut `null`. Ce garde vit donc dans la Server Action, et lui seul —
+ * une requête forgée par un administrateur contre lui-même passerait. La conséquence serait
+ * un administrateur qui se supprime : désagréable, jamais dangereuse, et le cas
+ * catastrophique (plus aucun administrateur actif) reste tenu EN BASE par l'autre refus.
+ */
+export const MESSAGE_SUPPRESSION_DE_SOI =
+  'Vous ne pouvez pas supprimer votre propre compte. Demandez à un autre administrateur de le faire.'
+
+export const MESSAGE_RACINE_INDESTRUCTIBLE =
+  "Le compte racine ne peut pas être supprimé : c'est lui qui garantit qu'un accès subsiste."

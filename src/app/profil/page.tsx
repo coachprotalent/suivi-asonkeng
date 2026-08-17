@@ -19,9 +19,13 @@ const LIBELLE_SITUATION: Record<string, string> = {
   autre: 'Autre',
 }
 
+// `Record<RoleApp, string>` et non `Record<string, string>` : le typage EXIGE une entrée par
+// rôle, et c'est lui qui a signalé l'oubli quand la phase 8 a ajouté « leader ». Un index
+// permissif aurait laissé passer un rôle affiché sous son nom technique.
 const LIBELLE_ROLE: Record<RoleApp, string> = {
   administrateur: 'Administrateur',
   moderateur: 'Modérateur',
+  leader: 'Leader',
 }
 
 /**

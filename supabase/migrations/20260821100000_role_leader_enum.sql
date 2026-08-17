@@ -1,0 +1,29 @@
+-- Phase 8, D149 — la valeur d'énumération, ET RIEN D'AUTRE DANS CE FICHIER.
+--
+-- ═══ POURQUOI CE FICHIER EST SEUL ═══
+-- Postgres refuse d'EMPLOYER une valeur d'énumération dans la transaction qui l'AJOUTE :
+-- « unsafe use of new value "leader" of enum type role_app ». `supabase db push` applique
+-- chaque fichier de migration dans sa propre transaction — séparer l'ajout de son premier
+-- usage est donc la seule forme qui fonctionne. La migration 20260821110000, qui insère
+-- réellement des lignes portant ce rôle, est un fichier DISTINCT POUR CETTE RAISON, et les
+-- fusionner casserait le déploiement sans qu'aucune relecture ne le montre.
+--
+-- ═══ CE QUE CE RÔLE EST, ET CE QU'IL N'EST PAS ═══
+-- LE LEADER EST UNE AUTORITÉ, PAS UNE PLACE DANS L'ARBRE (D150). Deux lectures de la demande
+-- avaient été proposées à l'utilisateur : un rôle que `peutModifier` court-circuite, ou le
+-- rattachement littéral de chaque racine au leader dans `membres.faiseur_de_disciple_id`.
+-- LA PREMIÈRE A ÉTÉ RETENUE : la seconde aurait été une écriture de données massive, en
+-- collision frontale avec le déclencheur anti-cycle et avec l'invariant « aucun membre actif
+-- n'a d'ancêtre non actif ». AUCUNE ligne de `public.membres` n'est touchée par cette phase.
+--
+-- IL NE CONFÈRE AUCUN POUVOIR DE MODÉRATEUR et N'ÉLARGIT AUCUNE LECTURE (D151) :
+-- `prive.est_moderateur_ou_admin` et `prive.peut_lire_membre` restent inchangées. L'AEL, le
+-- rattachement d'antenne et les participants à traiter restent au modérateur et à
+-- l'administrateur. Les deux rôles sont CUMULABLES sur une même personne.
+--
+-- L'autorité du leader se décide ENTIÈREMENT côté application, dans `peutModifier`
+-- (`src/lib/domaine/arbre.ts`), comme celle du dirigeant désigné. Aucune primitive
+-- `prive.est_leader()` n'est écrite : aucune politique n'en a besoin, et une primitive sans
+-- appelant est une porte ouverte sans usage.
+
+alter type public.role_app add value 'leader';

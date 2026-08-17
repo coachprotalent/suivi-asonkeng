@@ -35,12 +35,19 @@ import {
   definirRoles,
   lierFiche,
   reinitialiserMotDePasse,
+  supprimerCompte,
   type EtatCompte,
 } from './actions'
 
 const LIBELLE_ROLE: Record<string, string> = {
   administrateur: 'Administrateur',
   moderateur: 'Modérateur',
+  // Phase 8, D149. Ce `Record<string, string>` est PERMISSIF, contrairement à son jumeau de
+  // `/profil` qui est typé `Record<RoleApp, string>` : l'appelant ici fait déjà
+  // `LIBELLE_ROLE[role] ?? role`, un repli qui vaut mieux qu'une page en erreur sur un rôle
+  // inconnu — mais qui n'aurait signalé l'oubli de « leader » par AUCUN moyen. C'est le
+  // typage strict de l'autre fichier qui l'a fait tomber.
+  leader: 'Leader',
 }
 
 const etatInitial: EtatCompte = {
@@ -166,6 +173,44 @@ export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: b
     executerActivation(donnees)
   }
 
+  /*
+    ═══ SUPPRESSION (phase 8, D159) ═══
+
+    Même motif que `definirRoles` et `basculerActivation` : l'action LÈVE, et `error.tsx`
+    affiche un texte STATIQUE sans jamais lire `error.message`. Laisser remonter le rejet
+    ferait donc disparaître « Le compte racine ne peut pas être supprimé » au profit d'un
+    « Une erreur est survenue » qui n'apprend rien. On appelle donc l'action depuis un
+    `useTransition`, avec `try`/`catch`, pour intercepter le rejet ICI.
+
+    La confirmation est INCONDITIONNELLE, contrairement aux deux autres qui ne la demandent
+    que sur sa propre ligne (`estMoi`) : celles-là sont réversibles — on se réattribue un
+    rôle, on se réactive. Celle-ci ne l'est pas.
+  */
+  const [erreurSuppression, setErreurSuppression] = useState<string | null>(null)
+  const [suppressionEnCours, demarrerSuppression] = useTransition()
+  const [confirmationSuppressionDemandee, setConfirmationSuppressionDemandee] = useState(false)
+  const donneesSuppressionEnAttente = useRef<FormData | null>(null)
+
+  function executerSuppression(donnees: FormData) {
+    setErreurSuppression(null)
+    demarrerSuppression(async () => {
+      try {
+        await supprimerCompte(donnees)
+      } catch (erreur) {
+        setErreurSuppression(erreur instanceof Error ? erreur.message : String(erreur))
+      }
+    })
+  }
+
+  function soumettreSuppression(evenement: FormEvent<HTMLFormElement>) {
+    evenement.preventDefault()
+    // La `FormData` est construite TOUT DE SUITE, avant la confirmation : un `<dialog>` ne
+    // bloque pas, et `evenement.currentTarget` ne survit pas à la répartition synchrone de
+    // l'évènement (D124, voir l'encadré plus haut).
+    donneesSuppressionEnAttente.current = new FormData(evenement.currentTarget)
+    setConfirmationSuppressionDemandee(true)
+  }
+
   const [etatMdp, reinitialiser, reinitialisationEnCours] = useActionState(
     reinitialiserMotDePasse,
     etatInitial,
@@ -173,6 +218,7 @@ export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: b
   const prefixe = useId()
   const idAdmin = `${prefixe}-administrateur`
   const idModerateur = `${prefixe}-moderateur`
+  const idLeader = `${prefixe}-leader`
 
   return (
     <LigneListe
@@ -277,6 +323,21 @@ export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: b
                 />
                 Modérateur
               </label>
+              {/*
+                Phase 8, D149. Le leader a autorité sur TOUS les membres — concrètement, il
+                peut attribuer et retirer un statut à n'importe qui (D152). Il ne gagne AUCUN
+                pouvoir de modérateur : l'AEL, le rattachement d'antenne et les participants
+                à traiter restent aux deux cases précédentes. Les trois rôles sont cumulables.
+              */}
+              <label htmlFor={idLeader} className="cible-tactile flex items-center gap-esp-2 text-petit text-encre">
+                <input
+                  id={idLeader}
+                  name="leader"
+                  type="checkbox"
+                  defaultChecked={compte.roles.includes('leader')}
+                />
+                Leader
+              </label>
             </fieldset>
           </Formulaire>
 
@@ -355,6 +416,57 @@ export function LigneCompte({ compte, estMoi }: { compte: CompteListe; estMoi: b
               </p>
             </Carte>
           ) : null}
+
+          {/*
+            ═══ SUPPRESSION DÉFINITIVE (phase 8) — EN DERNIER, ET PAS SUR TOUTES LES LIGNES ═══
+
+            Le bouton n'est rendu ni sur le compte RACINE ni sur SA PROPRE ligne : dans les
+            deux cas le refus est connu d'avance, et proposer un geste dont on sait qu'il sera
+            refusé se lit comme un défaut de l'application.
+
+            ⚠️ MASQUER NE PROTÈGE RIEN. Les deux refus restent en place côté action — celui du
+            racine EN BASE (déclencheur), celui de soi-même dans l'action seule (D160, le
+            déclencheur ne peut pas voir qui supprime). Ce `null` est du confort, jamais une
+            barrière.
+          */}
+          {compte.estRacine || estMoi ? null : (
+            <Formulaire
+              onSubmit={soumettreSuppression}
+              erreur={erreurSuppression}
+              enCours={suppressionEnCours}
+              actions={
+                <Bouton
+                  type="submit"
+                  variante="secondaire"
+                  alignement="debut"
+                  enCours={suppressionEnCours}
+                  libelleAttente="Suppression…"
+                >
+                  Supprimer ce compte
+                </Bouton>
+              }
+            >
+              <input type="hidden" name="profilId" value={compte.id} />
+            </Formulaire>
+          )}
+
+          <Dialogue
+            ouvert={confirmationSuppressionDemandee}
+            message={
+              `Supprimer définitivement le compte « ${compte.identifiant} » ?\n\n` +
+              "Sa fiche membre n'est PAS supprimée : elle reste au registre.\n" +
+              'Ses demandes de suivi non plus : elles gardent son nom.\n' +
+              'Ses notifications, en revanche, disparaissent avec lui.\n\n' +
+              'Cette action est irréversible.'
+            }
+            surConfirmation={() => {
+              setConfirmationSuppressionDemandee(false)
+              if (donneesSuppressionEnAttente.current) {
+                executerSuppression(donneesSuppressionEnAttente.current)
+              }
+            }}
+            surAnnulation={() => setConfirmationSuppressionDemandee(false)}
+          />
         </div>
       }
     />

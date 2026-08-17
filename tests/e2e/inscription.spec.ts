@@ -99,11 +99,51 @@ async function supprimerComptesDePrefixe() {
   }
 }
 
+/**
+ * Supprime les demandes des comptes de test AVANT que ces comptes ne disparaissent
+ * (phase 8, D157). Symétrique de `supprimerComptesDePrefixe` : même préfixe, même façon de
+ * retrouver les profils.
+ *
+ * Elle LÈVE sur échec : un nettoyage silencieux laisserait une pollution que plus aucune clé
+ * ne retrouverait, et qui atterrit sur les comptes administrateur de production.
+ */
+async function supprimerDemandesDesIdentifiantsDePrefixe() {
+  const { data: comptes, error } = await admin
+    .from('profils')
+    .select('id')
+    .like('identifiant', `${PREFIXE_COMPTE}%`)
+  if (error) throw new Error(`lecture des comptes de test impossible : ${error.message}`)
+  const ids = (comptes ?? []).map((c) => c.id as string)
+  if (ids.length === 0) return
+  const { error: erreurDemandes } = await admin
+    .from('demandes_membre')
+    .delete()
+    .in('demandeur_profil_id', ids)
+  if (erreurDemandes) {
+    throw new Error(`nettoyage des demandes de test impossible : ${erreurDemandes.message}`)
+  }
+}
+
 async function nettoyer() {
-  // Ordre : comptes d'abord (la suppression du profil cascade sur
-  // `demandes_membre`, qui cascade à son tour sur `notifications.demande_id`),
-  // puis les fiches — `demandes_membre.membre_id` est `on delete set null`, la
-  // fiche en_attente ne part JAMAIS avec la demande.
+  /*
+    ⚠️ ORDRE CORRIGÉ EN PHASE 8 (D157), ET LE COMMENTAIRE D'ORIGINE ÉTAIT DEVENU FAUX.
+
+    Il disait : « comptes d'abord (la suppression du profil cascade sur `demandes_membre`,
+    qui cascade à son tour sur `notifications.demande_id`) ». Cette cascade N'EXISTE PLUS :
+    `demandes_membre.demandeur_profil_id` est passée en `on delete set null`, pour qu'une
+    demande survive à la suppression de son auteur.
+
+    Conséquence si l'on garde l'ancien ordre : la demande de test survit sans profil ni
+    fiche — donc DÉSIGNÉE PAR AUCUNE CLÉ — et ses notifications avec elle, y compris celles
+    écrites sur les comptes administrateur RÉELS par `notifierAdministrateurs`. C'est
+    exactement ce qui s'est produit au premier passage : 23 demandes orphelines et 22
+    notifications sur `aubinaso` et `racine`.
+
+    LES DEMANDES SONT DONC SUPPRIMÉES EN PREMIER, tant que leur demandeur existe encore.
+    Elles cascadent leurs notifications (`notifications.demande_id`, toujours en cascade),
+    ce qui préserve la propriété que la note de `notificationsOrphelinesAvant` décrit.
+  */
+  await supprimerDemandesDesIdentifiantsDePrefixe()
   await supprimerComptesDePrefixe()
   await admin.from('membres').delete().like('nom', `${PREFIXE_FICHE}%`)
   if (hachagesCrees.length > 0) {

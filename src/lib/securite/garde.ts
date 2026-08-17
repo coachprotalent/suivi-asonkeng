@@ -59,9 +59,14 @@ async function deciderAutorite(
   const profil = await exigerProfilActif()
   const roles = await rolesDuProfil(profil.id)
   const estAdmin = roles.includes('administrateur')
+  // Phase 8, D150. AUCUNE lecture supplémentaire : les rôles étaient déjà lus juste
+  // au-dessus pour `estAdmin`.
+  const estLeader = roles.includes('leader')
 
-  // Court-circuit : un administrateur a autorité partout, inutile de remonter l'arbre.
-  if (estAdmin) {
+  // Court-circuit : administrateur et leader ont autorité partout, inutile de remonter
+  // l'arbre. Le second est au même rang que le premier — voir l'encadré de `peutModifier`
+  // pour ce que ce rôle donne RÉELLEMENT (D152), qui est plus étroit que « tout ».
+  if (estAdmin || estLeader) {
     return { profil, autorise: true }
   }
 
@@ -73,7 +78,7 @@ async function deciderAutorite(
   }
   return {
     profil,
-    autorise: peutModifier({ membreLieId: profil.membreId, estAdmin }, cible),
+    autorise: peutModifier({ membreLieId: profil.membreId, estAdmin, estLeader }, cible),
   }
 }
 

@@ -26,37 +26,37 @@ describe('peutModifier', () => {
   const cible = { membreId: 'cible', ancetres: ['parent', 'grand-parent'], dirigeantId: 'chef' }
 
   it('accorde tout à un administrateur, même sans membre lié', () => {
-    expect(peutModifier({ membreLieId: null, estAdmin: true }, cible)).toBe(true)
+    expect(peutModifier({ membreLieId: null, estAdmin: true, estLeader: false }, cible)).toBe(true)
   })
 
   it('accorde au faiseur de disciple direct', () => {
-    expect(peutModifier({ membreLieId: 'parent', estAdmin: false }, cible)).toBe(true)
+    expect(peutModifier({ membreLieId: 'parent', estAdmin: false, estLeader: false }, cible)).toBe(true)
   })
 
   it('accorde à un ancêtre lointain', () => {
-    expect(peutModifier({ membreLieId: 'grand-parent', estAdmin: false }, cible)).toBe(true)
+    expect(peutModifier({ membreLieId: 'grand-parent', estAdmin: false, estLeader: false }, cible)).toBe(true)
   })
 
   it("accorde au dirigeant désigné, même hors de l'arbre", () => {
-    expect(peutModifier({ membreLieId: 'chef', estAdmin: false }, cible)).toBe(true)
+    expect(peutModifier({ membreLieId: 'chef', estAdmin: false, estLeader: false }, cible)).toBe(true)
   })
 
   it("refuse à quelqu'un sans aucun lien", () => {
-    expect(peutModifier({ membreLieId: 'inconnu', estAdmin: false }, cible)).toBe(false)
+    expect(peutModifier({ membreLieId: 'inconnu', estAdmin: false, estLeader: false }, cible)).toBe(false)
   })
 
   // LE PIÈGE DU COMPTE RACINE : sans le court-circuit sur `null`, ce cas passerait à
   // `true` dès que la cible n'a pas de dirigeant — donc presque toujours.
   it("refuse à un compte sans membre lié qui n'est pas administrateur", () => {
     expect(
-      peutModifier({ membreLieId: null, estAdmin: false }, { ...cible, dirigeantId: null }),
+      peutModifier({ membreLieId: null, estAdmin: false, estLeader: false }, { ...cible, dirigeantId: null }),
     ).toBe(false)
   })
 
   it("refuse à un compte sans membre lié même quand la liste d'ancêtres est vide", () => {
     expect(
       peutModifier(
-        { membreLieId: null, estAdmin: false },
+        { membreLieId: null, estAdmin: false, estLeader: false },
         { membreId: 'cible', ancetres: [], dirigeantId: null },
       ),
     ).toBe(false)
@@ -67,7 +67,7 @@ describe('peutModifier', () => {
   it('refuse à un utilisateur sur sa propre fiche', () => {
     expect(
       peutModifier(
-        { membreLieId: 'cible', estAdmin: false },
+        { membreLieId: 'cible', estAdmin: false, estLeader: false },
         { membreId: 'cible', ancetres: ['parent'], dirigeantId: 'chef' },
       ),
     ).toBe(false)
@@ -76,7 +76,7 @@ describe('peutModifier', () => {
   it("refuse quand la cible n'a ni ancêtre ni dirigeant", () => {
     expect(
       peutModifier(
-        { membreLieId: 'quelquun', estAdmin: false },
+        { membreLieId: 'quelquun', estAdmin: false, estLeader: false },
         { membreId: 'racine', ancetres: [], dirigeantId: null },
       ),
     ).toBe(false)
@@ -91,7 +91,7 @@ describe('peutModifier', () => {
   it("refuse même si la liste d'ancêtres contient (à tort) l'identifiant de la cible", () => {
     expect(
       peutModifier(
-        { membreLieId: 'cible', estAdmin: false },
+        { membreLieId: 'cible', estAdmin: false, estLeader: false },
         { membreId: 'cible', ancetres: ['cible', 'parent'], dirigeantId: null },
       ),
     ).toBe(false)
@@ -104,9 +104,56 @@ describe('peutModifier', () => {
   it("refuse même si le dirigeant désigné de la cible est (à tort) elle-même", () => {
     expect(
       peutModifier(
-        { membreLieId: 'cible', estAdmin: false },
+        { membreLieId: 'cible', estAdmin: false, estLeader: false },
         { membreId: 'cible', ancetres: [], dirigeantId: 'cible' },
       ),
+    ).toBe(false)
+  })
+})
+
+// Phase 8, D150 — « dirigeant de tout ». Le leader court-circuite l'arbre au MÊME RANG que
+// l'administrateur : son pouvoir ne vient pas de sa place dans l'arbre, il vient de son rôle.
+describe('peutModifier — le rôle leader', () => {
+  const cible = { membreId: 'cible', ancetres: ['parent', 'grand-parent'], dirigeantId: 'chef' }
+
+  it("accorde sur un membre dont il n'est ni ancêtre ni dirigeant", () => {
+    expect(
+      peutModifier({ membreLieId: 'etranger', estAdmin: false, estLeader: true }, cible),
+    ).toBe(true)
+  })
+
+  it('accorde même sans membre lié', () => {
+    // Le court-circuit est AVANT le contrôle `membreLieId === null`, exactement comme pour
+    // l'administrateur. Un leader dont le compte n'est relié à aucune fiche garde son
+    // autorité — sans quoi le rôle dépendrait d'une liaison qui n'a rien à voir avec lui.
+    expect(peutModifier({ membreLieId: null, estAdmin: false, estLeader: true }, cible)).toBe(
+      true,
+    )
+  })
+
+  it('accorde sur SA PROPRE fiche, comme un administrateur', () => {
+    // Conséquence ASSUMÉE du court-circuit : « nul n'est son propre ancêtre » vaut pour le
+    // dirigeant ordinaire, pas pour l'administrateur — ni, désormais, pour le leader. On ne
+    // crée pas une troisième règle pour un troisième rôle.
+    expect(peutModifier({ membreLieId: 'cible', estAdmin: false, estLeader: true }, cible)).toBe(
+      true,
+    )
+  })
+
+  it('accorde même quand la cible n’a ni ancêtre ni dirigeant', () => {
+    expect(
+      peutModifier(
+        { membreLieId: 'etranger', estAdmin: false, estLeader: true },
+        { membreId: 'cible', ancetres: [], dirigeantId: null },
+      ),
+    ).toBe(true)
+  })
+
+  it("ne change RIEN pour un compte sans le rôle", () => {
+    // CONTRÔLE NÉGATIF. Sans lui, un court-circuit écrit à tort en `true` inconditionnel
+    // passerait les quatre preuves ci-dessus sans qu'aucune ne bronche.
+    expect(
+      peutModifier({ membreLieId: 'etranger', estAdmin: false, estLeader: false }, cible),
     ).toBe(false)
   })
 })
