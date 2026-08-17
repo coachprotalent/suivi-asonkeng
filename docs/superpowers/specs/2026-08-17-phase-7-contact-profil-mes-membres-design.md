@@ -118,11 +118,24 @@ Chacune a été posée en question fermée pendant le cadrage du 2026-08-17, ave
   (`20260819120000_creer_membre_enrichi.sql`) : les quatre occurrences changent.
 
 - **D136 — Un contrôle amont nomme le contact introuvable ; la clé étrangère protège.**
-  Avant l'écriture, on vérifie que le contact désigné existe et est actif, pour rendre un
-  message nommé (`MESSAGE_CONTACT_INCONNU`) plutôt que de laisser une violation `23503`
-  retomber sur `MESSAGE_ECHEC_ENREGISTREMENT`. Même partage que partout dans ce dépôt : **le
-  contrôle amont explique, la contrainte protège.** Le contrôle amont n'est pas la barrière —
-  une désignation concurrente passerait ici et serait arrêtée par la clé étrangère.
+  Avant l'écriture, on vérifie que le contact désigné **existe**, pour rendre un message nommé
+  (`MESSAGE_CONTACT_INCONNU`) plutôt que de laisser une violation `23503` retomber sur
+  `MESSAGE_ECHEC_ENREGISTREMENT`. Même partage que partout dans ce dépôt : **le contrôle amont
+  explique, la contrainte protège.** Le contrôle amont n'est pas la barrière — une suppression
+  concurrente passerait ici et serait arrêtée par la clé étrangère.
+
+  **Il ne vérifie PAS que le contact est actif, et c'est délibéré.** Le faiseur de disciple
+  l'exige parce qu'une chaîne de discipulat rattachée à une fiche archivée est cassée — d'où
+  le déclencheur `membres_faiseur_de_disciple_archive`. Le contact ne porte aucun invariant de
+  ce genre : il ne confère rien (D132) et n'est parcouru par rien (D131). Exiger « actif » dans
+  l'application sans l'exiger en base **inventerait une règle que la base ne tient pas** — un
+  appel forgé la contournerait sans que rien ne s'y oppose, et le commentaire qui l'annonce
+  serait faux. Un contact archivé s'affiche par `libelleFiche`, comme n'importe quelle fiche
+  non consultable.
+
+  **On ne discrimine pas non plus sur la violation `23503` elle-même** : PostgREST n'en rend le
+  nom de contrainte que dans `error.message`, de la prose anglaise de Postgres — et la
+  contrainte globale du projet interdit de discriminer sur la prose. D'où le contrôle amont.
 
 ### Lot B — profil et auto-édition
 
@@ -208,6 +221,32 @@ Chacune a été posée en question fermée pendant le cadrage du 2026-08-17, ave
 - **D146 — Un compte sans fiche membre voit un encart, pas quatre listes vides.**
   Même raisonnement que D139 : quatre listes vides feraient croire à un membre sans disciples
   au lieu d'un compte sans fiche.
+
+- **D147 — « Gérer les statuts depuis la liste » = les statuts PORTÉS affichés en ligne, plus
+  un lien par ligne vers `/membres/[id]/statuts`. Le formulaire d'attribution n'est PAS
+  recopié dans chaque ligne.**
+  L'utilisateur a demandé de gérer les statuts depuis la liste plutôt que de seulement
+  consulter. Ce que cette décision livre : on **voit** les statuts de chaque personne sans
+  ouvrir sa fiche — ce qu'aucun écran ne donne aujourd'hui — et on agit en un clic.
+  Ce qu'elle ne livre pas : un `<select>` groupé, sa date, sa note, le contrôle
+  d'exclusivité et le bouton de retrait, **répliqués dans quatre sections de vingt-cinq
+  lignes**. Ce serait recopier l'écran `/membres/[id]/statuts` en entier — avec son garde
+  `exigerAutoriteSur` —, et deux copies d'un même geste, c'est celle qui n'est pas exercée qui
+  dérive. **Cette limite est énoncée ici pour être visible, pas découverte à la livraison.**
+  Si l'attribution en ligne est réellement voulue, elle fera l'objet d'une demande à part.
+
+- **D148 — La descendance est paginée EN SQL, pas dans l'application.**
+  Une fonction `returns table` appelée par `rpc` est soumise au plafond `max_rows` de
+  PostgREST (1000, `supabase/config.toml`) exactement comme une lecture de table : rendre
+  toute la descendance puis la découper côté application la ferait **tronquer en silence** au
+  millième descendant — précisément le mode de défaillance que D145 existe pour fermer.
+  `public.descendants_membre` prend donc `p_decalage` et `p_limite`, borne `p_limite` à 500, et
+  rend le total par `count(*) over ()`. Une page vide (décalage au-delà de la fin) ne portant
+  aucun total, un repli `public.compter_descendants` le fournit — même partage que
+  `disciplesParPage` / `compterDisciples`.
+  Elle filtre `etat = 'actif'` **sur ses lignes rendues, jamais sur son parcours** : filtrer le
+  parcours amputerait la branche sous le premier membre archivé, et ses disciples actifs
+  disparaîtraient de l'écran sans le moindre signal.
 
 ---
 
@@ -357,14 +396,24 @@ archivées que les autres comptes n'y voient pas, et l'écran mentirait sur sa p
 ### 6.2 La descendance
 
 ```sql
-create function public.descendants_membre(p_membre uuid)
-returns table (membre_id uuid, parent_id uuid, profondeur integer)
+create function public.descendants_membre(
+  p_membre uuid,
+  p_profondeur_min integer default 1,
+  p_decalage integer default 0,
+  p_limite integer default 25
+) returns table (membre_id uuid, parent_id uuid, profondeur integer, total bigint)
+
+create function public.compter_descendants(
+  p_membre uuid,
+  p_profondeur_min integer default 1
+) returns bigint
 ```
 
-Récursive sur `faiseur_de_disciple_id`, `security definer`, `search_path = ''`, réservée à
-`service_role`. Elle rend aussi le **parent** de chaque descendant, ce qui permet l'annotation
-« via *X* » sans seconde remontée, et la **profondeur**, qui permet d'exclure le niveau 1 (déjà
-rendu par la section 1) sans le recalculer côté application.
+Récursives sur `faiseur_de_disciple_id`, `security definer`, `search_path = ''`, réservées à
+`service_role`, parcours borné à 64 niveaux comme `ancetres_membre`. La première rend aussi le
+**parent** de chaque descendant, ce qui permet l'annotation « via *X* » sans seconde remontée,
+et la **profondeur**, qui permet d'exclure le niveau 1 (déjà rendu par la section 1) sans le
+recalculer côté application. Pagination et filtre d'état : voir D148.
 
 Les noms sont ensuite relus **sous RLS et filtrés `etat = 'actif'`** par `nomsMaillonsActifs`
 (D141). Le nom du parent passe par `libelleFiche` : un parent devenu invisible affiche
