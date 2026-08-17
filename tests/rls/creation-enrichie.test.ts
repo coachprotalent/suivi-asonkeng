@@ -49,6 +49,10 @@ function argumentsCreation(surcharges: Record<string, unknown> = {}) {
     p_situation: null,
     p_domaine_etude: null,
     p_report_initial_ael: 0,
+    // Phase 7, D130 : une colonne de la FICHE, placée avec les colonnes de fiche et non
+    // avec les trois paramètres d'arbre qui suivent. Le défaut est `null` — le contact est
+    // facultatif, comme les trois enrichissements de D86.
+    p_contact: null,
     p_faiseur_de_disciple: null,
     p_dirigeant: null,
     p_dirigeant_force: false,
@@ -355,6 +359,119 @@ describe('création nue, sans aucun enrichissement', () => {
       .eq('membre_id', identifiant)
     expect(journal).toHaveLength(1)
     expect(journal?.[0]?.action).toBe('ajout')
+  })
+})
+
+// ───────────────────────────────────────────────────────────────────────────────
+// PHASE 7, D130 / D135 — LE CONTACT SAISI À LA CRÉATION
+// ───────────────────────────────────────────────────────────────────────────────
+//
+// Le contact est une colonne de la FICHE, écrite dans l'`insert` initial. Il n'entre PAS
+// dans la condition d'appel à `public.definir_arbre` : c'est ce que mesure la deuxième
+// preuve ci-dessous, et ce n'est pas un détail d'implémentation. Si le contact entrait dans
+// cette condition, une création « contact seul » prendrait le verrou consultatif anti-cycle
+// et réécrirait trois `null` déjà en place — un coût et un risque pour rien.
+describe('le contact à la création (D130)', () => {
+  it('écrit le contact passé à la création', async () => {
+    const { data: contact, error: erreurContact } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE}-contact`, prenom: 'Test' })
+      .select('id')
+      .single()
+    if (erreurContact || !contact) throw new Error(`préparation impossible : ${erreurContact?.message}`)
+
+    const { data: identifiant, error } = await admin.rpc(
+      'creer_membre_enrichi',
+      argumentsCreation({ p_contact: contact.id }),
+    )
+    expect(error).toBeNull()
+
+    const { data: fiche, error: erreurLecture } = await admin
+      .from('membres')
+      .select('contact_id')
+      .eq('id', identifiant)
+      .single()
+    if (erreurLecture) throw new Error(`lecture de la fiche impossible : ${erreurLecture.message}`)
+    expect(fiche?.contact_id).toBe(contact.id)
+  })
+
+  it("un contact SEUL ne place PAS la fiche dans l'arbre (D130)", async () => {
+    // LA PREUVE QUI DISTINGUE « colonne de fiche » DE « relation d'arbre ». Une création
+    // avec un contact et RIEN d'autre doit laisser les trois colonnes d'arbre intactes.
+    // Si le contact avait été rangé avec le faiseur de disciple et le dirigeant, la
+    // condition d'appel à `definir_arbre` se déclencherait ici — sans effet visible sur ces
+    // trois colonnes, mais en prenant le verrou consultatif pour rien.
+    const { data: contact, error: erreurContact } = await admin
+      .from('membres')
+      .insert({ nom: `${PREFIXE}-contact-seul`, prenom: 'Test' })
+      .select('id')
+      .single()
+    if (erreurContact || !contact) throw new Error(`préparation impossible : ${erreurContact?.message}`)
+
+    const { data: identifiant, error } = await admin.rpc(
+      'creer_membre_enrichi',
+      argumentsCreation({ p_contact: contact.id }),
+    )
+    expect(error).toBeNull()
+
+    const { data: fiche } = await admin
+      .from('membres')
+      .select('contact_id, faiseur_de_disciple_id, dirigeant_id, dirigeant_force')
+      .eq('id', identifiant)
+      .single()
+    expect(fiche?.contact_id).toBe(contact.id)
+    expect(fiche?.faiseur_de_disciple_id).toBeNull()
+    expect(fiche?.dirigeant_id).toBeNull()
+    expect(fiche?.dirigeant_force).toBe(false)
+  })
+
+  it('crée une fiche sans contact quand p_contact vaut null', async () => {
+    const { data: identifiant, error } = await admin.rpc('creer_membre_enrichi', argumentsCreation())
+    expect(error).toBeNull()
+
+    const { data: fiche } = await admin
+      .from('membres')
+      .select('contact_id')
+      .eq('id', identifiant)
+      .single()
+    expect(fiche?.contact_id).toBeNull()
+  })
+
+  it("AUCUNE SURCHARGE NE SUBSISTE : l'ancienne signature à 15 paramètres n'existe plus (D135)", async () => {
+    // ═══ LA PREUVE QUE LE `drop` A BIEN EU LIEU, ET ELLE EST PERMANENTE ═══
+    // `create or replace function` ne peut pas changer une signature : sans `drop`, la
+    // migration aurait créé une SURCHARGE. Les deux fonctions auraient coexisté, PostgREST
+    // aurait choisi l'ancienne pour tout appelant ne passant pas `p_contact`, et un contact
+    // saisi aurait disparu EN SILENCE — sans qu'aucune autre preuve de ce fichier ne tombe,
+    // puisqu'elles passent toutes `p_contact` désormais.
+    //
+    // Une vérification manuelle dans `pg_proc` aurait répondu une fois, le jour de la
+    // migration. Celle-ci répond à chaque exécution de la suite.
+    const avant = await compterMembresDuPrefixe()
+    const { p_contact: _ignore, ...ancienneSignature } = argumentsCreation()
+    const { error } = await admin.rpc('creer_membre_enrichi', ancienneSignature)
+    expect(error).not.toBeNull()
+    // `PGRST202` : aucune fonction ne correspond à ce jeu d'arguments nommés.
+    expect(error!.code).toBe('PGRST202')
+    // Et rien n'a été créé par une surcharge silencieuse.
+    expect(await compterMembresDuPrefixe()).toBe(avant)
+  })
+
+  it("refuse un contact inexistant, et ne crée RIEN (atomicité, D81)", async () => {
+    const avant = await compterMembresDuPrefixe()
+    const { error } = await admin.rpc(
+      'creer_membre_enrichi',
+      argumentsCreation({ p_contact: crypto.randomUUID() }),
+    )
+    expect(error).not.toBeNull()
+    // `23503` : violation de clé étrangère. On discrimine sur le CODE — le nom de la
+    // contrainte n'apparaît que dans la prose anglaise de Postgres, dont on ne discrimine
+    // jamais. C'est précisément pourquoi l'application s'appuie sur un contrôle amont
+    // (D136) pour nommer ce cas à l'utilisateur.
+    expect(error!.code).toBe('23503')
+    // L'atomicité de D81 tient aussi pour cette cause-ci : la fiche insérée juste avant
+    // l'échec ne subsiste pas.
+    expect(await compterMembresDuPrefixe()).toBe(avant)
   })
 })
 
