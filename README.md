@@ -1091,3 +1091,84 @@ d'`archiverMembre`, doit rester complet, D94), `listerCatalogue`, `statutsDuMemb
 `journalDuMembre` (non bornées) ; et la divergence des doctrines de pagination D29/D46/D53
 contre D75, qui laisserait le pointage AEL se faire tronquer en silence au-delà de mille
 membres actifs par antenne.
+
+---
+
+## Phase 7 : le contact, la page de profil et « Mes membres »
+
+- **Un troisième lien sur la fiche membre : le contact** (`membres.contact_id`, D130) —
+  « qui a une bonne relation avec cette personne », en plus du faiseur de disciple et du
+  dirigeant. **Saisissable à la création comme en modification**, parce qu'il est traité
+  comme une **colonne ordinaire de la fiche** et non comme une relation d'arbre : il traverse
+  `FicheMembre`, s'écrit par le même `update` que le téléphone, et n'est jamais confié à
+  `public.definir_arbre` — laquelle prend le verrou consultatif anti-cycle et incarne la
+  filiation. Une preuve mesure qu'une création « contact seul » ne déclenche pas cet appel.
+- **Le contact ne confère RIEN, et c'est écrit partout où quelqu'un pourrait en douter**
+  (D131, D132) : aucun droit, aucune lecture élargie, aucun déclencheur anti-cycle — un
+  contact **réciproque** entre deux fiches est légitime, contrairement au faiseur de
+  disciple. Deux preuves RLS existent pour **tomber** le jour où quelqu'un « harmoniserait »
+  les trois relations : le contact réciproque doit réussir, et une fiche archivée doit rester
+  fermée à son propre contact.
+- **La ligne « Contact » ne porte pas la marque de filiation** (D134), et le commentaire D106
+  de la fiche le dit désormais — sans quoi l'absence se lirait comme un oubli à corriger. Au
+  passage, l'adresse e-mail s'intitule « **Adresse de contact** » : la fiche portait sinon
+  **deux lignes « Contact »** désignant deux choses différentes (D133).
+- **`public.creer_membre_enrichi` a été REMPLACÉE, pas modifiée** (D135). `create or replace`
+  ne peut pas changer une signature : sans `drop`, la migration aurait créé une **surcharge**,
+  PostgREST aurait choisi l'ancienne pour tout appelant ne passant pas `p_contact`, et un
+  contact saisi aurait disparu **en silence**. Une preuve permanente appelle l'ancienne
+  signature et exige `PGRST202`, plutôt qu'une vérification `pg_proc` qui n'aurait répondu
+  qu'une fois.
+- **`/profil` — la page de profil de chaque compte**, et **le premier chemin d'écriture non
+  administrateur du projet**. Aucune politique d'écriture RLS n'est ouverte pour autant
+  (D140) : ce qui change est le **garde applicatif**, `exigerProfilActif` au lieu
+  d'`exigerAdministrateur`.
+- **La fermeture tient sur quatre lignes de défense, dont aucune n'est redondante** (D137,
+  D138) : le garde de session ; `p_profil` pris **dans la session et jamais dans le
+  `FormData`** ; une lecture de formulaire qui ne connaît que **six clés** ; et une signature
+  SQL à **sept paramètres** qui ne peut pas écrire une huitième colonne. La fiche visée est
+  **résolue depuis `profils` à l'intérieur de la passerelle**, jamais reçue. Restent fermés :
+  nom, prénom, antenne, place dans l'arbre, contact, report AEL, état, et **toute** colonne de
+  `profils` ou de `roles_profil`.
+- **Le nom d'affichage a été retiré de l'auto-édition par l'utilisateur**, après que le risque
+  lui a été exposé : `journal_statuts.par_nom_affichage` fige le nom de l'auteur à chaque
+  écriture, et le laisser libre permettrait de signer ses futurs mouvements du nom de
+  quelqu'un d'autre. L'écran l'**affiche**, et **énonce** ce qu'il ne permet pas — une absence
+  muette se « corrige » toute seule au premier passage d'un relecteur pressé.
+- **Une preuve RLS documente une FRONTIÈRE plutôt qu'une protection** : appelée avec le profil
+  d'un autre compte, la passerelle écrit bien la fiche de cet autre compte. C'est le
+  **contrat**, et il ne tient que parce qu'une autre preuve établit qu'`authenticated` ne peut
+  pas l'appeler. La laisser implicite aurait été la vraie faute : le prochain lecteur pourrait
+  croire la passerelle auto-protégée et l'exposer.
+- **`/mes-membres` — quatre sections distinctes** (D142) : mes disciples directs, les
+  disciples de mes disciples (annotés « via *X* »), ceux dont je suis dirigeant, ceux dont je
+  suis contact. **Les recouvrements sont assumés** : n'afficher chacun que dans « la section la
+  plus forte » effacerait l'information « je suis *aussi* son contact ».
+- **La section « contact » est la seule sans « Gérer les statuts » ni marque de filiation**
+  (D143), parce que `peutModifier` donne autorité à l'ancêtre et au dirigeant, **jamais** au
+  contact — et sa légende le dit. Ce que « gérer depuis la liste » livre exactement est écrit
+  en D147 : les statuts **portés** affichés en ligne, plus un lien vers l'écran qui détient
+  déjà le formulaire et son garde. Le formulaire d'attribution n'est pas recopié dans quatre
+  sections de vingt-cinq lignes.
+- **`public.descendants_membre` — le miroir descendant d'`ancetres_membre`**, paginée **en
+  SQL** (D148) : un `rpc` est soumis au plafond `max_rows` de PostgREST **comme une lecture de
+  table**, et découper côté application aurait tronqué la descendance **en silence** au
+  millième descendant. Elle rend des **identifiants**, jamais des noms ; les noms sont relus
+  **sous RLS** par l'application (D141).
+- **Un commentaire a été corrigé avant d'être écrit dans le marbre.** La spec annonçait que
+  filtrer l'état sur le *parcours* plutôt que sur les *lignes rendues* « amputerait la branche
+  sous un membre archivé, dont les disciples actifs disparaîtraient sans signal ». **En
+  construisant le décor de cette preuve, la base a refusé l'état** — « Ce membre est encore
+  faiseur de disciple de 1 personne(s) active(s). » Trois barrières maintiennent l'invariant
+  *un membre non actif n'a jamais de disciple actif*. Le placement du filtre reste la
+  sémantique correcte, mais il est **inerte** tant que l'invariant tient, et c'est écrit ainsi
+  dans la migration comme dans la spec. La suite éprouve donc **l'invariant lui-même**.
+
+**Corrigé au passage, et étranger à la phase :** trois assertions de
+`tests/e2e/annuaire.spec.ts` lisaient la **première page** de l'annuaire pour y trouver une
+fiche nommée « ZZAnnuaire-… », qui trie en dernier. C'était faux depuis toujours, invisible
+tant que la base comptait moins de cinquante membres actifs — elle en compte 72. Deux
+échouaient bruyamment ; **la troisième était un faux vert** : après archivage,
+`toHaveCount(0)` passait parce que la fiche n'avait jamais été sur la page regardée, et
+l'assertion centrale du test aurait continué à passer si l'archivage avait cessé de
+fonctionner.
