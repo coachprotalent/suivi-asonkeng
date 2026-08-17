@@ -148,20 +148,61 @@ export async function etatCompteLie(membreId: string): Promise<boolean | null> {
  */
 export async function compteLieEstDernierAdministrateurActif(membreId: string): Promise<boolean> {
   const compte = await compteLieBrut(membreId)
-  if (!compte || !compte.actif) {
+  if (!compte) {
     return false
   }
+  // DÉLÈGUE, ne recopie pas : voir `estDernierAdministrateurActif` juste en dessous. Le
+  // contrôle du compte `actif` s'y trouve aussi — le dupliquer ici ne servirait qu'à créer
+  // une seconde vérité à maintenir.
+  return estDernierAdministrateurActif(compte.id)
+}
 
+/**
+ * Ce COMPTE est-il le DERNIER administrateur actif du projet ?
+ *
+ * ═══ EXTRAITE, PAS RECOPIÉE (phase 8) ═══
+ * `compteLieEstDernierAdministrateurActif` ci-dessus posait déjà exactement cette question,
+ * mais à partir d'une FICHE MEMBRE. La suppression d'un compte la pose à partir d'un PROFIL.
+ * Deux copies de ce verdict divergeraient au premier changement, et c'est un contrôle de
+ * sécurité : les deux appelants doivent répondre la même chose au même instant.
+ *
+ * ═══ CE N'EST PAS LA DERNIÈRE LIGNE DE DÉFENSE ═══
+ * Le déclencheur `profils_refuser_suppression` (20260821130000) reste seul décisif, et
+ * rattrape intégralement une défaillance d'ici — comme le fait déjà le déclencheur
+ * d'archivage pour l'autre appelante. Cette fonction n'améliore que le MESSAGE : nommer la
+ * cause avant d'écrire, plutôt que de laisser remonter un échec générique. Une régression ici
+ * ne rouvrirait donc AUCUNE brèche ; elle ferait perdre un message précis au profit du même
+ * refus, un instant plus tard.
+ *
+ * Lue SOUS RLS : les deux appelants sont gardés par `exigerAdministrateur`, et
+ * `profils_lecture` ouvre tous les profils à l'administrateur.
+ */
+export async function estDernierAdministrateurActif(profilId: string): Promise<boolean> {
   const supabase = await clientServeur()
+
+  const { data: profil, error: erreurProfil } = await supabase
+    .from('profils')
+    .select('actif')
+    .eq('id', profilId)
+    .maybeSingle()
+  if (erreurProfil) {
+    throw new Error(`Lecture du compte impossible : ${erreurProfil.message}`)
+  }
+  // Un compte DÉSACTIVÉ n'est déjà plus compté parmi les administrateurs actifs : le
+  // supprimer ne peut pas faire passer ce nombre de 1 à 0. Même raisonnement que la clause
+  // `old.actif` du déclencheur.
+  if (!profil || !profil.actif) {
+    return false
+  }
 
   const { data: role, error: erreurRole } = await supabase
     .from('roles_profil')
     .select('profil_id')
-    .eq('profil_id', compte.id)
+    .eq('profil_id', profilId)
     .eq('role', 'administrateur')
     .maybeSingle()
   if (erreurRole) {
-    throw new Error(`Lecture du rôle du compte lié impossible : ${erreurRole.message}`)
+    throw new Error(`Lecture du rôle du compte impossible : ${erreurRole.message}`)
   }
   if (!role) {
     return false
@@ -171,7 +212,7 @@ export async function compteLieEstDernierAdministrateurActif(membreId: string): 
     .from('roles_profil')
     .select('profil_id')
     .eq('role', 'administrateur')
-    .neq('profil_id', compte.id)
+    .neq('profil_id', profilId)
   if (erreurAutres) {
     throw new Error(`Lecture des autres administrateurs impossible : ${erreurAutres.message}`)
   }

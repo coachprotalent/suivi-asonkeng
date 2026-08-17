@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { IdentifiantInvalideError, identifiantVersEmail, normaliserIdentifiant } from '@/lib/domaine/identifiant'
 import { tirerChaineLisible } from '@/lib/domaine/tirage'
+import { estDernierAdministrateurActif } from '@/lib/donnees/comptes'
 import { exigerAdministrateur } from '@/lib/securite/garde'
 import { clientAdmin } from '@/lib/supabase/admin'
 import {
@@ -14,9 +15,12 @@ import {
   MESSAGE_ECHEC_LIAISON,
   MESSAGE_ECHEC_REINITIALISATION,
   MESSAGE_ECHEC_ROLES,
+  MESSAGE_ECHEC_SUPPRESSION,
   MESSAGE_FICHE_DEJA_LIEE,
   MESSAGE_IDENTIFIANT_PRIS,
+  MESSAGE_RACINE_INDESTRUCTIBLE,
   MESSAGE_RACINE_SANS_FICHE,
+  MESSAGE_SUPPRESSION_DE_SOI,
 } from './messages'
 
 export type EtatCompte = {
@@ -278,4 +282,86 @@ export async function reinitialiserMotDePasse(
 
   revalidatePath('/comptes')
   return { erreur: null, identifiantCree: identifiant, motDePasseTemporaire: motDePasse }
+}
+
+/**
+ * Supprime DÉFINITIVEMENT un compte (phase 8, D159).
+ *
+ * ═══ ELLE SUPPRIME LE COMPTE D'AUTHENTIFICATION, JAMAIS `public.profils` DIRECTEMENT ═══
+ * `profils.id` référence `auth.users` en `on delete cascade` : la suppression cascade vers le
+ * profil et déclenche `profils_refuser_suppression` DANS LA MÊME TRANSACTION — un refus
+ * annule donc les deux, sans compensation applicative à écrire.
+ *
+ * Faire l'inverse (`delete from public.profils`) laisserait un compte d'authentification
+ * ORPHELIN, capable de se connecter sans profil. Ce n'est pas une hypothèse : un balayage de
+ * la phase 7 en a trouvé un en base, créé le 2026-08-13. NE JAMAIS ÉCRIRE CE `delete`.
+ *
+ * ═══ LES CONTRÔLES AMONT EXPLIQUENT, LE DÉCLENCHEUR PROTÈGE ═══
+ * Les marqueurs Postgres NE TRAVERSENT PAS GoTrue : `error.details` n'est pas exposé par
+ * l'API d'administration. Sans ces contrôles amont, tout refus s'afficherait comme un échec
+ * générique. Ils ne sont pas la barrière : une rétrogradation concurrente entre la lecture et
+ * la suppression passerait ici et serait arrêtée en base, avec le message générique — partage
+ * assumé, identique à celui d'`archiverMembre`.
+ *
+ * ═══ CE QUI N'EST PAS SUPPRIMÉ ═══
+ * La FICHE MEMBRE liée (D161) : compte et fiche sont deux objets distincts, et les confondre
+ * effacerait une personne du suivi pour une erreur de compte. Les DEMANDES non plus (D157) —
+ * elles perdent leur auteur mais gardent son nom. Les NOTIFICATIONS, elles, disparaissent
+ * (D162) : elles lui étaient adressées et n'ont aucun sens sans destinataire. La confirmation
+ * de l'écran énonce ces deux dernières conséquences.
+ */
+export async function supprimerCompte(donnees: FormData): Promise<void> {
+  const profil = await exigerAdministrateur()
+
+  const profilId = String(donnees.get('profilId') ?? '')
+  if (profilId.length === 0) {
+    console.error('supprimerCompte : identifiant de compte manquant dans le formulaire')
+    throw new Error(MESSAGE_ECHEC_SUPPRESSION)
+  }
+
+  // D160 — GARDE D'ACTION, PAS BARRIÈRE DE BASE. Le déclencheur ne peut pas voir qui
+  // supprime : derrière la clé de service, `auth.uid()` vaut `null`. Voir
+  // MESSAGE_SUPPRESSION_DE_SOI pour ce que cela implique.
+  if (profilId === profil.id) {
+    throw new Error(MESSAGE_SUPPRESSION_DE_SOI)
+  }
+
+  const { data: cible, error: erreurCible } = await clientAdmin()
+    .from('profils')
+    .select('est_racine')
+    .eq('id', profilId)
+    .maybeSingle()
+  if (erreurCible) {
+    console.error('supprimerCompte : lecture du compte impossible', {
+      profilId,
+      message: erreurCible.message,
+    })
+    throw new Error(MESSAGE_ECHEC_SUPPRESSION)
+  }
+  if (!cible) {
+    throw new Error(MESSAGE_COMPTE_INCONNU)
+  }
+  if (cible.est_racine) {
+    throw new Error(MESSAGE_RACINE_INDESTRUCTIBLE)
+  }
+  if (await estDernierAdministrateurActif(profilId)) {
+    throw new Error(MESSAGE_DERNIER_ADMINISTRATEUR)
+  }
+
+  const { error } = await clientAdmin().auth.admin.deleteUser(profilId)
+  if (error) {
+    // `error.details` N'EXISTE PAS ICI : GoTrue n'expose pas le diagnostic Postgres. On
+    // journalise ce qu'on a, et l'écran reçoit le message générique — c'est précisément
+    // pourquoi les contrôles amont ci-dessus existent, et pourquoi on ne prétend nulle part
+    // discriminer sur un marqueur qu'on ne peut pas lire.
+    console.error('supprimerCompte : échec de la suppression du compte auth', {
+      profilId,
+      code: error.code,
+      status: error.status,
+      message: error.message,
+    })
+    throw new Error(MESSAGE_ECHEC_SUPPRESSION)
+  }
+
+  revalidatePath('/comptes')
 }
