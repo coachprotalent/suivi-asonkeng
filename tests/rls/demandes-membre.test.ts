@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { identifiantVersEmail } from '@/lib/domaine/identifiant'
+import { supprimerDemandesDesProfils } from '../nettoyage-demandes'
 
 const URL = process.env.NEXT_PUBLIC_SUPABASE_URL!
 const CLE_ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
@@ -161,6 +162,13 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  // ⚠️ LES DEMANDES D'ABORD, TANT QUE LEUR DEMANDEUR EXISTE (phase 8, D157).
+  // `demandeur_profil_id` n'est plus en `on delete cascade` : supprimer les comptes ne
+  // supprime plus leurs demandes, et une demande sans profil NI fiche n'est plus désignée par
+  // aucune clé — ses notifications non plus, y compris celles écrites sur les comptes
+  // administrateur RÉELS. Voir `tests/nettoyage-demandes.ts`.
+  await supprimerDemandesDesProfils(admin, [idAdmin, idDemandeurA, idDemandeurB])
+
   await admin.from('membres').delete().like('nom', `${FAMILLE_MEMBRE}%`)
   await supprimerCompte(IDENT_ADMIN)
   await supprimerCompte(IDENT_DEMANDEUR_A)

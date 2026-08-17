@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { expect, test, type Browser, type Page } from '@playwright/test'
 import { identifiantVersEmail } from '../../src/lib/domaine/identifiant'
+import { supprimerDemandesDesIdentifiants } from '../nettoyage-demandes'
 import {
   MESSAGE_DEMANDE_NON_VALIDABLE,
   MESSAGE_ECHEC_VALIDATION,
@@ -297,6 +298,11 @@ function remplacerChampMultipart(corpsBrut: Buffer, suffixeChamp: string, nouvel
 }
 
 test.beforeAll(async () => {
+  // ⚠️ LES DEMANDES D'ABORD, AVANT LES COMPTES ET AVANT LES FICHES (phase 8, D157).
+  // `demandeur_profil_id` n'est plus en `on delete cascade` : supprimer les comptes ne
+  // supprime plus leurs demandes, et une demande dont le profil ET la fiche ont disparu
+  // n'est plus désignée par aucune clé. Voir `tests/nettoyage-demandes.ts`.
+  await supprimerDemandesDesIdentifiants(admin, Object.values(IDENTIFIANTS))
   // Nettoyage résiduel d'une exécution précédente avortée : motif de FAMILLE
   // stable (I4), pas `${PREFIXE_MEMBRE}%` — cette dernière change à CHAQUE
   // exécution et ne retrouverait donc jamais rien d'un run précédent.
@@ -322,6 +328,20 @@ test.beforeAll(async () => {
 })
 
 test.afterAll(async () => {
+  // ⚠️ EN PREMIER, ET L'ORDRE EST TOUT (phase 8, D157). `idsDemandeCreees` désigne exactement
+  // les demandes de cette exécution : on les supprime DIRECTEMENT, ce qui cascade leurs
+  // notifications — y compris celles écrites sur les VRAIS comptes administrateur. Après la
+  // suppression des comptes, `demandeur_profil_id` vaudrait `null` et plus aucune clé ne les
+  // désignerait. Un premier passage sans cette ligne a laissé 23 demandes orphelines et 22
+  // notifications sur les comptes de production.
+  if (idsDemandeCreees.length > 0) {
+    const { error } = await admin.from('demandes_membre').delete().in('id', idsDemandeCreees)
+    if (error) throw new Error(`nettoyage des demandes impossible : ${error.message}`)
+  }
+  // Filet pour les demandes que cette suite aurait créées SANS les enregistrer dans
+  // `idsDemandeCreees` (une insertion faite par l'application, non par le test).
+  await supprimerDemandesDesIdentifiants(admin, Object.values(IDENTIFIANTS))
+
   await admin.from('membres').delete().like('nom', `${PREFIXE_FAMILLE}%`)
   for (const identifiant of Object.values(IDENTIFIANTS)) {
     await supprimerCompte(identifiant)
@@ -334,12 +354,19 @@ test.afterAll(async () => {
 
   // Vérification par DELTA BORNÉE (I5) : uniquement les notifications
   // corrélées aux demandes que CETTE suite a créées (`idsDemandeCreees`), pas
-  // une lecture de `notifications` entière. Une fois les comptes de test
-  // supprimés ci-dessus, la cascade `demande_id -> demandes_membre` (migration
-  // 20260815240000) a déjà dû faire disparaître ces demandes ET toute
-  // notification les référençant — y compris celles écrites sur de VRAIS
-  // comptes administrateur de production par `notifierAdministrateurs`. Si ce
-  // compte n'est pas nul, la corrélation `demande_id` a une régression.
+  // une lecture de `notifications` entière.
+  //
+  // ⚠️ CE COMMENTAIRE A ÉTÉ CORRIGÉ EN PHASE 8. Il affirmait que « la suppression des comptes
+  // de test ci-dessus » suffisait, la cascade `demandeur_profil_id` emportant les demandes et
+  // celle de `demande_id` les notifications. CE N'EST PLUS VRAI : `demandeur_profil_id` est
+  // passée en `on delete set null` (D157), pour qu'une demande survive à son auteur. C'est
+  // désormais la suppression EXPLICITE des demandes, en tête de ce `afterAll`, qui déclenche
+  // la cascade vers `notifications` — y compris pour celles écrites sur de VRAIS comptes
+  // administrateur par `notifierAdministrateurs`.
+  //
+  // Si ce compte n'est pas nul, deux causes sont possibles : une régression de la corrélation
+  // `demande_id`, ou une demande créée par cette suite sans passer par les deux nettoyages
+  // ci-dessus.
   if (idsDemandeCreees.length > 0) {
     const { data: notifsResiduelles, error } = await admin
       .from('notifications')
